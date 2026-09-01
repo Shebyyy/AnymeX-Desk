@@ -334,7 +334,8 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
       background var(--dur-fast) var(--ease-standard);
   }
   .segmented label:hover { color: var(--text-secondary); background: var(--surface-hover); }
-  .segmented label.active { color: var(--text-primary); background: var(--surface-active); }
+  .segmented label.active,
+  .segmented label:has(input:checked) { color: var(--text-primary); background: var(--surface-active); }
   .cats, .plats {
     gap: 4px;
   }

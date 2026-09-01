@@ -282,11 +282,12 @@ Astro.response.headers.set(
       </div>
 
       {user && (
-        <form class="comment-form" method="POST" action="/comments">
+        <form class="comment-form" id="comment-form">
           <input type="hidden" name="reportId" value={report.id} />
           <textarea
             name="body"
             class="textarea"
+            id="comment-body"
             rows="3"
             maxlength="2000"
             placeholder="Add a comment..."
@@ -294,7 +295,7 @@ Astro.response.headers.set(
           ></textarea>
           <div class="comment-form-actions">
             <span class="char-hint">Max 2000 characters</span>
-            <button class="btn" type="submit">Post comment</button>
+            <button class="btn" type="submit" id="comment-btn">Post comment</button>
           </div>
         </form>
       )}
@@ -403,6 +404,40 @@ Astro.response.headers.set(
       } finally {
         btn.disabled = false;
         btn.textContent = 'Upload';
+      }
+    });
+  }
+
+  // ── Client-side comment posting ────────────────────────────────────
+  const commentForm = document.getElementById('comment-form') as HTMLFormElement | null;
+  const commentBody = document.getElementById('comment-body') as HTMLTextAreaElement | null;
+  const commentBtn = document.getElementById('comment-btn') as HTMLButtonElement | null;
+  const commentsList = document.getElementById('comments-list');
+
+  if (commentForm && commentBody && commentBtn && commentsList) {
+    commentForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = commentBody.value.trim();
+      if (!body) return;
+      commentBtn.disabled = true;
+      commentBtn.textContent = 'Posting…';
+      try {
+        const fd = new FormData();
+        fd.append('reportId', (commentForm.querySelector('[name=reportId]') as HTMLInputElement).value);
+        fd.append('body', body);
+        const res = await fetch('/comments', { method: 'POST', body: fd });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: 'Failed to post comment' }));
+          alert(err.error || 'Failed to post comment');
+          return;
+        }
+        commentBody.value = '';
+        window.location.reload();
+      } catch {
+        alert('Failed to post comment — network error');
+      } finally {
+        commentBtn.disabled = false;
+        commentBtn.textContent = 'Post comment';
       }
     });
   }
