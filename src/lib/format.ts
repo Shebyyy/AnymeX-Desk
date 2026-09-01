@@ -5,8 +5,12 @@ import type { BoardState } from './queries';
 
 export function relativeAge(createdAt: number, now = Date.now() / 1000): string {
   const s = Math.max(0, now - createdAt);
+  const m = Math.floor(s / 60);
+  if (m < 1) return '1m';
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(s / 3600);
+  if (h < 24) return `${h}h`;
   const d = Math.floor(s / 86_400);
-  if (d < 1) return `${Math.max(1, Math.floor(s / 3600))}h`;
   if (d < 30) return `${d}d`;
   if (d < 365) return `${Math.floor(d / 30)}mo`;
   return `${Math.floor(d / 365)}y`;
