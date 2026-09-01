@@ -31,11 +31,15 @@ export const GET: APIRoute = async (ctx) => {
       username: users.username,
       avatarHash: users.avatarHash,
       createdAt: comments.createdAt,
+      replyToId: comments.replyToId,
     })
     .from(comments)
     .innerJoin(users, eq(users.discordId, comments.userId))
     .where(eq(comments.reportId, reportId))
     .orderBy(asc(comments.createdAt));
+
+  // Look up usernames for whatever comments are being replied to.
+  const usernameById = new Map(rows.map((r) => [r.id, r.username]));
 
   // Fetch attachments grouped by comment.
   const atts = await db()
@@ -68,6 +72,8 @@ export const GET: APIRoute = async (ctx) => {
       avatarUrl: avatarUrl({ id: r.userId, avatarHash: r.avatarHash }),
       createdAt: r.createdAt,
       attachments: attByComment.get(r.id) ?? [],
+      replyToId: r.replyToId,
+      replyToUsername: r.replyToId != null ? usernameById.get(r.replyToId) ?? null : null,
     })),
   );
 };
@@ -82,6 +88,9 @@ export const POST: APIRoute = async (ctx) => {
   const reportId = Number(form.get('reportId'));
   const body = String(form.get('body') ?? '').trim();
   const file = form.get('file') as File | null;
+  const replyToRaw = form.get('replyToId');
+  let replyToId: number | null = replyToRaw ? Number(replyToRaw) : null;
+  if (replyToId != null && (!Number.isSafeInteger(replyToId) || replyToId <= 0)) replyToId = null;
 
   if (!isReportId(reportId)) return json({ error: 'invalid report id' }, 400);
   if (!body && !file) return json({ error: 'body or file is required' }, 400);
@@ -94,17 +103,29 @@ export const POST: APIRoute = async (ctx) => {
     .where(eq(reports.id, reportId));
   if (!report) return json({ error: 'report not found' }, 404);
 
+  /* If replying, make sure the parent comment actually belongs to this report. */
+  let parentAuthorId: string | null = null;
+  if (replyToId != null) {
+    const [parent] = await db()
+      .select({ id: comments.id, userId: comments.userId })
+      .from(comments)
+      .where(and(eq(comments.id, replyToId), eq(comments.reportId, reportId)));
+    if (!parent) replyToId = null;
+    else parentAuthorId = parent.userId;
+  }
+
   /* Insert comment + bump counter. */
   const d = db();
   const [inserted] = await d.batch([
     d
       .insert(comments)
-      .values({ reportId, userId: user.id, body: body || '' })
+      .values({ reportId, userId: user.id, body: body || '', replyToId })
       .returning({
         id: comments.id,
         body: comments.body,
         userId: comments.userId,
         createdAt: comments.createdAt,
+        replyToId: comments.replyToId,
       }),
     d
       .update(reports)
@@ -161,8 +182,11 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   /* Notify the reporter (skip if commenting on your own report). */
+  const reportUrl = `${ctx.url.origin}/report/${reportId}`;
+  const dmTasks: Promise<unknown>[] = [];
+  const cf = ctx.locals.cfContext;
+
   if (report.reporterId !== user.id) {
-    const cf = ctx.locals.cfContext;
     const notif = db()
       .insert(notifications)
       .values({
@@ -171,11 +195,40 @@ export const POST: APIRoute = async (ctx) => {
         kind: 'comment',
       });
     const dmText = body
-      ? `**${user.username}** commented on your report "${report.title}":\n> ${body.slice(0, 300)}`
-      : `**${user.username}** attached a file to your report "${report.title}".`;
+      ? `**${user.username}** commented on your report "${report.title}":\n> ${body.slice(0, 300)}\n${reportUrl}`
+      : `**${user.username}** attached a file to your report "${report.title}".\n${reportUrl}`;
     const dm = sendDiscordDm(report.reporterId, dmText);
-    if (cf) { cf.waitUntil(notif); cf.waitUntil(dm); }
-    else { await notif; await dm; }
+    dmTasks.push(notif, dm);
+  }
+
+  /* Notify whoever they replied to, if that's a different person than the
+     reporter (already notified above) and not themself. */
+  if (replyToId != null && parentAuthorId && parentAuthorId !== user.id && parentAuthorId !== report.reporterId) {
+    const notif = db()
+      .insert(notifications)
+      .values({
+        userId: parentAuthorId,
+        reportId,
+        kind: 'comment',
+      });
+    const dmText = body
+      ? `**${user.username}** replied to your comment on "${report.title}":\n> ${body.slice(0, 300)}\n${reportUrl}`
+      : `**${user.username}** replied with an attachment to your comment on "${report.title}".\n${reportUrl}`;
+    const dm = sendDiscordDm(parentAuthorId, dmText);
+    dmTasks.push(notif, dm);
+  }
+
+  if (cf) for (const task of dmTasks) cf.waitUntil(task);
+  else await Promise.all(dmTasks);
+
+  let replyToUsername: string | null = null;
+  if (comment.replyToId != null) {
+    const [parentUser] = await db()
+      .select({ username: users.username })
+      .from(comments)
+      .innerJoin(users, eq(users.discordId, comments.userId))
+      .where(eq(comments.id, comment.replyToId));
+    replyToUsername = parentUser?.username ?? null;
   }
 
   return json({
@@ -186,6 +239,8 @@ export const POST: APIRoute = async (ctx) => {
     avatarUrl: avatarUrl(user),
     createdAt: comment.createdAt,
     attachment,
+    replyToId: comment.replyToId,
+    replyToUsername,
   });
 };
 

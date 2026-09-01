@@ -47,9 +47,10 @@ if (Astro.request.method === 'POST') {
       ];
 
       if (updated.reporterId && updated.reporterId !== gate.user.id) {
+        const reportUrl = `${Astro.url.origin}/report/${id}`;
         const dmMsg = statusNote
-          ? `Your ${updated.kind} report \"${updated.title}\" has been marked as **${statusLabel(status)}**: ${statusNote}`
-          : `Your ${updated.kind} report \"${updated.title}\" has been marked as **${statusLabel(status)}**.`;
+          ? `Your ${updated.kind} report \"${updated.title}\" has been marked as **${statusLabel(status)}**: ${statusNote}\n${reportUrl}`
+          : `Your ${updated.kind} report \"${updated.title}\" has been marked as **${statusLabel(status)}**.\n${reportUrl}`;
         after.push(sendDiscordDm(updated.reporterId, dmMsg));
       }
 
@@ -144,6 +145,7 @@ const [user, reporter, reportAttachments, reportComments, commentAttachments] = 
       userId: comments.userId,
       username: users.username,
       avatarHash: users.avatarHash,
+      replyToId: comments.replyToId,
     })
     .from(comments)
     .innerJoin(users, eq(comments.userId, users.discordId))
@@ -326,8 +328,11 @@ Astro.response.headers.set(
         {reportComments.map((c) => {
           const avatar = avatarUrl({ id: c.userId, avatarHash: c.avatarHash }, 24);
           const cAtts = attByComment.get(c.id) ?? [];
+          const replyToUsername = c.replyToId != null
+            ? reportComments.find((p) => p.id === c.replyToId)?.username ?? null
+            : null;
           return (
-            <div class="comment">
+            <div class="comment" data-comment-id={c.id} data-is-reply={c.replyToId != null}>
               <div class="comment-header">
                 <div class="comment-author">
                   {avatar ? (
@@ -339,6 +344,9 @@ Astro.response.headers.set(
                   <span class="comment-time">{relativeAge(c.createdAt)} ago</span>
                 </div>
               </div>
+              {replyToUsername && (
+                <p class="reply-context">↳ replying to <strong>{replyToUsername}</strong></p>
+              )}
               {c.body && <p class="comment-body">{c.body}</p>}
               {cAtts.length > 0 && (
                 <div class="comment-attachments">
@@ -369,6 +377,16 @@ Astro.response.headers.set(
                   ))}
                 </div>
               )}
+              {user && (
+                <button
+                  type="button"
+                  class="reply-btn"
+                  data-comment-id={c.id}
+                  data-username={c.username}
+                >
+                  Reply
+                </button>
+              )}
             </div>
           );
         })}
@@ -377,6 +395,11 @@ Astro.response.headers.set(
       {user && (
         <form class="comment-form" id="comment-form">
           <input type="hidden" name="reportId" value={report.id} />
+          <input type="hidden" name="replyToId" id="reply-to-id" value="" />
+          <p class="reply-indicator" id="reply-indicator" style="display: none;">
+            Replying to <strong id="reply-indicator-username"></strong>
+            <button type="button" id="cancel-reply-btn" class="cancel-reply-btn">Cancel</button>
+          </p>
           <div class="comment-input-row">
             <input id="comment-file" type="file" class="sr-only" />
             <button type="button" class="btn btn-ghost" id="attach-btn" title="Attach a file">📎</button>
@@ -459,6 +482,35 @@ Astro.response.headers.set(
     }
   });
 
+  // ── Reply to a comment ─────────────────────────────────────────────
+  const replyToIdInput = document.getElementById('reply-to-id') as HTMLInputElement | null;
+  const replyIndicator = document.getElementById('reply-indicator') as HTMLElement | null;
+  const replyIndicatorUsername = document.getElementById('reply-indicator-username');
+  const cancelReplyBtn = document.getElementById('cancel-reply-btn') as HTMLButtonElement | null;
+
+  function startReply(commentId: string, username: string) {
+    if (replyToIdInput) replyToIdInput.value = commentId;
+    if (replyIndicatorUsername) replyIndicatorUsername.textContent = username;
+    if (replyIndicator) replyIndicator.style.display = '';
+    commentBody?.focus();
+    commentForm?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function cancelReply() {
+    if (replyToIdInput) replyToIdInput.value = '';
+    if (replyIndicator) replyIndicator.style.display = 'none';
+  }
+
+  document.querySelectorAll('.reply-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const commentId = (btn as HTMLElement).dataset.commentId;
+      const username = (btn as HTMLElement).dataset.username;
+      if (commentId && username) startReply(commentId, username);
+    });
+  });
+
+  cancelReplyBtn?.addEventListener('click', cancelReply);
+
   // ── Comment posting (with optional file) ──────────────────────────
   const commentForm = document.getElementById('comment-form') as HTMLFormElement | null;
   const commentBody = document.getElementById('comment-body') as HTMLTextAreaElement | null;
@@ -474,6 +526,7 @@ Astro.response.headers.set(
       const fd = new FormData();
       fd.append('reportId', (commentForm!.querySelector('[name=reportId]') as HTMLInputElement).value);
       fd.append('body', body);
+      if (replyToIdInput?.value) fd.append('replyToId', replyToIdInput.value);
       if (selectedFile) fd.append('file', selectedFile);
       const res = await fetch('/comments', { method: 'POST', body: fd });
       if (!res.ok) {
@@ -483,6 +536,7 @@ Astro.response.headers.set(
       }
       commentBody!.value = '';
       selectedFile = null;
+      cancelReply();
       if (fileChip) { fileChip.textContent = ''; fileChip.style.display = 'none'; }
       window.location.reload();
     } catch {
@@ -647,12 +701,48 @@ Astro.response.headers.set(
     color: var(--text-muted);
     font-size: var(--text-sm);
   }
-  .comment {
-    padding: var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-inset);
+  .comment { padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-inset); }
+  .comment[data-is-reply="true"] {
+    margin-inline-start: var(--space-6);
+    border-inline-start: 2px solid var(--border-default);
   }
+  .reply-context {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    margin: 0 0 var(--space-1);
+  }
+  .reply-btn {
+    margin-block-start: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+  }
+  .reply-btn:hover { color: var(--text-primary); text-decoration: underline; }
+  .reply-indicator {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    background: var(--surface-active);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-2);
+    margin-block-end: var(--space-2);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .cancel-reply-btn {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 0;
+    margin-inline-start: auto;
+  }
+  .cancel-reply-btn:hover { color: var(--text-primary); }
   .comment-header { margin-block-end: var(--space-2); }
   .comment-author {
     display: flex;

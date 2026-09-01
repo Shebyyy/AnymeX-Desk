@@ -282,12 +282,15 @@ export const comments = sqliteTable(
       .notNull()
       .references(() => users.discordId, { onDelete: 'cascade' }),
     body: text('body').notNull(),
+    /** If set, this comment is a reply to another comment on the same report. */
+    replyToId: integer('reply_to_id'),
     createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
     updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
   },
   (t) => [
     index('comments_by_report').on(t.reportId, t.createdAt),
     index('comments_by_user').on(t.userId),
+    index('comments_by_reply').on(t.replyToId),
   ],
 );
 
