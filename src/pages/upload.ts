@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:workers';
 import type { APIRoute } from 'astro';
 import { and, count, eq, sql } from 'drizzle-orm';
 import { canWriteNow, currentUser } from '../lib/auth';
@@ -86,7 +87,7 @@ export const POST: APIRoute = async (ctx) => {
 
   // Read file into ArrayBuffer and store in KV with metadata.
   const arrayBuffer = await file.arrayBuffer();
-  const kv = (ctx.locals.runtime as any).env?.SESSION as KVNamespace | undefined;
+  const kv = env.SESSION as KVNamespace | undefined;
   if (kv) {
     await kv.put(kvKey, arrayBuffer, {
       metadata: { mimeType: mime, fileName: file.name },

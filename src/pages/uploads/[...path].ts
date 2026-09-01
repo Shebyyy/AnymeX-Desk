@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:workers';
 import type { APIRoute } from 'astro';
 
 export const prerender = false;
@@ -11,7 +12,7 @@ export const GET: APIRoute = async (ctx) => {
   const filePath = `uploads/${ctx.params.path}`;
   const kvKey = `upload:${filePath}`;
 
-  const kv = (ctx.locals.runtime as any).env?.SESSION as KVNamespace | undefined;
+  const kv = env.SESSION as KVNamespace | undefined;
   if (!kv) {
     return new Response('Storage not configured', { status: 503 });
   }
