@@ -126,8 +126,8 @@ Astro.response.headers.set(
         </span>
       </a>
     ))}
-    <a class="btn btn-primary" href="/new">
-      New report
+    <a class="btn btn-primary" href={`/new?kind=${kind}`}>
+      New {KIND_LABELS[kind].toLowerCase()}
     </a>
   </div>
 

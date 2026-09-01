@@ -126,6 +126,7 @@ if (draft) {
 }
 
 const queryKind = Astro.url.searchParams.get('kind') ?? '';
+const kindLocked = queryKind === 'bug' || queryKind === 'suggestion';
 
 const shown = {
   kind: posted?.kind || draft?.kind || queryKind || 'bug',
@@ -137,13 +138,15 @@ const shown = {
   stepsToReproduce: posted?.stepsToReproduce || draft?.stepsToReproduce || '',
 };
 
-const activeKind = shown.kind as 'bug' | 'suggestion';
+const activeKind = (kindLocked ? queryKind : shown.kind) as 'bug' | 'suggestion';
 const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CATEGORIES;
 ---
 
-<Base title="File a report" narrow>
-  <h1>File a report</h1>
-  <p class="lede">Tell us about a bug or suggest a feature for AnymeX.</p>
+<Base title={activeKind === 'bug' ? 'File a Bug Report' : 'File a Suggestion'} narrow>
+  <h1>{activeKind === 'bug' ? 'File a Bug Report' : 'File a Suggestion'}</h1>
+  <p class="lede">{activeKind === 'bug'
+    ? 'Describe a problem you found in AnymeX.'
+    : 'Suggest a feature or improvement for AnymeX.'}</p>
 
   {
     !user && (
@@ -164,7 +167,8 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
 
     {error && <p class="error" role="alert">{error}</p>}
 
-    {/* Step 1: Kind */}
+    {/* Step 1: Kind (hidden when pre-selected from tab) */}
+    {!kindLocked && (
     <section class="step">
       <h2 class="step-h"><span class="step-n">1</span> Type</h2>
       <div class="segmented">
@@ -176,10 +180,12 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
         ))}
       </div>
     </section>
+    )}
+    {kindLocked && <input type="hidden" name="kind" value={activeKind} />}
 
-    {/* Step 2: Category */}
+    {/* Step {kindLocked ? 1 : 2}: Category */}
     <section class="step">
-      <h2 class="step-h"><span class="step-n">2</span> Category</h2>
+      <h2 class="step-h"><span class="step-n">{kindLocked ? 1 : 2}</span> Category</h2>
       <div class="segmented cats">
         {categories.map((c) => (
           <label class:active={shown.category === c}>
@@ -190,9 +196,9 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
       </div>
     </section>
 
-    {/* Step 3: Platform */}
+    {/* Step {kindLocked ? 2 : 3}: Platform */}
     <section class="step">
-      <h2 class="step-h"><span class="step-n">3</span> Platform</h2>
+      <h2 class="step-h"><span class="step-n">{kindLocked ? 2 : 3}</span> Platform</h2>
       <div class="segmented plats">
         {PLATFORMS.map((p) => (
           <label class:active={shown.platform === p}>
@@ -203,9 +209,9 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
       </div>
     </section>
 
-    {/* Step 4: Details */}
+    {/* Step {kindLocked ? 3 : 4}: Details */}
     <section class="step">
-      <h2 class="step-h"><span class="step-n">4</span> Details</h2>
+      <h2 class="step-h"><span class="step-n">{kindLocked ? 3 : 4}</span> Details</h2>
       <div class="field">
         <label class="label" for="title">Title</label>
         <input
@@ -262,7 +268,9 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
     </section>
 
     <div class="submit-row">
-      <button class="btn btn-primary btn-lg" type="submit">Submit report</button>
+      <button class="btn btn-primary btn-lg" type="submit">
+        {activeKind === 'bug' ? 'Submit bug report' : 'Submit suggestion'}
+      </button>
     </div>
   </form>
 
