@@ -79,10 +79,22 @@ export const POST: APIRoute = async (ctx) => {
     .where(eq(reports.id, reportId));
   if (!report) return json({ error: 'report not found' }, 404);
 
-  /* ── Generate path & store metadata ────────────────────────────────── */
+  /* ── Generate path & store file in KV ──────────────────────────────── */
   const uuid = crypto.randomUUID();
   const filePath = `uploads/${uuid}/${file.name}`;
+  const kvKey = `upload:${filePath}`;
 
+  // Read file into ArrayBuffer and store in KV with metadata.
+  const arrayBuffer = await file.arrayBuffer();
+  const kv = (ctx.locals.runtime as any).env?.SESSION as KVNamespace | undefined;
+  if (kv) {
+    await kv.put(kvKey, arrayBuffer, {
+      metadata: { mimeType: mime, fileName: file.name },
+      expirationTtl: 60 * 60 * 24 * 365, // 1 year TTL
+    });
+  }
+
+  /* ── Save metadata to D1 ──────────────────────────────────────────── */
   const d = db();
   const [inserted] = await d.batch([
     d
