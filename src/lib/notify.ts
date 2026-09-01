@@ -132,7 +132,10 @@ export async function sendDiscordDm(
 ): Promise<boolean> {
   const botToken = await readSetting('discord_bot_token');
   const dmEnabled = await readSetting('discord_dm_enabled');
-  if (!botToken || (dmEnabled !== 'true' && dmEnabled !== '1')) return false;
+  if (!botToken || (dmEnabled !== 'true' && dmEnabled !== '1')) {
+    console.warn('[DM] Skipped: no token or disabled', { hasToken: !!botToken, dmEnabled });
+    return false;
+  }
 
   try {
     // Create or retrieve the DM channel.
@@ -144,7 +147,10 @@ export async function sendDiscordDm(
       },
       body: JSON.stringify({ recipient_id: discordId }),
     });
-    if (!dmRes.ok) return false;
+    if (!dmRes.ok) {
+      console.error('[DM] Failed to create channel', { status: dmRes.status, body: await dmRes.text() });
+      return false;
+    }
     const dmChannel = (await dmRes.json()) as { id: string };
 
     // Send the message.
@@ -159,8 +165,14 @@ export async function sendDiscordDm(
         allowed_mentions: { parse: [] },
       }),
     });
-    return msgRes.ok;
-  } catch {
+    if (!msgRes.ok) {
+      console.error('[DM] Failed to send message', { status: msgRes.status, body: await msgRes.text() });
+      return false;
+    }
+    console.log('[DM] Sent to', discordId);
+    return true;
+  } catch (err) {
+    console.error('[DM] Exception', err);
     return false;
   }
 }
