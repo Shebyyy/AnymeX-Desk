@@ -174,6 +174,37 @@ for (const a of commentAttachments) {
   attByComment.set(a.commentId, list);
 }
 
+// Order comments so each reply appears directly under its parent, not at
+// the bottom in raw chronological order. Depth-first: every root comment is
+// immediately followed by its replies (recursively), each in creation order.
+type ReportComment = (typeof reportComments)[number];
+const childrenByParent = new Map<number, ReportComment[]>();
+const roots: ReportComment[] = [];
+for (const c of reportComments) {
+  if (c.replyToId != null) {
+    const list = childrenByParent.get(c.replyToId) ?? [];
+    list.push(c);
+    childrenByParent.set(c.replyToId, list);
+  } else {
+    roots.push(c);
+  }
+}
+const orderedComments: { comment: ReportComment; depth: number }[] = [];
+function walk(list: ReportComment[], depth: number) {
+  for (const c of list) {
+    orderedComments.push({ comment: c, depth });
+    const kids = childrenByParent.get(c.id);
+    if (kids) walk(kids, depth + 1);
+  }
+}
+walk(roots, 0);
+// Orphans: replies whose parent got deleted end up with no root — append
+// them at depth 0 so nothing silently disappears from the list.
+const seen = new Set(orderedComments.map((o) => o.comment.id));
+for (const c of reportComments) {
+  if (!seen.has(c.id)) orderedComments.push({ comment: c, depth: 0 });
+}
+
 const canModerate = user ? atLeast(await levelOf(user.id), 'mod') : false;
 const mine = user
   ? (
@@ -325,15 +356,19 @@ Astro.response.headers.set(
         {reportComments.length === 0 && (
           <p class="no-comments">No comments yet.</p>
         )}
-        {reportComments.map((c) => {
+        {orderedComments.map(({ comment: c, depth }) => {
           const avatar = avatarUrl({ id: c.userId, avatarHash: c.avatarHash }, 24);
           const cAtts = attByComment.get(c.id) ?? [];
           const replyToUsername = c.replyToId != null
             ? reportComments.find((p) => p.id === c.replyToId)?.username ?? null
             : null;
           return (
-            <div class="comment" data-comment-id={c.id} data-is-reply={c.replyToId != null}>
-              <div class="comment-header">
+            <div
+              class="comment"
+              data-comment-id={c.id}
+              data-is-reply={c.replyToId != null}
+              style={depth > 0 ? `margin-inline-start: calc(${depth} * var(--space-6));` : undefined}
+            >              <div class="comment-header">
                 <div class="comment-author">
                   {avatar ? (
                     <img class="avatar" src={avatar} alt="" width="24" height="24" />
