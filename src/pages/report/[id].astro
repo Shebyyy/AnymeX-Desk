@@ -1,7 +1,7 @@
 ---
 import Base from '../../layouts/Base.astro';
 import VoteButton from '../../components/VoteButton.astro';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../../lib/db/client';
 import {
   OPEN_STATUSES, STATUSES, reports, votes, attachments, comments, users,
@@ -128,13 +128,13 @@ if (Astro.request.method === 'DELETE') {
 const [report] = await db().select().from(reports).where(eq(reports.id, id));
 if (!report) return Astro.rewrite('/404');
 
-const [user, reporter, reportAttachments, reportComments] = await Promise.all([
+const [user, reporter, reportAttachments, reportComments, commentAttachments] = await Promise.all([
   currentUser(Astro),
   dbUser(report.reporterId),
   db()
     .select()
     .from(attachments)
-    .where(eq(attachments.reportId, id))
+    .where(and(eq(attachments.reportId, id), isNull(attachments.commentId)))
     .orderBy(asc(attachments.sortOrder)),
   db()
     .select({
@@ -149,7 +149,28 @@ const [user, reporter, reportAttachments, reportComments] = await Promise.all([
     .innerJoin(users, eq(comments.userId, users.discordId))
     .where(eq(comments.reportId, id))
     .orderBy(asc(comments.createdAt)),
+  db()
+    .select({
+      commentId: attachments.commentId,
+      id: attachments.id,
+      fileName: attachments.fileName,
+      filePath: attachments.filePath,
+      fileType: attachments.fileType,
+      mimeType: attachments.mimeType,
+      fileSize: attachments.fileSize,
+    })
+    .from(attachments)
+    .where(eq(attachments.reportId, id)),
 ]);
+
+// Group comment attachments by comment ID.
+const attByComment = new Map<number, typeof commentAttachments>();
+for (const a of commentAttachments) {
+  if (a.commentId == null) continue;
+  const list = attByComment.get(a.commentId) ?? [];
+  list.push(a);
+  attByComment.set(a.commentId, list);
+}
 
 const canModerate = user ? atLeast(await levelOf(user.id), 'mod') : false;
 const mine = user
@@ -304,6 +325,7 @@ Astro.response.headers.set(
         )}
         {reportComments.map((c) => {
           const avatar = avatarUrl({ id: c.userId, avatarHash: c.avatarHash }, 24);
+          const cAtts = attByComment.get(c.id) ?? [];
           return (
             <div class="comment">
               <div class="comment-header">
@@ -317,7 +339,36 @@ Astro.response.headers.set(
                   <span class="comment-time">{relativeAge(c.createdAt)} ago</span>
                 </div>
               </div>
-              <p class="comment-body">{c.body}</p>
+              {c.body && <p class="comment-body">{c.body}</p>}
+              {cAtts.length > 0 && (
+                <div class="comment-attachments">
+                  {cAtts.map((att) => (
+                    <div class="comment-att" data-type={att.fileType}>
+                      {att.fileType === 'image' ? (
+                        <a href={`/${att.filePath}`} target="_blank" rel="noopener">
+                          <img src={`/${att.filePath}`} alt={att.fileName} class="comment-att-img" loading="lazy" />
+                        </a>
+                      ) : att.fileType === 'video' ? (
+                        <video controls preload="metadata" class="comment-att-video">
+                          <source src={`/${att.filePath}`} type={att.mimeType} />
+                        </video>
+                      ) : (
+                        <a href={`/${att.filePath}`} class="comment-att-file" download={att.fileName}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                          </svg>
+                          <span>{att.fileName} ({(att.fileSize / 1024).toFixed(0)} KB)</span>
+                        </a>
+                      )}
+                      {canModerate && att.commentId != null && (
+                        <button class="pin-btn" data-att-id={att.id} data-report-id={report.id} title="Pin to report attachments">
+                          Pin to report
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
@@ -326,6 +377,11 @@ Astro.response.headers.set(
       {user && (
         <form class="comment-form" id="comment-form">
           <input type="hidden" name="reportId" value={report.id} />
+          <div class="comment-input-row">
+            <input id="comment-file" type="file" class="sr-only" />
+            <button type="button" class="btn btn-ghost" id="attach-btn" title="Attach a file">📎</button>
+            <span class="file-chip" id="file-chip"></span>
+          </div>
           <textarea
             name="body"
             class="textarea"
@@ -333,39 +389,14 @@ Astro.response.headers.set(
             rows="3"
             maxlength="2000"
             placeholder="Add a comment..."
-            required
           ></textarea>
           <div class="comment-form-actions">
             <span class="char-hint">Max 2000 characters</span>
-            <button class="btn" type="submit" id="comment-btn">Post comment</button>
+            <button class="btn" type="submit" id="comment-btn">Post</button>
           </div>
         </form>
       )}
     </section>
-
-    {/* ── Upload section (any signed-in user) ────────────────────────── */}
-    {user && (
-      <section class="upload-section">
-        <h2>Upload attachment</h2>
-        <p class="upload-hint">
-          Images (JPG, PNG, WebP, GIF) up to 5 MB · max 5 per report. Videos (MP4, WebM) up to 50 MB · max 1 per report.
-        </p>
-        <form class="upload-form" id="upload-form">
-          <input type="hidden" name="reportId" value={report.id} />
-          <label class="upload-dropzone" for="file-input">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
-            <span>Click to select a file or drag &amp; drop</span>
-          </label>
-          <input id="file-input" type="file" name="file" accept="image/*,video/mp4,video/webm" class="sr-only" />
-          <p class="upload-selected" id="upload-selected"></p>
-          <button class="btn" type="submit" id="upload-btn" disabled>Upload</button>
-        </form>
-      </section>
-    )}
 
     {/* ── Moderator controls ──────────────────────────────────────────── */}
     {
@@ -408,59 +439,77 @@ Astro.response.headers.set(
 </Base>
 
 <script>
-  // ── Client-side upload handling ─────────────────────────────────────
-  const form = document.getElementById('upload-form') as HTMLFormElement | null;
-  const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
-  const selected = document.getElementById('upload-selected');
-  const btn = document.getElementById('upload-btn') as HTMLButtonElement | null;
+  // ── File attachment for comment ──────────────────────────────────
+  const commentFile = document.getElementById('comment-file') as HTMLInputElement | null;
+  const attachBtn = document.getElementById('attach-btn') as HTMLButtonElement | null;
+  const fileChip = document.getElementById('file-chip');
+  let selectedFile: File | null = null;
 
-  if (form && fileInput && btn) {
-    fileInput.addEventListener('change', () => {
-      const f = fileInput.files?.[0];
-      if (f) {
-        const size = f.size > 1024 * 1024
-          ? `${(f.size / (1024 * 1024)).toFixed(1)} MB`
-          : `${(f.size / 1024).toFixed(0)} KB`;
-        if (selected) selected.textContent = `${f.name} (${size})`;
-        btn.disabled = false;
-      } else {
-        if (selected) selected.textContent = '';
-        btn.disabled = true;
-      }
-    });
+  attachBtn?.addEventListener('click', () => commentFile?.click());
+  commentFile?.addEventListener('change', () => {
+    selectedFile = commentFile.files?.[0] ?? null;
+    if (selectedFile && fileChip) {
+      const size = selectedFile.size > 1024 * 1024
+        ? `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`
+        : `${(selectedFile.size / 1024).toFixed(0)} KB`;
+      fileChip.textContent = `${selectedFile.name} (${size})`;
+      fileChip.style.display = '';
+    } else if (fileChip) {
+      fileChip.style.display = 'none';
+    }
+  });
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const file = fileInput.files?.[0];
-      if (!file) return;
-      btn.disabled = true;
-      btn.textContent = 'Uploading…';
-      try {
-        const fd = new FormData();
-        fd.append('file', file);
-        fd.append('reportId', (form.querySelector('[name=reportId]') as HTMLInputElement).value);
-        const res = await fetch('/upload', { method: 'POST', body: fd });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: 'Upload failed' }));
-          alert(err.error || 'Upload failed');
-          return;
-        }
-        // Reload to show the new attachment.
-        window.location.reload();
-      } catch {
-        alert('Upload failed — network error');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Upload';
-      }
-    });
-  }
-
-  // ── Client-side comment posting ────────────────────────────────────
+  // ── Comment posting (with optional file) ──────────────────────────
   const commentForm = document.getElementById('comment-form') as HTMLFormElement | null;
   const commentBody = document.getElementById('comment-body') as HTMLTextAreaElement | null;
   const commentBtn = document.getElementById('comment-btn') as HTMLButtonElement | null;
-  const commentsList = document.getElementById('comments-list');
+
+  commentForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = commentBody?.value.trim() ?? '';
+    if (!body && !selectedFile) return;
+    commentBtn!.disabled = true;
+    commentBtn!.textContent = 'Posting…';
+    try {
+      const fd = new FormData();
+      fd.append('reportId', (commentForm!.querySelector('[name=reportId]') as HTMLInputElement).value);
+      fd.append('body', body);
+      if (selectedFile) fd.append('file', selectedFile);
+      const res = await fetch('/comments', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to post' }));
+        alert(err.error || 'Failed to post');
+        return;
+      }
+      commentBody!.value = '';
+      selectedFile = null;
+      if (fileChip) { fileChip.textContent = ''; fileChip.style.display = 'none'; }
+      window.location.reload();
+    } catch {
+      alert('Network error');
+    } finally {
+      commentBtn!.disabled = false;
+      commentBtn!.textContent = 'Post';
+    }
+  });
+
+  // ── Pin attachment (mod only) ─────────────────────────────────────
+  document.querySelectorAll('.pin-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const attId = (btn as HTMLElement).dataset.attId;
+      const reportId = (btn as HTMLElement).dataset.reportId;
+      if (!attId || !reportId) return;
+      btn.textContent = 'Pinning…';
+      try {
+        const fd = new FormData();
+        fd.append('attachmentId', attId);
+        fd.append('reportId', reportId);
+        const res = await fetch('/comments/pin', { method: 'PUT', body: fd });
+        if (res.ok) window.location.reload();
+        else { alert('Failed to pin'); btn.textContent = 'Pin to report'; }
+      } catch { alert('Network error'); btn.textContent = 'Pin to report'; }
+    });
+  });
 
   // ── Delete report ─────────────────────────────────────────────────
   const deleteBtn = document.getElementById('delete-btn') as HTMLButtonElement | null;
@@ -471,9 +520,8 @@ Astro.response.headers.set(
     deleteBtn.textContent = 'Deleting…';
     try {
       const res = await fetch(window.location.pathname, { method: 'DELETE' });
-      if (res.ok) {
-        window.location.href = '/';
-      } else {
+      if (res.ok) { window.location.href = '/'; }
+      else {
         const err = await res.json().catch(() => ({ error: 'Delete failed' }));
         alert(err.error || 'Delete failed');
         deleteBtn.disabled = false;
@@ -485,34 +533,6 @@ Astro.response.headers.set(
       deleteBtn.textContent = 'Delete report';
     }
   });
-
-  if (commentForm && commentBody && commentBtn && commentsList) {
-    commentForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const body = commentBody.value.trim();
-      if (!body) return;
-      commentBtn.disabled = true;
-      commentBtn.textContent = 'Posting…';
-      try {
-        const fd = new FormData();
-        fd.append('reportId', (commentForm.querySelector('[name=reportId]') as HTMLInputElement).value);
-        fd.append('body', body);
-        const res = await fetch('/comments', { method: 'POST', body: fd });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: 'Failed to post comment' }));
-          alert(err.error || 'Failed to post comment');
-          return;
-        }
-        commentBody.value = '';
-        window.location.reload();
-      } catch {
-        alert('Failed to post comment — network error');
-      } finally {
-        commentBtn.disabled = false;
-        commentBtn.textContent = 'Post comment';
-      }
-    });
-  }
 </script>
 
 <style>
@@ -563,7 +583,7 @@ Astro.response.headers.set(
 
   .body p { color: var(--text-secondary); white-space: pre-wrap; }
   .steps { margin-block-start: var(--space-4); }
-  .steps h2, .attachments-section h2, .comments-section h2, .upload-section h2 {
+  .steps h2, .attachments-section h2, .comments-section h2 {
     font-size: var(--text-md);
     margin-block-end: var(--space-3);
   }
@@ -613,7 +633,7 @@ Astro.response.headers.set(
   }
 
   /* ── Comments ── */
-  .comments-section, .upload-section {
+  .comments-section {
     margin-block-start: var(--space-8);
     padding-block-start: var(--space-4);
     border-block-start: 1px solid var(--border-subtle);
@@ -653,27 +673,19 @@ Astro.response.headers.set(
     margin-block-start: var(--space-2);
   }
   .char-hint { font-size: var(--text-xs); color: var(--text-muted); }
-
-  /* ── Upload ── */
-  .upload-hint { font-size: var(--text-sm); color: var(--text-muted); margin-block-end: var(--space-3); }
-  .upload-form { display: flex; flex-direction: column; gap: var(--space-2); }
-  .upload-dropzone {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-8) var(--space-4);
-    border: 2px dashed var(--border-default);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    text-align: center;
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    transition: border-color 0.15s;
-  }
-  .upload-dropzone:hover { border-color: var(--signal); }
-  .upload-selected { font-size: var(--text-sm); color: var(--text-secondary); }
+  .comment-input-row { display: flex; align-items: center; gap: var(--space-2); margin-block-end: var(--space-2); }
+  .file-chip { font-size: var(--text-xs); color: var(--text-secondary); background: var(--surface-active); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+
+  /* ── Comment attachments ── */
+  .comment-attachments { display: flex; flex-direction: column; gap: var(--space-2); margin-block-start: var(--space-2); }
+  .comment-att { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; background: var(--surface-inset); position: relative; }
+  .comment-att-img { max-width: 300px; max-height: 200px; object-fit: contain; display: block; }
+  .comment-att-video { max-width: 100%; max-height: 250px; display: block; }
+  .comment-att-file { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); color: var(--text-secondary); font-size: var(--text-sm); text-decoration: none; }
+  .comment-att-file:hover { color: var(--text-primary); background: var(--surface-hover); }
+  .pin-btn { font-size: var(--text-xs); color: var(--text-muted); background: var(--surface-active); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); cursor: pointer; margin: var(--space-2); }
+  .pin-btn:hover { color: var(--text-primary); border-color: var(--border-default); }
 
   /* ── Moderator controls ── */
   .mod {

@@ -240,19 +240,21 @@ export const attachments = sqliteTable(
     reportId: integer('report_id')
       .notNull()
       .references(() => reports.id, { onDelete: 'cascade' }),
+    /** If set, this attachment belongs to a comment. NULL = report-level. */
+    commentId: integer('comment_id'),
     /** Original filename as uploaded by the user. */
     fileName: text('file_name').notNull(),
     /** Path on disk / R2 key. */
     filePath: text('file_path').notNull(),
-    /** image or video. */
-    fileType: text('file_type', { enum: ['image', 'video'] }).notNull(),
-    /** MIME type: image/png, video/mp4, etc. */
+    /** image, video, or file. */
+    fileType: text('file_type').notNull(),
+    /** MIME type: image/png, video/mp4, text/plain, etc. */
     mimeType: text('mime_type').notNull(),
     /** File size in bytes. */
     fileSize: integer('file_size').notNull(),
-    /** Image width in pixels (null for videos). */
+    /** Image width in pixels (null for videos/files). */
     width: integer('width'),
-    /** Image height in pixels (null for videos). */
+    /** Image height in pixels (null for videos/files). */
     height: integer('height'),
     /** Thumbnail path for videos. */
     thumbnailPath: text('thumbnail_path'),
@@ -262,6 +264,7 @@ export const attachments = sqliteTable(
   },
   (t) => [
     index('attachments_by_report').on(t.reportId, t.sortOrder),
+    index('attachments_by_comment').on(t.commentId),
   ],
 );
 

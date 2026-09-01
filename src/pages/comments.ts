@@ -1,8 +1,9 @@
+import { env } from 'cloudflare:workers';
 import type { APIRoute } from 'astro';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { canWriteNow, currentUser, avatarUrl } from '../lib/auth';
 import { db } from '../lib/db/client';
-import { comments, reports, users, notifications } from '../lib/db/schema';
+import { comments, reports, users, notifications, attachments } from '../lib/db/schema';
 import { atLeast } from '../lib/levels';
 import { levelOf } from '../lib/staff';
 import { isReportId } from '../lib/writes';
@@ -36,6 +37,28 @@ export const GET: APIRoute = async (ctx) => {
     .where(eq(comments.reportId, reportId))
     .orderBy(asc(comments.createdAt));
 
+  // Fetch attachments grouped by comment.
+  const atts = await db()
+    .select({
+      commentId: attachments.commentId,
+      id: attachments.id,
+      fileName: attachments.fileName,
+      filePath: attachments.filePath,
+      fileType: attachments.fileType,
+      mimeType: attachments.mimeType,
+      fileSize: attachments.fileSize,
+    })
+    .from(attachments)
+    .where(eq(attachments.reportId, reportId));
+
+  const attByComment = new Map<number, typeof atts>();
+  for (const a of atts) {
+    if (a.commentId == null) continue;
+    const list = attByComment.get(a.commentId) ?? [];
+    list.push(a);
+    attByComment.set(a.commentId, list);
+  }
+
   return json(
     rows.map((r) => ({
       id: r.id,
@@ -44,11 +67,12 @@ export const GET: APIRoute = async (ctx) => {
       username: r.username,
       avatarUrl: avatarUrl({ id: r.userId, avatarHash: r.avatarHash }),
       createdAt: r.createdAt,
+      attachments: attByComment.get(r.id) ?? [],
     })),
   );
 };
 
-/* ── POST — add a comment ────────────────────────────────────────────── */
+/* ── POST — add a comment (with optional file attachment) ────────────── */
 export const POST: APIRoute = async (ctx) => {
   const user = await currentUser(ctx);
   if (!user) return json({ error: 'sign-in' }, 401);
@@ -57,9 +81,10 @@ export const POST: APIRoute = async (ctx) => {
   const form = await ctx.request.formData();
   const reportId = Number(form.get('reportId'));
   const body = String(form.get('body') ?? '').trim();
+  const file = form.get('file') as File | null;
 
   if (!isReportId(reportId)) return json({ error: 'invalid report id' }, 400);
-  if (!body) return json({ error: 'body is empty' }, 400);
+  if (!body && !file) return json({ error: 'body or file is required' }, 400);
   if (body.length > 2000) return json({ error: 'body too long (max 2000 chars)' }, 400);
 
   /* Verify the report exists. */
@@ -69,12 +94,12 @@ export const POST: APIRoute = async (ctx) => {
     .where(eq(reports.id, reportId));
   if (!report) return json({ error: 'report not found' }, 404);
 
-  /* Insert comment + bump counter in a batch. */
+  /* Insert comment + bump counter. */
   const d = db();
   const [inserted] = await d.batch([
     d
       .insert(comments)
-      .values({ reportId, userId: user.id, body })
+      .values({ reportId, userId: user.id, body: body || '' })
       .returning({
         id: comments.id,
         body: comments.body,
@@ -89,6 +114,52 @@ export const POST: APIRoute = async (ctx) => {
 
   const comment = inserted[0];
 
+  /* Upload file attachment if provided. */
+  let attachment = null;
+  if (file && file.size > 0) {
+    const mime = file.type || 'application/octet-stream';
+    const uuid = crypto.randomUUID();
+    const filePath = `uploads/${uuid}/${file.name}`;
+    const kvKey = `upload:${filePath}`;
+
+    // Determine file type.
+    let fileType = 'file';
+    if (mime.startsWith('image/')) fileType = 'image';
+    else if (mime.startsWith('video/')) fileType = 'video';
+
+    // Store in KV.
+    const kv = env.SESSION as KVNamespace | undefined;
+    if (kv) {
+      const buf = await file.arrayBuffer();
+      await kv.put(kvKey, buf, {
+        metadata: { mimeType: mime, fileName: file.name },
+        expirationTtl: 60 * 60 * 24 * 365,
+      });
+    }
+
+    // Save metadata.
+    const [attInserted] = await d
+      .insert(attachments)
+      .values({
+        reportId,
+        commentId: comment.id,
+        fileName: file.name,
+        filePath,
+        fileType,
+        mimeType: mime,
+        fileSize: file.size,
+      })
+      .returning({
+        id: attachments.id,
+        fileName: attachments.fileName,
+        filePath: attachments.filePath,
+        fileType: attachments.fileType,
+        mimeType: attachments.mimeType,
+        fileSize: attachments.fileSize,
+      });
+    attachment = attInserted;
+  }
+
   /* Notify the reporter (skip if commenting on your own report). */
   if (report.reporterId !== user.id) {
     const cf = ctx.locals.cfContext;
@@ -99,11 +170,10 @@ export const POST: APIRoute = async (ctx) => {
         reportId,
         kind: 'comment',
       });
-    const dm = sendDiscordDm(
-      report.reporterId,
-      `**${user.username}** commented on your report "${report.title}":
-> ${body.slice(0, 300)}`,
-    );
+    const dmText = body
+      ? `**${user.username}** commented on your report "${report.title}":\n> ${body.slice(0, 300)}`
+      : `**${user.username}** attached a file to your report "${report.title}".`;
+    const dm = sendDiscordDm(report.reporterId, dmText);
     if (cf) { cf.waitUntil(notif); cf.waitUntil(dm); }
     else { await notif; await dm; }
   }
@@ -115,6 +185,7 @@ export const POST: APIRoute = async (ctx) => {
     username: user.username,
     avatarUrl: avatarUrl(user),
     createdAt: comment.createdAt,
+    attachment,
   });
 };
 
