@@ -132,7 +132,7 @@ export async function sendDiscordDm(
 ): Promise<boolean> {
   const botToken = await readSetting('discord_bot_token');
   const dmEnabled = await readSetting('discord_dm_enabled');
-  if (!botToken || dmEnabled !== '1') return false;
+  if (!botToken || (dmEnabled !== 'true' && dmEnabled !== '1')) return false;
 
   try {
     // Create or retrieve the DM channel.
