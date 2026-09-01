@@ -1,0 +1,114 @@
+---
+import VoteButton from './VoteButton.astro';
+import {
+  CATEGORY_LABELS,
+  PLATFORM_LABELS,
+  KIND_LABELS,
+  OPEN_STATUSES,
+  type Report,
+} from '../lib/db/schema';
+import {
+  fixedLabel,
+  relativeAge,
+  stalledLabel,
+  statusLabel,
+  kindLabel,
+  categoryLabel,
+  platformLabel,
+} from '../lib/format';
+
+interface Props {
+  report: Report;
+  mine?: boolean;
+}
+
+const { report: r, mine = false } = Astro.props;
+
+const live = (OPEN_STATUSES as readonly string[]).includes(r.status);
+const stalled = live ? stalledLabel(r.createdAt) : null;
+const closed = fixedLabel(r.status, r.statusChangedAt);
+
+const kindTag = KIND_LABELS[r.kind] ?? r.kind;
+const catLabel = CATEGORY_LABELS[r.category] ?? r.category;
+const platLabel = PLATFORM_LABELS[r.platform] ?? r.platform;
+---
+
+<li class="row">
+  <VoteButton reportId={r.id} votes={r.votes} mine={mine} closed={!live} />
+
+  <a class="row-main" href={`/report/${r.id}`}>
+    <span class="row-title">
+      <b class="title-text">{r.title}</b>
+    </span>
+    <span class="row-meta">
+      {closed ? (
+        <span class="status" data-status={r.status}>{closed}</span>
+      ) : (
+        r.status !== 'open' && (
+          <span class="status" data-status={r.status}>
+            {statusLabel(r.status)}
+          </span>
+        )
+      )}
+      <span class="tag">{kindTag}</span>
+      <span class="tag">{catLabel}</span>
+      <span>{platLabel}</span>
+      {r.attachmentCount > 0 && <span class="attachments">{r.attachmentCount} attachment{r.attachmentCount !== 1 ? 's' : ''}</span>}
+      {r.commentCount > 0 && <span>{r.commentCount} comment{r.commentCount !== 1 ? 's' : ''}</span>}
+      {
+        stalled ? (
+          <span class="stalled">{stalled}</span>
+        ) : closed ? null : live ? (
+          <span>{relativeAge(r.createdAt)} ago</span>
+        ) : (
+          <span>Filed {relativeAge(r.createdAt)} ago</span>
+        )
+      }
+    </span>
+  </a>
+
+  {r.duplicateOf && (
+    <a
+      class="dup"
+      href={`/report/${r.duplicateOf}`}
+      aria-label={`Merged into report ${r.duplicateOf}`}>
+      → #{r.duplicateOf}
+    </a>
+  )}
+</li>
+
+<style>
+  .row-title {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+  .title-text { font-weight: var(--weight-semi); color: var(--text-primary); }
+  .row-main:hover .title-text { color: var(--signal-ink); }
+
+  .row-meta { gap: var(--space-2); }
+  .tag {
+    padding-inline: var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+  }
+  .stalled { color: var(--stalled); font-weight: var(--weight-medium); }
+  .attachments { color: var(--text-muted); font-size: var(--text-xs); }
+
+  .dup {
+    align-self: center;
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .dup:hover { color: var(--signal-ink); }
+
+  @media (max-width: 640px) {
+    .row-title { flex-wrap: wrap; }
+    .title-text { white-space: normal; }
+  }
+</style>

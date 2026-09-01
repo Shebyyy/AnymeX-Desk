@@ -1,0 +1,594 @@
+---
+import Base from '../../layouts/Base.astro';
+import VoteButton from '../../components/VoteButton.astro';
+import { and, asc, eq, sql } from 'drizzle-orm';
+import { db } from '../../lib/db/client';
+import {
+  OPEN_STATUSES, STATUSES, reports, votes, attachments, comments, users,
+  KIND_LABELS, CATEGORY_LABELS, PLATFORM_LABELS,
+} from '../../lib/db/schema';
+import { avatarUrl, currentUser, dbUser } from '../../lib/auth';
+import { reporterMeta } from '../../lib/reporter';
+import { atLeast } from '../../lib/levels';
+import { isResponse, levelOf, logAction, requireStaff } from '../../lib/staff';
+import { announceFixed } from '../../lib/webhook';
+import { notifyWatchers, sendDiscordDm } from '../../lib/notify';
+import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } from '../../lib/format';
+
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id)) return Astro.rewrite('/404');
+
+/* Moderator actions. */
+if (Astro.request.method === 'POST') {
+  const gate = await requireStaff(Astro, 'mod');
+  if (isResponse(gate)) return gate;
+
+  const form = await Astro.request.formData();
+  const wanted = String(form.get('status') ?? '');
+
+  if ((STATUSES as readonly string[]).includes(wanted)) {
+    const status = wanted as (typeof STATUSES)[number];
+    const rawNote = String(form.get('note') ?? '').trim().slice(0, 500);
+    const statusNote = rawNote || null;
+    const detail = statusNote ? `${status}: ${statusNote}` : status;
+    const [updated] = await db()
+      .update(reports)
+      .set({ status, statusNote, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
+      .where(eq(reports.id, id))
+      .returning();
+    if (updated) {
+      await logAction(gate.user, 'report.status', String(id), detail);
+
+      const after: Promise<unknown>[] = [
+        notifyWatchers(id, 'status_changed', detail, gate.user.id),
+      ];
+
+      if (updated.reporterId && updated.reporterId !== gate.user.id) {
+        const dmMsg = statusNote
+          ? `Your ${updated.kind} report \"${updated.title}\" has been marked as **${statusLabel(status)}**: ${statusNote}`
+          : `Your ${updated.kind} report \"${updated.title}\" has been marked as **${statusLabel(status)}**.`;
+        after.push(sendDiscordDm(updated.reporterId, dmMsg));
+      }
+
+      if (status === 'fixed') after.push(announceFixed(updated, Astro.url.origin));
+
+      const cf = Astro.locals.cfContext;
+      if (cf) for (const task of after) cf.waitUntil(task);
+      else await Promise.all(after);
+    }
+    return Astro.redirect(`/report/${id}?saved=status`, 303);
+  }
+
+  /* Duplicate marking. */
+  const dupOf = String(form.get('duplicate_of') ?? '').trim();
+  if (dupOf) {
+    const dupId = Number(dupOf);
+    if (Number.isSafeInteger(dupId) && dupId > 0) {
+      const [updated] = await db()
+        .update(reports)
+        .set({ status: 'duplicate', duplicateOf: dupId, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
+        .where(eq(reports.id, id))
+        .returning();
+      if (updated) {
+        await logAction(gate.user, 'report.duplicate', String(id), `merged into ${dupId}`);
+        const detail = `duplicate: merged into #${dupId}`;
+        await notifyWatchers(id, 'duplicate', detail, gate.user.id);
+      }
+      return Astro.redirect(`/report/${id}?saved=duplicate`, 303);
+    }
+  }
+
+  return Astro.redirect(`/report/${id}`, 303);
+}
+
+const [report] = await db().select().from(reports).where(eq(reports.id, id));
+if (!report) return Astro.rewrite('/404');
+
+const [user, reporter, reportAttachments, reportComments] = await Promise.all([
+  currentUser(Astro),
+  dbUser(report.reporterId),
+  db()
+    .select()
+    .from(attachments)
+    .where(eq(attachments.reportId, id))
+    .orderBy(asc(attachments.sortOrder)),
+  db()
+    .select({
+      id: comments.id,
+      body: comments.body,
+      createdAt: comments.createdAt,
+      userId: comments.userId,
+      username: users.username,
+      avatarHash: users.avatarHash,
+    })
+    .from(comments)
+    .innerJoin(users, eq(comments.userId, users.discordId))
+    .where(eq(comments.reportId, id))
+    .orderBy(asc(comments.createdAt)),
+]);
+
+const canModerate = user ? atLeast(await levelOf(user.id), 'mod') : false;
+const mine = user
+  ? (
+      await db()
+        .select({ r: votes.reportId })
+        .from(votes)
+        .where(and(eq(votes.reportId, id), eq(votes.discordId, user.id)))
+    ).length > 0
+  : false;
+
+const joined = Astro.url.searchParams.has('joined');
+const filed = Astro.url.searchParams.has('filed');
+const saved = Astro.url.searchParams.get('saved');
+
+const isLive = (OPEN_STATUSES as readonly string[]).includes(report.status);
+
+let dupTarget = null;
+if (report.duplicateOf) {
+  const [target] = await db().select({ id: reports.id, title: reports.title }).from(reports).where(eq(reports.id, report.duplicateOf));
+  dupTarget = target ?? null;
+}
+
+Astro.response.headers.set(
+  'Cache-Control',
+  user ? 'private, no-store' : 'public, max-age=0, s-maxage=30, stale-while-revalidate=120',
+);
+---
+
+<Base title={`${report.title}`} narrow>
+  {
+    saved && (
+      <p class="flash" role="status">
+        {saved === 'duplicate'
+          ? dupTarget
+            ? `Marked as a duplicate of #${report.duplicateOf}: ${dupTarget.title}`
+            : 'Marked as a duplicate.'
+          : 'Status updated.'}
+      </p>
+    )
+  }
+  {
+    (joined || filed) && (
+      <p class="flash" role="status">
+        {joined
+          ? `Someone had already reported this. You've been added to it, so it now speaks for ${report.votes} people.`
+          : "Filed. You're the first to report this one."}
+      </p>
+    )
+  }
+
+  <article>
+    <header class="head">
+      <VoteButton reportId={report.id} votes={report.votes} mine={mine} closed={!isLive} />
+      <div>
+        <h1>{report.title}</h1>
+        <p class="meta-line">
+          <span class="tag">{kindLabel(report.kind)}</span>
+          <span class="tag">{categoryLabel(report.category)}</span>
+          <span class="tag">{platformLabel(report.platform)}</span>
+          {report.appVersion && <span class="ver">v{report.appVersion}</span>}
+          <span class="by"> · filed by </span>
+          <span class="filed-by">
+            {(() => {
+              const a = reporter ? avatarUrl({ id: reporter.discordId, avatarHash: reporter.avatarHash }, 20) : null;
+              return a ? (
+                <img class="avatar" src={a} alt="" width="20" height="20" />
+              ) : (
+                <span class="avatar avatar-blank" aria-hidden="true" />
+              );
+            })()}
+            <span>{reporterMeta(report.reporterId, reporter).display}</span>
+          </span>
+        </p>
+      </div>
+    </header>
+
+    <dl class="facts">
+      <div>
+        <dt class="label">Status</dt>
+        <dd class="status" data-status={report.status}>{statusLabel(report.status)}</dd>
+      </div>
+      {report.statusNote && (
+        <div class="wide"><dt class="label">Note</dt><dd>{report.statusNote}</dd></div>
+      )}
+      <div><dt class="label">Category</dt><dd>{categoryLabel(report.category)}</dd></div>
+      <div><dt class="label">Platform</dt><dd>{platformLabel(report.platform)}</dd></div>
+      {report.appVersion && (
+        <div><dt class="label">App version</dt><dd class="num">v{report.appVersion}</dd></div>
+      )}
+      <div><dt class="label">Reported</dt><dd>{relativeAge(report.createdAt)} ago</dd></div>
+      {report.duplicateOf && dupTarget && (
+        <div class="wide">
+          <dt class="label">Duplicate of</dt>
+          <dd><a href={`/report/${report.duplicateOf}`}>#{report.duplicateOf}: {dupTarget.title}</a></dd>
+        </div>
+      )}
+    </dl>
+
+    {report.body && <div class="body"><p>{report.body}</p></div>}
+
+    {report.stepsToReproduce && (
+      <div class="steps">
+        <h2>Steps to reproduce</h2>
+        <pre class="steps-pre">{report.stepsToReproduce}</pre>
+      </div>
+    )}
+
+    {/* ── Attachments gallery ──────────────────────────────────────────── */}
+    {reportAttachments.length > 0 && (
+      <section class="attachments-section">
+        <h2>Attachments ({reportAttachments.length})</h2>
+        <div class="gallery">
+          {reportAttachments.map((att) => (
+            <div class="gallery-item" data-type={att.fileType}>
+              {att.fileType === 'image' ? (
+                <a href={`/${att.filePath}`} target="_blank" rel="noopener">
+                  <img
+                    src={`/${att.filePath}`}
+                    alt={att.fileName}
+                    loading="lazy"
+                    class="gallery-img"
+                  />
+                </a>
+              ) : (
+                <video
+                  controls
+                  preload="metadata"
+                  class="gallery-video"
+                  poster={att.thumbnailPath ? `/${att.thumbnailPath}` : undefined}
+                >
+                  <source src={`/${att.filePath}`} type={att.mimeType} />
+                  Your browser does not support the video element.
+                </video>
+              )}
+              <span class="gallery-label">
+                {att.fileName} ({(att.fileSize / 1024).toFixed(0)} KB)
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+    )}
+
+    {/* ── Comments section ─────────────────────────────────────────────── */}
+    <section class="comments-section">
+      <h2>Comments ({reportComments.length})</h2>
+
+      <div class="comments-list" id="comments-list">
+        {reportComments.length === 0 && (
+          <p class="no-comments">No comments yet.</p>
+        )}
+        {reportComments.map((c) => {
+          const avatar = avatarUrl({ id: c.userId, avatarHash: c.avatarHash }, 24);
+          return (
+            <div class="comment">
+              <div class="comment-header">
+                <div class="comment-author">
+                  {avatar ? (
+                    <img class="avatar" src={avatar} alt="" width="24" height="24" />
+                  ) : (
+                    <span class="avatar avatar-blank" aria-hidden="true" />
+                  )}
+                  <span class="comment-username">{c.username}</span>
+                  <span class="comment-time">{relativeAge(c.createdAt)} ago</span>
+                </div>
+              </div>
+              <p class="comment-body">{c.body}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      {user && (
+        <form class="comment-form" method="POST" action="/comments">
+          <input type="hidden" name="reportId" value={report.id} />
+          <textarea
+            name="body"
+            class="textarea"
+            rows="3"
+            maxlength="2000"
+            placeholder="Add a comment..."
+            required
+          ></textarea>
+          <div class="comment-form-actions">
+            <span class="char-hint">Max 2000 characters</span>
+            <button class="btn" type="submit">Post comment</button>
+          </div>
+        </form>
+      )}
+    </section>
+
+    {/* ── Upload section (reporter + staff only) ───────────────────────── */}
+    {(user && (user.id === report.reporterId || canModerate)) && (
+      <section class="upload-section">
+        <h2>Upload attachment</h2>
+        <p class="upload-hint">
+          Images (JPG, PNG, WebP, GIF) up to 5 MB · max 5 per report. Videos (MP4, WebM) up to 50 MB · max 1 per report.
+        </p>
+        <form class="upload-form" id="upload-form">
+          <input type="hidden" name="reportId" value={report.id} />
+          <label class="upload-dropzone" for="file-input">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <span>Click to select a file or drag &amp; drop</span>
+          </label>
+          <input id="file-input" type="file" name="file" accept="image/*,video/mp4,video/webm" class="sr-only" />
+          <p class="upload-selected" id="upload-selected"></p>
+          <button class="btn" type="submit" id="upload-btn" disabled>Upload</button>
+        </form>
+      </section>
+    )}
+
+    {/* ── Moderator controls ──────────────────────────────────────────── */}
+    {
+      canModerate && (
+        <form method="POST" class="mod">
+          <p class="mod-label">Move this report</p>
+          <div class="field">
+            <label class="label" for="note">Reason</label>
+            <textarea id="note" name="note" class="textarea" rows="2" maxlength="500" placeholder="Optional — shown on the report and in notifications"></textarea>
+          </div>
+          <div class="mod-row">
+            {STATUSES.filter((st) => st !== report.status).map((st) => (
+              <button class="btn" type="submit" name="status" value={st}>
+                {statusLabel(st)}
+              </button>
+            ))}
+          </div>
+          <p class="mod-hint">Marking it fixed announces it to Discord if a webhook is set, once.</p>
+
+          {report.status !== 'duplicate' && (
+            <div class="mod-extra">
+              <p class="mod-label">Mark as duplicate</p>
+              <div class="mod-row">
+                <input class="input num" name="duplicate_of" type="number" inputmode="numeric" placeholder="Report #" min="1" />
+                <button class="btn" type="submit">Mark duplicate</button>
+              </div>
+              <p class="mod-hint">Enter the report id this is a duplicate of. The reporter and voters will be notified.</p>
+            </div>
+          )}
+        </form>
+      )
+    }
+  </article>
+</Base>
+
+<script>
+  // ── Client-side upload handling ─────────────────────────────────────
+  const form = document.getElementById('upload-form') as HTMLFormElement | null;
+  const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
+  const selected = document.getElementById('upload-selected');
+  const btn = document.getElementById('upload-btn') as HTMLButtonElement | null;
+
+  if (form && fileInput && btn) {
+    fileInput.addEventListener('change', () => {
+      const f = fileInput.files?.[0];
+      if (f) {
+        const size = f.size > 1024 * 1024
+          ? `${(f.size / (1024 * 1024)).toFixed(1)} MB`
+          : `${(f.size / 1024).toFixed(0)} KB`;
+        if (selected) selected.textContent = `${f.name} (${size})`;
+        btn.disabled = false;
+      } else {
+        if (selected) selected.textContent = '';
+        btn.disabled = true;
+      }
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      btn.disabled = true;
+      btn.textContent = 'Uploading…';
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('reportId', (form.querySelector('[name=reportId]') as HTMLInputElement).value);
+        const res = await fetch('/upload', { method: 'POST', body: fd });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: 'Upload failed' }));
+          alert(err.error || 'Upload failed');
+          return;
+        }
+        // Reload to show the new attachment.
+        window.location.reload();
+      } catch {
+        alert('Upload failed — network error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Upload';
+      }
+    });
+  }
+</script>
+
+<style>
+  .flash {
+    padding: var(--space-3);
+    margin-block-end: var(--space-6);
+    border: 1px solid var(--border-default);
+    border-inline-start: 2px solid var(--signal);
+    border-radius: var(--radius-md);
+    background: var(--signal-fill);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+  .head { display: flex; align-items: flex-start; gap: var(--space-4); }
+  h1 { font-size: var(--text-xl); letter-spacing: var(--track-tight); }
+  .meta-line {
+    margin-block-start: var(--space-1);
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .tag {
+    padding-inline: var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+  }
+  .ver { font-family: var(--font-data); color: var(--text-secondary); }
+  .by { color: var(--text-muted); }
+  .filed-by { display: inline-flex; align-items: center; gap: var(--space-1); vertical-align: middle; }
+  .filed-by .avatar, .filed-by .avatar-blank { inline-size: 20px; block-size: 20px; }
+
+  .facts {
+    display: flex;
+    gap: var(--space-6);
+    flex-wrap: wrap;
+    padding-block: var(--space-5);
+    margin-block: var(--space-5);
+    border-block: 1px solid var(--border-subtle);
+  }
+  .facts dd { margin-block-start: 2px; font-size: var(--text-sm); }
+  .facts .wide { flex-basis: 100%; }
+  .facts dd a { color: var(--signal-ink); text-decoration: underline; text-underline-offset: 2px; }
+
+  .body p { color: var(--text-secondary); white-space: pre-wrap; }
+  .steps { margin-block-start: var(--space-4); }
+  .steps h2, .attachments-section h2, .comments-section h2, .upload-section h2 {
+    font-size: var(--text-md);
+    margin-block-end: var(--space-3);
+  }
+  .steps-pre {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+  }
+
+  /* ── Attachments gallery ── */
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--space-3);
+  }
+  .gallery-item {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--surface-inset);
+  }
+  .gallery-img {
+    width: 100%;
+    height: 180px;
+    object-fit: cover;
+    display: block;
+  }
+  .gallery-video {
+    width: 100%;
+    max-height: 300px;
+    display: block;
+  }
+  .gallery-label {
+    display: block;
+    padding: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    border-top: 1px solid var(--border-subtle);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── Comments ── */
+  .comments-section, .upload-section {
+    margin-block-start: var(--space-8);
+    padding-block-start: var(--space-4);
+    border-block-start: 1px solid var(--border-subtle);
+  }
+  .comments-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .no-comments {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+  }
+  .comment {
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+  }
+  .comment-header { margin-block-end: var(--space-2); }
+  .comment-author {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .comment-author .avatar, .comment-author .avatar-blank { inline-size: 24px; block-size: 24px; }
+  .comment-username { font-weight: var(--weight-medium); font-size: var(--text-sm); }
+  .comment-time { color: var(--text-muted); font-size: var(--text-xs); }
+  .comment-body { color: var(--text-secondary); font-size: var(--text-sm); white-space: pre-wrap; margin: 0; }
+  .comment-form {
+    margin-block-start: var(--space-4);
+  }
+  .comment-form-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-block-start: var(--space-2);
+  }
+  .char-hint { font-size: var(--text-xs); color: var(--text-muted); }
+
+  /* ── Upload ── */
+  .upload-hint { font-size: var(--text-sm); color: var(--text-muted); margin-block-end: var(--space-3); }
+  .upload-form { display: flex; flex-direction: column; gap: var(--space-2); }
+  .upload-dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-8) var(--space-4);
+    border: 2px dashed var(--border-default);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    transition: border-color 0.15s;
+  }
+  .upload-dropzone:hover { border-color: var(--signal); }
+  .upload-selected { font-size: var(--text-sm); color: var(--text-secondary); }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+
+  /* ── Moderator controls ── */
+  .mod {
+    margin-block-start: var(--space-6);
+    padding: var(--space-3);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+  }
+  .mod-label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
+  .mod-row {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-block: var(--space-2);
+  }
+  .mod .field { margin-block: var(--space-2); }
+  .mod .textarea { min-block-size: 0; }
+  .mod-hint { font-size: var(--text-sm); color: var(--text-muted); }
+  .mod-extra {
+    margin-block-start: var(--space-4);
+    padding-block-start: var(--space-3);
+    border-block-start: 1px solid var(--border-subtle);
+  }
+</style>

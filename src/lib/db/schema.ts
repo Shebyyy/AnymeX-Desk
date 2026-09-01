@@ -1,0 +1,392 @@
+import { desc, sql } from 'drizzle-orm';
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
+
+/**
+ * AnymeX Bug & Suggestion Tracker
+ *
+ * Tracks bugs and feature suggestions for the AnymeX app.
+ * Users file reports with categories, platforms, media attachments.
+ * Voting determines priority. Discord DMs notify reporters of status changes.
+ */
+
+// ─── Report kinds ───────────────────────────────────────────────────────────
+
+export const KINDS = ['bug', 'suggestion'] as const;
+
+// ─── Bug categories ─────────────────────────────────────────────────────────
+
+export const BUG_CATEGORIES = [
+  'video_player',
+  'ui_ux',
+  'login_auth',
+  'manga_reader',
+  'extension_bridge',
+  'crash',
+  'performance',
+  'novel_reader',
+  'library',
+  'tracking',
+  'other',
+] as const;
+
+// ─── Suggestion categories ───────────────────────────────────────────────────
+
+export const SUGGESTION_CATEGORIES = [
+  'player',
+  'ui_ux',
+  'library',
+  'tracking',
+  'extensions',
+  'manga_reader',
+  'novel_reader',
+  'download',
+  'other',
+] as const;
+
+// ─── Platforms ──────────────────────────────────────────────────────────────
+
+export const PLATFORMS = ['android', 'ios', 'windows', 'macos', 'linux', 'all'] as const;
+
+// ─── Statuses ───────────────────────────────────────────────────────────────
+
+export const STATUSES = [
+  'open',
+  'confirmed',
+  'in_progress',
+  'fixed',
+  'wont_fix',
+  'duplicate',
+] as const;
+
+/** Statuses that still count as live demand — the dedupe window. */
+export const OPEN_STATUSES = ['open', 'confirmed', 'in_progress'] as const;
+
+/** Closed without a fix. */
+export const OTHER_STATUSES = ['wont_fix', 'duplicate'] as const;
+
+// ─── Staff tiers ────────────────────────────────────────────────────────────
+
+export const STAFF_LEVELS = ['mod', 'admin'] as const;
+export type StaffLevel = (typeof STAFF_LEVELS)[number];
+
+// ─── Display labels ─────────────────────────────────────────────────────────
+
+export const CATEGORY_LABELS: Record<string, string> = {
+  video_player: 'Video Player',
+  ui_ux: 'UI / UX',
+  login_auth: 'Login / Auth',
+  manga_reader: 'Manga Reader',
+  extension_bridge: 'Extension / Bridge',
+  crash: 'Crash',
+  performance: 'Performance',
+  novel_reader: 'Novel Reader',
+  library: 'Library',
+  tracking: 'Tracking',
+  player: 'Player',
+  extensions: 'Extensions',
+  download: 'Download',
+  other: 'Other',
+};
+
+export const PLATFORM_LABELS: Record<string, string> = {
+  android: 'Android',
+  ios: 'iOS',
+  windows: 'Windows',
+  macos: 'macOS',
+  linux: 'Linux',
+  all: 'All Platforms',
+};
+
+export const STATUS_LABELS: Record<string, string> = {
+  open: 'Open',
+  confirmed: 'Confirmed',
+  in_progress: 'In Progress',
+  fixed: 'Fixed',
+  wont_fix: "Won't Fix",
+  duplicate: 'Duplicate',
+};
+
+export const KIND_LABELS: Record<string, string> = {
+  bug: 'Bug',
+  suggestion: 'Suggestion',
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tables
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const users = sqliteTable('users', {
+  discordId: text('discord_id').primaryKey(),
+  username: text('username').notNull(),
+  avatarHash: text('avatar_hash'),
+  /** Decoded from the Discord snowflake — no extra OAuth scope needed. */
+  accountCreatedAt: integer('account_created_at').notNull(),
+  guildJoinedAt: integer('guild_joined_at'),
+  discordLevel: text('discord_level', { enum: STAFF_LEVELS }),
+  manualLevel: text('manual_level', { enum: STAFF_LEVELS }),
+  banned: integer('banned', { mode: 'boolean' }).notNull().default(false),
+  firstSeen: integer('first_seen').notNull().default(sql`(unixepoch())`),
+  lastLogin: integer('last_login').notNull().default(sql`(unixepoch())`),
+});
+
+export const reports = sqliteTable(
+  'reports',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    kind: text('kind', { enum: KINDS }).notNull(),
+
+    /** Which area of the app this report targets. */
+    category: text('category').notNull(),
+
+    /** Which platform(s) the bug occurs on. */
+    platform: text('platform', { enum: PLATFORMS }).notNull(),
+
+    /** The AnymeX app version, e.g. "3.1.7+39". */
+    appVersion: text('app_version'),
+
+    title: text('title').notNull(),
+    body: text('body'),
+
+    /** For bugs: steps to reproduce the issue. */
+    stepsToReproduce: text('steps_to_reproduce'),
+
+    status: text('status', { enum: STATUSES }).notNull().default('open'),
+    reporterId: text('reporter_id')
+      .notNull()
+      .references(() => users.discordId),
+
+    duplicateOf: integer('duplicate_of'),
+
+    /**
+     * Denormalised counter, moved only by lib/vote.ts in the same D1 batch
+     * as the vote row. Never recomputed.
+     */
+    votes: integer('votes').notNull().default(0),
+
+    /** How many attachments this report has (denormalised for board display). */
+    attachmentCount: integer('attachment_count').notNull().default(0),
+    /** How many comments this report has (denormalised for board display). */
+    commentCount: integer('comment_count').notNull().default(0),
+
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+    statusChangedAt: integer('status_changed_at'),
+
+    /** When this report was announced to Discord as high-demand. */
+    announcedAt: integer('announced_at'),
+
+    statusNote: text('status_note'),
+  },
+  (t) => [
+    /**
+     * Dedup: one open report per kind + category + platform + normalized title.
+     * The title_hash is a lowercased, trimmed version stored at insert time.
+     */
+    uniqueIndex('reports_dedup')
+      .on(t.kind, t.category, t.platform, t.title)
+      .where(sql`status IN ('open', 'confirmed', 'in_progress')`),
+
+    /** Board query index: matches the board's filter + sort order. */
+    index('reports_board').on(t.status, t.kind, desc(t.votes), t.createdAt, t.category),
+
+    /** Partial index for the default open board view — avoids temp B-tree sort. */
+    index('reports_board_open')
+      .on(desc(t.votes), t.createdAt, t.kind, t.category)
+      .where(sql`status IN ('open', 'confirmed', 'in_progress')`),
+
+    /** Covers the header tallies without touching the table. */
+    index('reports_tallies').on(t.status, t.kind, t.createdAt),
+
+    index('reports_by_reporter').on(t.reporterId),
+    index('reports_by_category').on(t.category),
+    index('reports_by_platform').on(t.platform),
+    index('reports_by_age').on(t.status, t.createdAt),
+  ],
+);
+
+export const votes = sqliteTable(
+  'votes',
+  {
+    reportId: integer('report_id')
+      .notNull()
+      .references(() => reports.id, { onDelete: 'cascade' }),
+    discordId: text('discord_id')
+      .notNull()
+      .references(() => users.discordId, { onDelete: 'cascade' }),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => [
+    primaryKey({ columns: [t.reportId, t.discordId] }),
+    index('votes_by_user').on(t.discordId),
+  ],
+);
+
+/**
+ * File attachments for reports — screenshots and screen recordings.
+ *
+ * Files are stored on disk (or R2 in production). This table tracks metadata.
+ */
+export const attachments = sqliteTable(
+  'attachments',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    reportId: integer('report_id')
+      .notNull()
+      .references(() => reports.id, { onDelete: 'cascade' }),
+    /** Original filename as uploaded by the user. */
+    fileName: text('file_name').notNull(),
+    /** Path on disk / R2 key. */
+    filePath: text('file_path').notNull(),
+    /** image or video. */
+    fileType: text('file_type', { enum: ['image', 'video'] }).notNull(),
+    /** MIME type: image/png, video/mp4, etc. */
+    mimeType: text('mime_type').notNull(),
+    /** File size in bytes. */
+    fileSize: integer('file_size').notNull(),
+    /** Image width in pixels (null for videos). */
+    width: integer('width'),
+    /** Image height in pixels (null for videos). */
+    height: integer('height'),
+    /** Thumbnail path for videos. */
+    thumbnailPath: text('thumbnail_path'),
+    /** Display order within the report. */
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => [
+    index('attachments_by_report').on(t.reportId, t.sortOrder),
+  ],
+);
+
+/**
+ * Comments on reports — for discussion between users and staff.
+ */
+export const comments = sqliteTable(
+  'comments',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    reportId: integer('report_id')
+      .notNull()
+      .references(() => reports.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.discordId, { onDelete: 'cascade' }),
+    body: text('body').notNull(),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => [
+    index('comments_by_report').on(t.reportId, t.createdAt),
+    index('comments_by_user').on(t.userId),
+  ],
+);
+
+/**
+ * In-app notifications for status changes on reports the user is involved in.
+ */
+export const notifications = sqliteTable(
+  'notifications',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.discordId, { onDelete: 'cascade' }),
+    reportId: integer('report_id')
+      .notNull()
+      .references(() => reports.id, { onDelete: 'cascade' }),
+    kind: text('kind', {
+      enum: ['status_changed', 'comment', 'duplicate', 'mentioned'],
+    }).notNull(),
+    detail: text('detail'),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    readAt: integer('read_at'),
+  },
+  (t) => [index('notifications_unread').on(t.userId, t.readAt)],
+);
+
+/**
+ * Runtime configuration, editable from /admin.
+ * Key/value rather than one wide row — settings grow into a ragged set.
+ * Every read falls back to an environment default.
+ */
+export const settings = sqliteTable('settings', {
+  key: text('key').primaryKey(),
+  value: text('value'),
+  updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+  updatedBy: text('updated_by'),
+});
+
+/**
+ * Audit log for all staff actions — who did what, when.
+ */
+export const audit = sqliteTable(
+  'audit',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    actorId: text('actor_id').notNull(),
+    actorName: text('actor_name').notNull(),
+    action: text('action').notNull(),
+    target: text('target'),
+    detail: text('detail'),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => [index('audit_recent').on(t.createdAt)],
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Types
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type User = typeof users.$inferSelect;
+export type Report = typeof reports.$inferSelect;
+export type NewReport = typeof reports.$inferInsert;
+export type Vote = typeof votes.$inferSelect;
+export type Attachment = typeof attachments.$inferSelect;
+export type Comment = typeof comments.$inferSelect;
+export type Notification = typeof notifications.$inferSelect;
+export type Setting = typeof settings.$inferSelect;
+export type AuditEntry = typeof audit.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Normalize a title for dedup comparison. */
+export function normalizeTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[!?.,;:'"]+/g, '')
+    .substring(0, 200);
+}
+
+/** Valid image MIME types. */
+export const IMAGE_MIMES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+]);
+
+/** Valid video MIME types. */
+export const VIDEO_MIMES = new Set([
+  'video/mp4',
+  'video/webm',
+]);
+
+/** Max image size: 5MB. */
+export const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+/** Max video size: 50MB. */
+export const MAX_VIDEO_SIZE = 50 * 1024 * 1024;
+/** Max images per report. */
+export const MAX_IMAGES = 5;
+/** Max videos per report. */
+export const MAX_VIDEOS = 1;

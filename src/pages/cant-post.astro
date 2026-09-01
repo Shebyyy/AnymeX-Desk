@@ -1,0 +1,46 @@
+---
+import Base from '../layouts/Base.astro';
+import { currentUser } from '../lib/auth';
+import { writeBlockReason, type WriteBlock } from '../lib/auth';
+
+export const prerender = false;
+
+const user = await currentUser(Astro);
+if (!user) {
+  return Astro.redirect('/auth/discord?next=/cant-post', 302);
+}
+
+const reason = await writeBlockReason(user);
+
+const EXPLANATIONS: Record<NonNullable<WriteBlock>, { title: string; body: string }> = {
+  banned: {
+    title: 'You cannot post or vote',
+    body: 'Your account has been blocked by a moderator. This applies to filing reports and voting on existing ones.',
+  },
+  age: {
+    title: 'Your account is too new',
+    body: 'To keep vote counts meaningful, accounts below a minimum age cannot post or vote. Wait a few days and try again.',
+  },
+};
+
+const expl = reason ? EXPLANATIONS[reason] : null;
+---
+
+<Base title={expl?.title ?? 'Cannot post'} narrow>
+  <h1>{expl?.title ?? 'Something went wrong'}</h1>
+  <p>{expl?.body ?? 'An unexpected error occurred.'}</p>
+  <p class="actions">
+    <a class="btn" href="/">Go to the board</a>
+  </p>
+</Base>
+
+<style>
+  h1 { font-size: var(--text-xl); margin-block-end: var(--space-3); }
+  p { color: var(--text-secondary); }
+  .actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-block-start: var(--space-6);
+  }
+</style>

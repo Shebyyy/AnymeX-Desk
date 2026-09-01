@@ -1,0 +1,366 @@
+---
+import Base from '../layouts/Base.astro';
+import {
+  KINDS,
+  KIND_LABELS,
+  BUG_CATEGORIES,
+  SUGGESTION_CATEGORIES,
+  CATEGORY_LABELS,
+  PLATFORMS,
+  PLATFORM_LABELS,
+  normalizeTitle,
+  reports,
+  OPEN_STATUSES,
+} from '../lib/db/schema';
+import { canWriteNow, currentUser } from '../lib/auth';
+import { ensureVote } from '../lib/vote';
+import { FILING_COOLDOWN_MESSAGE, overFilingLimit, findDuplicate } from '../lib/writes';
+import { announceFiled } from '../lib/webhook';
+import { db } from '../lib/db/client';
+import { sql } from 'drizzle-orm';
+
+export const prerender = false;
+
+const user = await currentUser(Astro);
+
+let error: string | null = null;
+let resumed = false;
+let dedupHit: { id: number; title: string; votes: number } | null = null;
+
+type Draft = {
+  kind: string;
+  category: string;
+  platform: string;
+  appVersion: string;
+  title: string;
+  body: string;
+  stepsToReproduce: string;
+};
+
+let posted: Draft | null = null;
+
+/* ---------------------------------------------------------------------------
+   POST. Filing a bug report or feature suggestion for AnymeX.
+   ------------------------------------------------------------------------ */
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const kind = String(form.get('kind') ?? 'bug').trim();
+  const category = String(form.get('category') ?? '').trim();
+  const platform = String(form.get('platform') ?? '').trim();
+  const appVersion = String(form.get('appVersion') ?? '').trim().slice(0, 32);
+  const title = String(form.get('title') ?? '').trim().slice(0, 200);
+  const body = String(form.get('body') ?? '').trim().slice(0, 5000);
+  const stepsToReproduce = String(form.get('stepsToReproduce') ?? '').trim().slice(0, 5000);
+
+  const submitted: Draft = { kind, category, platform, appVersion, title, body, stepsToReproduce };
+
+  if (!user) {
+    Astro.session?.set('pending_report', submitted);
+    return Astro.redirect('/auth/discord?next=/new', 302);
+  }
+  if (!(await canWriteNow(user))) return Astro.redirect('/cant-post', 302);
+
+  posted = submitted;
+
+  const validKinds = KINDS as readonly string[];
+  const validCats = kind === 'suggestion' ? SUGGESTION_CATEGORIES as readonly string[] : BUG_CATEGORIES as readonly string[];
+  const validPlatforms = PLATFORMS as readonly string[];
+
+  if (!validKinds.includes(kind)) {
+    error = 'Pick a type: bug or suggestion.';
+  } else if (!validCats.includes(category)) {
+    error = 'Pick a category.';
+  } else if (!validPlatforms.includes(platform)) {
+    error = 'Pick a platform.';
+  } else if (!title || title.length < 5) {
+    error = 'Give your report a title, at least 5 characters.';
+  } else if (await overFilingLimit(user.id)) {
+    error = FILING_COOLDOWN_MESSAGE;
+  } else {
+    // Check dedup.
+    const dup = await findDuplicate(kind, category, platform, normalizeTitle(title));
+    if (dup) {
+      await ensureVote(dup.id, user.id);
+      return Astro.redirect(`/report/${dup.id}?joined=1`, 303);
+    }
+
+    const [created] = await db()
+      .insert(reports)
+      .values({
+        kind,
+        category,
+        platform,
+        appVersion: appVersion || null,
+        title: normalizeTitle(title),
+        body: body || null,
+        stepsToReproduce: kind === 'bug' ? (stepsToReproduce || null) : null,
+        reporterId: user.id,
+      })
+      .returning({
+        id: reports.id,
+        kind: reports.kind,
+        title: reports.title,
+        body: reports.body,
+        category: reports.category,
+        platform: reports.platform,
+        appVersion: reports.appVersion,
+        reporterId: reports.reporterId,
+      });
+
+    if (created) {
+      await ensureVote(created.id, user.id);
+      const after: Promise<unknown>[] = [announceFiled(created, Astro.url.origin)];
+      const cf = Astro.locals.cfContext;
+      if (cf) for (const task of after) cf.waitUntil(task);
+      else await Promise.all(after);
+      return Astro.redirect(`/report/${created.id}?filed=1`, 303);
+    }
+  }
+}
+
+/* --- GET ---------------------------------------------------------------- */
+const draft = (await Astro.session?.get('pending_report')) as Draft | undefined;
+if (draft) {
+  Astro.session?.delete('pending_report');
+  resumed = true;
+}
+
+const queryKind = Astro.url.searchParams.get('kind') ?? '';
+
+const shown = {
+  kind: posted?.kind || draft?.kind || queryKind || 'bug',
+  category: posted?.category || draft?.category || '',
+  platform: posted?.platform || draft?.platform || '',
+  appVersion: posted?.appVersion || draft?.appVersion || '',
+  title: posted?.title || draft?.title || '',
+  body: posted?.body || draft?.body || '',
+  stepsToReproduce: posted?.stepsToReproduce || draft?.stepsToReproduce || '',
+};
+
+const activeKind = shown.kind as 'bug' | 'suggestion';
+const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CATEGORIES;
+---
+
+<Base title="File a report" narrow>
+  <h1>File a report</h1>
+  <p class="lede">Tell us about a bug or suggest a feature for AnymeX.</p>
+
+  {
+    !user && (
+      <p class="note">
+        You'll be asked to sign in with Discord when you submit. Your draft is kept.
+      </p>
+    )
+  }
+
+  <form method="POST" class="flow">
+    {
+      resumed && !error && (
+        <p class="note" role="status">
+          Welcome back. Your draft is still here. Review it and tap Submit to send it.
+        </p>
+      )
+    }
+
+    {error && <p class="error" role="alert">{error}</p>}
+
+    {/* Step 1: Kind */}
+    <section class="step">
+      <h2 class="step-h"><span class="step-n">1</span> Type</h2>
+      <div class="segmented">
+        {KINDS.map((k) => (
+          <label class:active={shown.kind === k}>
+            <input class="sr-only" type="radio" name="kind" value={k} checked={shown.kind === k} required />
+            <span>{KIND_LABELS[k]}</span>
+          </label>
+        ))}
+      </div>
+    </section>
+
+    {/* Step 2: Category */}
+    <section class="step">
+      <h2 class="step-h"><span class="step-n">2</span> Category</h2>
+      <div class="segmented cats">
+        {categories.map((c) => (
+          <label class:active={shown.category === c}>
+            <input class="sr-only" type="radio" name="category" value={c} checked={shown.category === c} required />
+            <span>{CATEGORY_LABELS[c] ?? c}</span>
+          </label>
+        ))}
+      </div>
+    </section>
+
+    {/* Step 3: Platform */}
+    <section class="step">
+      <h2 class="step-h"><span class="step-n">3</span> Platform</h2>
+      <div class="segmented plats">
+        {PLATFORMS.map((p) => (
+          <label class:active={shown.platform === p}>
+            <input class="sr-only" type="radio" name="platform" value={p} checked={shown.platform === p} required />
+            <span>{PLATFORM_LABELS[p]}</span>
+          </label>
+        ))}
+      </div>
+    </section>
+
+    {/* Step 4: Details */}
+    <section class="step">
+      <h2 class="step-h"><span class="step-n">4</span> Details</h2>
+      <div class="field">
+        <label class="label" for="title">Title</label>
+        <input
+          class="input"
+          id="title"
+          name="title"
+          type="text"
+          maxlength="200"
+          required
+          minlength="5"
+          value={shown.title}
+          placeholder="Briefly describe the issue or suggestion"
+        />
+      </div>
+      <div class="field">
+        <label class="label" for="appVersion">App version</label>
+        <input
+          class="input"
+          id="appVersion"
+          name="appVersion"
+          type="text"
+          maxlength="32"
+          inputmode="numeric"
+          value={shown.appVersion}
+          placeholder="e.g. 3.1.7+39"
+        />
+        <p class="field-hint">Found in AnymeX → Settings → About. Optional but very helpful.</p>
+      </div>
+      <div class="field">
+        <label class="label" for="body">Description</label>
+        <textarea
+          class="textarea"
+          id="body"
+          name="body"
+          rows="4"
+          maxlength="5000"
+          placeholder="What happened? What did you expect to happen?"
+        >{shown.body}</textarea>
+      </div>
+      {shown.kind === 'bug' && (
+        <div class="field">
+          <label class="label" for="stepsToReproduce">Steps to reproduce</label>
+          <textarea
+            class="textarea"
+            id="stepsToReproduce"
+            name="stepsToReproduce"
+            rows="3"
+            maxlength="5000"
+            placeholder="1. Open the app&#10;2. Go to...&#10;3. Tap on..."
+          >{shown.stepsToReproduce}</textarea>
+          <p class="field-hint">Optional, but the most useful thing you can include for a bug.</p>
+        </div>
+      )}
+    </section>
+
+    <div class="submit-row">
+      <button class="btn btn-primary btn-lg" type="submit">Submit report</button>
+    </div>
+  </form>
+
+  <p class="foot-note">
+    Already reported by someone else? Submitting adds you to their report instead
+    of making a duplicate.
+  </p>
+</Base>
+
+<style>
+  h1 { font-size: var(--text-xl); }
+  .lede { color: var(--text-tertiary); margin-block: var(--space-1) var(--space-6); }
+  .note {
+    margin-block-end: var(--space-6);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-default);
+    border-inline-start: 2px solid var(--signal);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+  .error {
+    padding: var(--space-3);
+    border: 1px solid var(--dead);
+    border-inline-start-width: 2px;
+    border-radius: var(--radius-md);
+    background: var(--dead-fill);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+
+  .flow { display: flex; flex-direction: column; gap: var(--space-8); }
+  .flow > .note, .flow > .error { margin-block-end: 0; }
+  .flow :global(.step-h) {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-md);
+    margin-block-end: var(--space-3);
+  }
+  .flow :global(.step-n) {
+    display: grid;
+    place-items: center;
+    inline-size: 20px;
+    block-size: 20px;
+    border-radius: var(--radius-full);
+    background: var(--surface-active);
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+  }
+
+  .segmented {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    flex-wrap: wrap;
+  }
+  .segmented label {
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: color var(--dur-fast) var(--ease-standard),
+      background var(--dur-fast) var(--ease-standard);
+  }
+  .segmented label:hover { color: var(--text-secondary); background: var(--surface-hover); }
+  .segmented label.active { color: var(--text-primary); background: var(--surface-active); }
+  .cats, .plats {
+    gap: 4px;
+  }
+  .cats label, .plats label {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-normal);
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .submit-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-block-start: var(--space-4);
+    align-items: start;
+  }
+
+  .foot-note {
+    margin-block-start: var(--space-8);
+    padding-block-start: var(--space-4);
+    border-block-start: 1px solid var(--border-subtle);
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+
+  @media (max-width: 640px) {
+    .cats, .plats { display: grid; grid-template-columns: 1fr 1fr; }
+  }
+</style>

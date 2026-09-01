@@ -1,0 +1,299 @@
+---
+import Base from '../layouts/Base.astro';
+import FilterBar from '../components/FilterBar.astro';
+import ReportRow from '../components/ReportRow.astro';
+import { currentUser } from '../lib/auth';
+import { BOARD_VIEW_COPY, type BoardKind } from '../lib/format';
+import {
+  board,
+  boardCounts,
+  myVotes,
+  PAGE_SIZE,
+  parseBoardState,
+  type Sort,
+} from '../lib/queries';
+import { KINDS, KIND_LABELS } from '../lib/db/schema';
+
+export const prerender = false;
+
+const q = Astro.url.searchParams;
+const rawKind = q.get('kind') ?? 'bug';
+const kind = (KINDS as readonly string[]).includes(rawKind) ? (rawKind as BoardKind) : 'bug';
+const category = q.get('category') ?? '';
+const platform = q.get('platform') ?? '';
+const state = parseBoardState(q.get('state'));
+const view = BOARD_VIEW_COPY[kind][state];
+const sort = (q.get('sort') ?? view.defaultSort) as Sort;
+const authFailed = q.get('auth') === 'failed';
+const _retryParams = new URLSearchParams(q);
+_retryParams.delete('auth');
+_retryParams.delete('__fresh');
+_retryParams.delete('_cb');
+const _retryNext = Astro.url.pathname + (_retryParams.toString() ? `?${_retryParams.toString()}` : '');
+const retryHref = `/auth/discord?next=${encodeURIComponent(_retryNext)}`;
+
+const from = Math.max(1, Number.parseInt(q.get('from') ?? '', 10) || 1);
+
+const user = await currentUser(Astro);
+
+const cacheable = !user && !authFailed;
+
+const [{ rows, total, offset }, counts] = await Promise.all([
+  board({ kind, state, category, platform, sort, offset: from - 1 }),
+  boardCounts(),
+]);
+
+function pageHref(startRow: number, overrideKind?: BoardKind) {
+  const u = new URL(Astro.url);
+  if (overrideKind) {
+    u.searchParams.set('kind', overrideKind);
+  }
+  if (startRow <= 1) u.searchParams.delete('from');
+  else u.searchParams.set('from', String(startRow));
+  // Reset filters when switching kind tabs.
+  if (overrideKind && overrideKind !== kind) {
+    u.searchParams.delete('category');
+    u.searchParams.delete('platform');
+    u.searchParams.delete('state');
+    u.searchParams.delete('sort');
+    u.searchParams.delete('from');
+  }
+  return u.pathname + u.search;
+}
+
+if (rows.length === 0 && offset > 0) return Astro.redirect(pageHref(1), 302);
+
+const mine = user ? await myVotes(user.id, rows.map((r) => r.id)) : new Set<number>();
+
+const shownFrom = offset + 1;
+const shownTo = offset + rows.length;
+const nextCount = Math.min(PAGE_SIZE, total - shownTo);
+
+// Counters for the header, chosen based on current kind.
+const countsForKind = kind === 'bug'
+  ? { open: counts.bugs, fixed: counts.bugsFixed, other: counts.bugsOther, stalled: counts.bugsStalled }
+  : { open: counts.suggestions, fixed: counts.suggestionsFixed, other: counts.suggestionsOther, stalled: counts.suggestionsStalled };
+
+Astro.response.headers.set(
+  'Cache-Control',
+  cacheable
+    ? 'public, max-age=0, s-maxage=60, stale-while-revalidate=300'
+    : 'private, no-store',
+);
+---
+
+<Base title={view.heading}>
+  <header class="head">
+    <div class="head-text">
+      <h1>{view.heading}</h1>
+      <p class="sub">{view.lede}</p>
+    </div>
+    <dl class="tallies">
+      <div><dt class="label">Open</dt><dd class="num">{countsForKind.open}</dd></div>
+      <div>
+        <dt class="label">Fixed</dt>
+        <dd class="num">{countsForKind.fixed}</dd>
+      </div>
+      <div>
+        <dt class="label">Stalled 90d+</dt>
+        <dd class="num rotting">{countsForKind.stalled}</dd>
+      </div>
+    </dl>
+  </header>
+
+  {
+    authFailed && (
+      <p class="error" role="alert">
+        Signing in with Discord didn't complete, so you're still signed out.
+        Nothing was lost. <a href={retryHref}>Try again</a>.
+      </p>
+    )
+  }
+
+  {/* Kind tabs: Bugs / Suggestions */}
+  <div class="kind-tabs" role="tablist">
+    {KINDS.map((k) => (
+      <a
+        class:list={['kind-tab', { active: kind === k }]}
+        href={pageHref(1, k as BoardKind)}
+        role="tab"
+        aria-selected={kind === k}>
+        {KIND_LABELS[k]}
+        <span class="kind-count">
+          {k === 'bug'
+            ? counts.bugs + counts.bugsFixed + counts.bugsOther
+            : counts.suggestions + counts.suggestionsFixed + counts.suggestionsOther}
+        </span>
+      </a>
+    ))}
+    <a class="btn btn-primary" href="/new">
+      New report
+    </a>
+  </div>
+
+  <FilterBar
+    kind={kind}
+    state={state}
+    openCount={countsForKind.open}
+    fixedCount={countsForKind.fixed}
+    otherCount={countsForKind.other}
+    category={category}
+    platform={platform}
+    sort={sort}
+  />
+
+  {
+    rows.length === 0 ? (
+      <div class="empty">
+        <p class="empty-title">{view.emptyTitle}</p>
+        <p>{category || platform ? view.emptyFiltered : view.emptyAlone}</p>
+        <a class:list={['btn', { 'btn-primary': view.cta.primary }]} href={view.cta.href}>
+          {view.cta.label}
+        </a>
+      </div>
+    ) : (
+      <ol class="rows">
+        {rows.map((r) => (
+          <ReportRow report={r} mine={mine.has(r.id)} />
+        ))}
+      </ol>
+    )
+  }
+
+  {
+    (shownTo < total || offset > 0) && (
+      <nav class="pager" aria-label="More reports">
+        <p class="pager-count">
+          Showing {shownFrom}–{shownTo} of {total} {view.pagerNoun}
+        </p>
+        <div class="pager-links">
+          {offset > 0 && (
+            <a class="btn" rel="prev" href={pageHref(Math.max(1, offset + 1 - PAGE_SIZE))}>
+              Previous {Math.min(PAGE_SIZE, offset)}
+            </a>
+          )}
+          {nextCount > 0 && (
+            <a class="btn" rel="next" href={pageHref(shownTo + 1)}>
+              Next {nextCount}
+            </a>
+          )}
+        </div>
+      </nav>
+    )
+  }
+</Base>
+
+<style>
+  .head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-8);
+    flex-wrap: wrap;
+    padding-block-end: var(--space-4);
+    border-block-end: 1px solid var(--border-subtle);
+  }
+  h1 {
+    font-size: var(--text-xl);
+    letter-spacing: var(--track-tight);
+  }
+  .sub {
+    max-inline-size: 52ch;
+    margin-block-start: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+  }
+  .tallies {
+    display: flex;
+    gap: var(--space-6);
+  }
+  .tallies dd {
+    font-family: var(--font-data);
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-semi);
+    line-height: var(--leading-none);
+    letter-spacing: var(--track-tighter);
+    margin-block-start: var(--space-1);
+  }
+  .rotting {
+    color: var(--stalled);
+  }
+
+  @media (max-width: 640px) {
+    .sub { display: none; }
+    .tallies { gap: var(--space-5); }
+    .tallies dd { font-size: var(--text-xl); }
+    .head { padding-block-end: var(--space-3); }
+  }
+
+  .error {
+    margin-block-start: var(--space-4);
+    padding: var(--space-3);
+    border: 1px solid var(--dead);
+    border-inline-start-width: 2px;
+    border-radius: var(--radius-md);
+    background: var(--dead-fill);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+  .error a {
+    color: var(--signal-ink);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .kind-tabs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding-block: var(--space-4) var(--space-2);
+  }
+  .kind-tab {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-tertiary);
+    transition: color var(--dur-fast) var(--ease-standard),
+      background var(--dur-fast) var(--ease-standard);
+  }
+  .kind-tab:hover {
+    color: var(--text-secondary);
+    background: var(--surface-hover);
+  }
+  .kind-tab.active {
+    color: var(--text-primary);
+    background: var(--surface-active);
+  }
+  .kind-count {
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+  .kind-tabs .btn { margin-inline-start: auto; }
+
+  .pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    padding-block-start: var(--space-5);
+  }
+  .pager-count {
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+  .pager-links {
+    display: flex;
+    gap: var(--space-2);
+  }
+  @media (max-width: 640px) {
+    .pager { flex-direction: column; align-items: stretch; }
+    .pager-links .btn { flex: 1; }
+  }
+</style>

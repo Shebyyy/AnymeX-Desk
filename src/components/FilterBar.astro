@@ -1,0 +1,198 @@
+---
+import {
+  BUG_CATEGORIES,
+  SUGGESTION_CATEGORIES,
+  PLATFORMS,
+  CATEGORY_LABELS,
+  PLATFORM_LABELS,
+} from '../lib/db/schema';
+import { BOARD_VIEW_COPY, type BoardKind } from '../lib/format';
+import type { BoardState } from '../lib/queries';
+
+interface Props {
+  kind: BoardKind;
+  category?: string;
+  platform?: string;
+  sort: string;
+  state?: BoardState;
+  openCount: number;
+  fixedCount: number;
+  otherCount: number;
+}
+
+const {
+  kind,
+  category = '',
+  platform = '',
+  sort,
+  state = 'open',
+  openCount,
+  fixedCount,
+  otherCount,
+} = Astro.props;
+const views = BOARD_VIEW_COPY[kind];
+
+const categories = kind === 'bug' ? BUG_CATEGORIES : SUGGESTION_CATEGORIES;
+
+const sorts =
+  state === 'open'
+    ? [
+        { key: 'demand', label: 'Most wanted' },
+        { key: 'stalled', label: 'Longest waiting' },
+        { key: 'recent', label: 'Newest' },
+      ]
+    : [
+        { key: 'demand', label: 'Most wanted' },
+        { key: 'fixed', label: state === 'other' ? 'Recently closed' : 'Recently fixed' },
+      ];
+
+const activeSort =
+  state === 'open'
+    ? sort === 'fixed'
+      ? 'demand'
+      : sort || 'demand'
+    : sort === 'demand'
+      ? 'demand'
+      : 'fixed';
+
+const states = (['open', 'fixed', 'other'] as const).map((key) => ({
+  key,
+  label: views[key].chip,
+  count: key === 'open' ? openCount : key === 'fixed' ? fixedCount : otherCount,
+}));
+---
+
+<form class="filters" method="get" role="search">
+  <div class="line primary">
+    <div class="segmented states" role="group" aria-label="Open, fixed or other">
+      {
+        states.map((v) => (
+          <button
+            class="chip"
+            type="submit"
+            name="state"
+            value={v.key}
+            aria-pressed={state === v.key}>
+            {v.label} ({v.count})
+          </button>
+        ))
+      }
+    </div>
+
+    <label class="sr-only" for="platform">Platform</label>
+    <select class="select compact" id="platform" name="platform" onchange="this.form.requestSubmit()">
+      <option value="">All platforms</option>
+      {
+        PLATFORMS.map((p) => (
+          <option value={p} selected={p === platform}>
+            {PLATFORM_LABELS[p]} ({p})
+          </option>
+        ))
+      }
+    </select>
+
+    <div class="segmented sorts" role="group" aria-label="Sort order">
+      {
+        sorts.map((s) => (
+          <button
+            class="chip"
+            type="submit"
+            name="sort"
+            value={s.key}
+            aria-pressed={activeSort === s.key}>
+            {s.label}
+          </button>
+        ))
+      }
+    </div>
+  </div>
+
+  <div class="line categories">
+    <span class="label">Category</span>
+    <button class="chip" type="submit" name="category" value="" aria-pressed={!category}>
+      Any
+    </button>
+    {categories.map((c) => (
+      <button class="chip" type="submit" name="category" value={c} aria-pressed={category === c}>
+        {CATEGORY_LABELS[c] ?? c}
+      </button>
+    ))}
+  </div>
+
+  {sort && <input type="hidden" name="sort" value={sort} />}
+  <input type="hidden" name="state" value={state} />
+  {platform && <input type="hidden" name="platform" value={platform} />}
+  {category && <input type="hidden" name="category" value={category} />}
+</form>
+
+<style>
+  .filters {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-block: var(--space-3);
+  }
+  .line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .primary .states { order: 0; flex-basis: auto; }
+  .primary #platform { order: 3; flex-basis: 100%; }
+  .primary .sorts { order: 4; flex-basis: 100%; }
+  @media (min-width: 641px) {
+    .primary .states { order: 0; }
+    .primary #platform { order: 1; flex-basis: auto; margin-inline-start: var(--space-2); }
+    .primary .sorts { order: 2; flex-basis: auto; margin-inline-start: var(--space-2); }
+  }
+  .select.compact {
+    inline-size: auto;
+    min-inline-size: 11rem;
+    max-inline-size: 100%;
+    block-size: 26px;
+    font-size: var(--text-sm);
+    padding-inline: var(--space-2);
+  }
+  @media (pointer: coarse) {
+    .select.compact { block-size: 36px; }
+  }
+  .segmented {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
+  .segmented .chip { white-space: nowrap; }
+  .segmented .chip { border-color: transparent; }
+
+  .categories .label {
+    margin-inline-end: var(--space-1);
+    flex: none;
+  }
+  @media (max-width: 640px) {
+    .categories {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      margin-inline: calc(-1 * var(--space-4));
+      padding-inline: var(--space-4);
+    }
+    .categories::-webkit-scrollbar { display: none; }
+    .categories .chip { flex: none; }
+    .sorts { inline-size: 100%; }
+    .segmented .chip { flex: 1; text-align: center; }
+    .states {
+      flex: 0 1 auto;
+      min-inline-size: 0;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      margin-inline-start: calc(-1 * var(--space-4));
+      padding-inline-start: var(--space-4);
+    }
+    .states::-webkit-scrollbar { display: none; }
+    .states .chip { flex: none; }
+  }
+</style>

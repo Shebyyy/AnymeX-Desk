@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.astro/
+.wrangler/
+.dev.vars
+.env
+.env.production
+*.log
+
+node_modules/.vite*
+shot_*.png

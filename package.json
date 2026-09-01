@@ -1,0 +1,41 @@
+{
+  "name": "anymex-desk",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "bun@1.4.0",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "predev": "bun run db:local",
+    "dev": "astro dev",
+    "build": "ASTRO_BUILD=1 astro build",
+    "prepreview": "bun run db:local",
+    "preview": "astro preview",
+    "check": "astro check",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "db:generate": "bunx drizzle-kit generate",
+    "db:local": "bunx wrangler d1 migrations apply anymex-desk --local",
+    "db:remote": "bunx wrangler d1 migrations apply anymex-desk --remote",
+    "deploy": "ASTRO_BUILD=1 astro build && bunx wrangler deploy && bun run db:remote",
+    "db:seed": "bunx wrangler d1 execute anymex-desk --local --file=seeds/seed.sql",
+    "types": "bunx wrangler types"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "^14.2.3",
+    "@astrojs/svelte": "^9.0.1",
+    "astro": "^7.2.4",
+    "drizzle-orm": "^0.45.2",
+    "svelte": "^5.56.9"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@cloudflare/workers-types": "^4.20260101.0",
+    "@types/bun": "^1.3.14",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.124.0"
+  }
+}

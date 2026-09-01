@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "anymex-desk",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "anymex-desk",
+      "migrations_dir": "drizzle"
+    }
+  ],
+
+  "kv_namespaces": [{ "binding": "SESSION" }],
+
+  "vars": {
+    "DISCORD_CLIENT_ID": "",
+    "DISCORD_GUILD_ID": "",
+    "MAINTAINER_ROLE_IDS": "",
+    "MIN_ACCOUNT_AGE_DAYS": "3",
+    "PUBLIC_SITE_NAME": "AnymeX Desk"
+  }
+}
