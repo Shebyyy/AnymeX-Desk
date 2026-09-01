@@ -6,6 +6,7 @@ import { comments, reports, users, notifications } from '../lib/db/schema';
 import { atLeast } from '../lib/levels';
 import { levelOf } from '../lib/staff';
 import { isReportId } from '../lib/writes';
+import { sendDiscordDm } from '../lib/notify';
 
 export const prerender = false;
 
@@ -63,7 +64,7 @@ export const POST: APIRoute = async (ctx) => {
 
   /* Verify the report exists. */
   const [report] = await db()
-    .select({ id: reports.id, reporterId: reports.reporterId })
+    .select({ id: reports.id, reporterId: reports.reporterId, title: reports.title })
     .from(reports)
     .where(eq(reports.id, reportId));
   if (!report) return json({ error: 'report not found' }, 404);
@@ -98,8 +99,13 @@ export const POST: APIRoute = async (ctx) => {
         reportId,
         kind: 'comment',
       });
-    if (cf) cf.waitUntil(notif);
-    else await notif;
+    const dm = sendDiscordDm(
+      report.reporterId,
+      `**${user.username}** commented on your report "${report.title}":
+> ${body.slice(0, 300)}`,
+    );
+    if (cf) { cf.waitUntil(notif); cf.waitUntil(dm); }
+    else { await notif; await dm; }
   }
 
   return json({
