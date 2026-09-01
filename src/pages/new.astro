@@ -52,13 +52,19 @@ if (Astro.request.method === 'POST') {
   const body = String(form.get('body') ?? '').trim().slice(0, 5000);
   const stepsToReproduce = String(form.get('stepsToReproduce') ?? '').trim().slice(0, 5000);
 
+  const isAjax = Astro.request.headers.get('accept') === 'application/json';
+
   const submitted: Draft = { kind, category, platform, appVersion, title, body, stepsToReproduce };
 
   if (!user) {
+    if (isAjax) return json({ error: 'sign-in' }, 401);
     Astro.session?.set('pending_report', submitted);
     return Astro.redirect('/auth/discord?next=/new', 302);
   }
-  if (!(await canWriteNow(user))) return Astro.redirect('/cant-post', 302);
+  if (!(await canWriteNow(user))) {
+    if (isAjax) return json({ error: 'banned' }, 403);
+    return Astro.redirect('/cant-post', 302);
+  }
 
   posted = submitted;
 
@@ -81,6 +87,7 @@ if (Astro.request.method === 'POST') {
     const dup = await findDuplicate(kind, category, platform, normalizeTitle(title));
     if (dup) {
       await ensureVote(dup.id, user.id);
+      if (isAjax) return json({ id: dup.id, joined: true }, 200);
       return Astro.redirect(`/report/${dup.id}?joined=1`, 303);
     }
 
@@ -113,8 +120,24 @@ if (Astro.request.method === 'POST') {
       const cf = Astro.locals.cfContext;
       if (cf) for (const task of after) cf.waitUntil(task);
       else await Promise.all(after);
+
+      // Return JSON for AJAX submissions so the client can upload files next.
+      if (Astro.request.headers.get('accept') === 'application/json') {
+        return new Response(JSON.stringify({ id: created.id }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
       return Astro.redirect(`/report/${created.id}?filed=1`, 303);
     }
+  }
+
+  // For AJAX requests with validation errors, return JSON instead of re-rendering.
+  if (isAjax && error) {
+    return new Response(JSON.stringify({ error }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    });
   }
 }
 
@@ -267,12 +290,145 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
       )}
     </section>
 
+    {/* Step {kindLocked ? 4 : 5}: Attachments */}
+    <section class="step">
+      <h2 class="step-h"><span class="step-n">{kindLocked ? 4 : 5}</span> Attachments</h2>
+      <p class="field-hint">Images (JPG, PNG, WebP, GIF) up to 5 MB · Videos (MP4, WebM) up to 50 MB. You can also add more after submitting.</p>
+      <div class="upload-area" id="upload-area">
+        <label class="upload-dropzone" for="file-input">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+          <span>Click to select files or drag &amp; drop</span>
+        </label>
+        <input id="file-input" type="file" name="files" accept="image/*,video/mp4,video/webm" multiple class="sr-only" />
+        <div class="file-list" id="file-list"></div>
+      </div>
+    </section>
+
     <div class="submit-row">
-      <button class="btn btn-primary btn-lg" type="submit">
+      <button class="btn btn-primary btn-lg" type="submit" id="submit-btn">
         {activeKind === 'bug' ? 'Submit bug report' : 'Submit suggestion'}
       </button>
     </div>
   </form>
+
+  <script>
+    const form = document.querySelector('form')!;
+    const fileInput = document.getElementById('file-input') as HTMLInputElement;
+    const fileList = document.getElementById('file-list');
+    const submitBtn = document.getElementById('submit-btn') as HTMLButtonElement;
+    const selectedFiles: File[] = [];
+
+    // File selection handling
+    fileInput?.addEventListener('change', () => {
+      for (const f of Array.from(fileInput.files ?? [])) {
+        if (selectedFiles.length >= 5) break;
+        if (!selectedFiles.find(x => x.name === f.name && x.size === f.size)) {
+          selectedFiles.push(f);
+        }
+      }
+      fileInput.value = '';
+      renderFiles();
+    });
+
+    // Drag and drop
+    const dropzone = document.querySelector('.upload-dropzone');
+    dropzone?.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+    dropzone?.addEventListener('dragleave', () => { dropzone.classList.remove('drag-over'); });
+    dropzone?.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('drag-over');
+      for (const f of Array.from(e.dataTransfer.files)) {
+        if (selectedFiles.length >= 5) break;
+        if (!selectedFiles.find(x => x.name === f.name && x.size === f.size)) {
+          selectedFiles.push(f);
+        }
+      }
+      renderFiles();
+    });
+
+    function renderFiles() {
+      if (!fileList) return;
+      fileList.innerHTML = '';
+      selectedFiles.forEach((f, i) => {
+        const size = f.size > 1024 * 1024
+          ? `${(f.size / (1024 * 1024)).toFixed(1)} MB`
+          : `${(f.size / 1024).toFixed(0)} KB`;
+        const div = document.createElement('div');
+        div.className = 'file-item';
+        div.innerHTML = `<span class="file-name">${f.name}</span><span class="file-size">${size}</span><button type="button" class="file-remove" data-index="${i}">&times;</button>`;
+        div.querySelector('.file-remove')?.addEventListener('click', () => { selectedFiles.splice(i, 1); renderFiles(); });
+        fileList.appendChild(div);
+      });
+    }
+
+    // Form submission with file upload
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (selectedFiles.length > 0) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Submitting…';
+      }
+
+      try {
+        const fd = new FormData(form);
+        // Remove file input from form data (we upload separately)
+        fd.delete('files');
+
+        const res = await fetch('/new', {
+          method: 'POST',
+          body: fd,
+          headers: { 'accept': 'application/json' },
+        });
+
+        if (!res.ok) {
+          // Try to get error from JSON, fall back to redirect (non-JSON error)
+          const ct = res.headers.get('content-type');
+          if (ct?.includes('application/json')) {
+            const data = await res.json().catch(() => null);
+            if (data?.error) { alert(data.error); return; }
+          }
+          // Non-JSON response (e.g. redirect to /cant-post) — follow it
+          const loc = res.headers.get('location');
+          if (loc) { window.location.href = loc; return; }
+          alert('Something went wrong.');
+          return;
+        }
+
+        const data = await res.json();
+        if (!data?.id) { alert('Something went wrong.'); return; }
+
+        // Dedup: joined an existing report
+        if (data.joined) {
+          window.location.href = `/report/${data.id}?joined=1`;
+          return;
+        }
+
+        // Upload selected files
+        if (selectedFiles.length > 0) {
+          submitBtn.textContent = `Uploading ${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''}…`;
+          let uploaded = 0;
+          for (const file of selectedFiles) {
+            const uploadFd = new FormData();
+            uploadFd.append('file', file);
+            uploadFd.append('reportId', String(data.id));
+            await fetch('/upload', { method: 'POST', body: uploadFd });
+            uploaded++;
+            submitBtn.textContent = `Uploading ${uploaded}/${selectedFiles.length}…`;
+          }
+        }
+
+        window.location.href = `/report/${data.id}?filed=1`;
+      } catch {
+        alert('Network error — please try again.');
+        submitBtn.disabled = false;
+        submitBtn.textContent = activeKind === 'bug' ? 'Submit bug report' : 'Submit suggestion';
+      }
+    });
+  </script>
 
   <p class="foot-note">
     Already reported by someone else? Submitting adds you to their report instead
@@ -360,6 +516,46 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
     margin-block-start: var(--space-4);
     align-items: start;
   }
+
+  /* ── Upload area ── */
+  .upload-area { display: flex; flex-direction: column; gap: var(--space-2); }
+  .upload-dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-6) var(--space-4);
+    border: 2px dashed var(--border-default);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .upload-dropzone:hover, .upload-dropzone.drag-over {
+    border-color: var(--signal);
+    background: var(--signal-fill);
+  }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+  .file-list { display: flex; flex-direction: column; gap: var(--space-2); }
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+    font-size: var(--text-sm);
+  }
+  .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+  .file-size { color: var(--text-muted); font-size: var(--text-xs); }
+  .file-remove {
+    background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: var(--text-md); padding: 0 var(--space-1);
+    line-height: 1;
+  }
+  .file-remove:hover { color: var(--dead); }
 
   .foot-note {
     margin-block-start: var(--space-8);
