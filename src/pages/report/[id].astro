@@ -14,6 +14,7 @@ import { isResponse, levelOf, logAction, requireStaff } from '../../lib/staff';
 import { announceFixed } from '../../lib/webhook';
 import { notifyWatchers, sendDiscordDm } from '../../lib/notify';
 import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } from '../../lib/format';
+import { env } from 'cloudflare:workers';
 
 export const prerender = false;
 
@@ -81,6 +82,47 @@ if (Astro.request.method === 'POST') {
   }
 
   return Astro.redirect(`/report/${id}`, 303);
+}
+
+/* Delete report (mod+ only). Cascades to votes, comments, attachments, notifications in DB.
+   Also cleans up file blobs from KV. */
+if (Astro.request.method === 'DELETE') {
+  const gate = await requireStaff(Astro, 'mod');
+  if (isResponse(gate)) return gate;
+
+  // Collect attachment file paths for KV cleanup.
+  const atts = await db()
+    .select({ filePath: attachments.filePath })
+    .from(attachments)
+    .where(eq(attachments.reportId, id));
+
+  // Delete the report — cascade handles votes, comments, attachments rows, notifications.
+  const [deleted] = await db()
+    .delete(reports)
+    .where(eq(reports.id, id))
+    .returning({ id: reports.id, title: reports.title });
+
+  if (deleted) {
+    await logAction(gate.user, 'report.delete', String(id), deleted.title);
+
+    // Clean up KV files in background.
+    const kv = env.SESSION as KVNamespace | undefined;
+    if (kv && atts.length > 0) {
+      const cleanup = atts.map((a) => kv.delete(`upload:${a.filePath}`));
+      const cf = Astro.locals.cfContext;
+      if (cf) for (const task of cleanup) cf.waitUntil(task);
+      else await Promise.all(cleanup);
+    }
+
+    return new Response(JSON.stringify({ deleted: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  return new Response(JSON.stringify({ error: 'not found' }), {
+    status: 404,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 const [report] = await db().select().from(reports).where(eq(reports.id, id));
@@ -301,8 +343,8 @@ Astro.response.headers.set(
       )}
     </section>
 
-    {/* ── Upload section (reporter + staff only) ───────────────────────── */}
-    {(user && (user.id === report.reporterId || canModerate)) && (
+    {/* ── Upload section (any signed-in user) ────────────────────────── */}
+    {user && (
       <section class="upload-section">
         <h2>Upload attachment</h2>
         <p class="upload-hint">
@@ -353,6 +395,12 @@ Astro.response.headers.set(
               <p class="mod-hint">Enter the report id this is a duplicate of. The reporter and voters will be notified.</p>
             </div>
           )}
+
+          <div class="mod-extra mod-danger">
+            <p class="mod-label">Danger zone</p>
+            <p class="mod-hint">Permanently delete this report and all its votes, comments, and attachments. This cannot be undone.</p>
+            <button class="btn btn-danger" type="button" id="delete-btn">Delete report</button>
+          </div>
         </form>
       )
     }
@@ -413,6 +461,30 @@ Astro.response.headers.set(
   const commentBody = document.getElementById('comment-body') as HTMLTextAreaElement | null;
   const commentBtn = document.getElementById('comment-btn') as HTMLButtonElement | null;
   const commentsList = document.getElementById('comments-list');
+
+  // ── Delete report ─────────────────────────────────────────────────
+  const deleteBtn = document.getElementById('delete-btn') as HTMLButtonElement | null;
+  deleteBtn?.addEventListener('click', async () => {
+    if (!confirm('Are you sure? This will permanently delete this report, all votes, comments, and attachments.')) return;
+    if (!confirm('Really delete? This cannot be undone.')) return;
+    deleteBtn.disabled = true;
+    deleteBtn.textContent = 'Deleting…';
+    try {
+      const res = await fetch(window.location.pathname, { method: 'DELETE' });
+      if (res.ok) {
+        window.location.href = '/';
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Delete failed' }));
+        alert(err.error || 'Delete failed');
+        deleteBtn.disabled = false;
+        deleteBtn.textContent = 'Delete report';
+      }
+    } catch {
+      alert('Network error');
+      deleteBtn.disabled = false;
+      deleteBtn.textContent = 'Delete report';
+    }
+  });
 
   if (commentForm && commentBody && commentBtn && commentsList) {
     commentForm.addEventListener('submit', async (e) => {
@@ -625,5 +697,14 @@ Astro.response.headers.set(
     margin-block-start: var(--space-4);
     padding-block-start: var(--space-3);
     border-block-start: 1px solid var(--border-subtle);
+  }
+  .mod-danger { border-block-start-color: var(--dead); }
+  .btn-danger {
+    color: var(--dead);
+    border-color: var(--dead);
+  }
+  .btn-danger:hover {
+    background: var(--dead-fill);
+    color: var(--text-primary);
   }
 </style>
