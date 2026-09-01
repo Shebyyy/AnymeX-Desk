@@ -9,11 +9,12 @@
     {
       "binding": "DB",
       "database_name": "anymex-desk",
+      "database_id": "PASTE_YOUR_D1_DATABASE_ID_HERE",
       "migrations_dir": "drizzle"
     }
   ],
 
-  "kv_namespaces": [{ "binding": "SESSION" }],
+  "kv_namespaces": [{ "binding": "SESSION", "id": "PASTE_YOUR_KV_NAMESPACE_ID_HERE" }],
 
   "vars": {
     "DISCORD_CLIENT_ID": "",
