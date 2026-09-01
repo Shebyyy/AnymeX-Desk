@@ -15,6 +15,13 @@
 
   "kv_namespaces": [{ "binding": "SESSION" }],
 
+  "r2_buckets": [
+    {
+      "binding": "UPLOADS",
+      "bucket_name": "anymex-desk-uploads"
+    }
+  ],
+
   "vars": {
     "DISCORD_CLIENT_ID": "1483322438551994499",
     "DISCORD_GUILD_ID": "1539489014778826904",
