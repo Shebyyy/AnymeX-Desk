@@ -22,7 +22,7 @@ const DISCORD_MARK =
 <header class="bar">
   <div class="shell inner">
     <a href="/" class="mark">
-      <span class="mark-dot" aria-hidden="true"></span>
+      <img src="/favicon.gif" alt="AnymeX" class="mark-logo" />
       <span class="mark-text">AnymeX <span>Desk</span></span>
     </a>
 
@@ -153,12 +153,11 @@ const DISCORD_MARK =
     letter-spacing: var(--track-tight);
     white-space: nowrap;
   }
-  .mark-dot {
-    inline-size: 7px;
-    block-size: 7px;
+  .mark-logo {
+    inline-size: 24px;
+    block-size: 24px;
     border-radius: var(--radius-full);
-    background: var(--signal);
-    box-shadow: 0 0 0 3px var(--signal-fill);
+    object-fit: contain;
   }
   .mark-text span {
     color: var(--text-tertiary);
