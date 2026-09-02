@@ -199,11 +199,9 @@ export const POST: APIRoute = async (ctx) => {
         reportId,
         kind: 'comment',
       });
-    const dmText = body
-      ? `**${user.username}** commented on your report "${report.title}":\n> ${body.slice(0, 300)}\n${reportUrl}`
-      : `**${user.username}** added an attachment to your report "${report.title}".\n${reportUrl}`;
-    dmTasks.push(notif, sendDiscordDm(report.reporterId, dmText));
-    alreadyNotified.add(report.reporterId);
+    // In-app bell only — no DM here. A DM only goes out if the reporter is
+    // actually @mentioned (handled below), so normal comments stay quiet.
+    dmTasks.push(notif);
   }
 
   /* Notify whoever they replied to, if that's a different person than the
