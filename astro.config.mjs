@@ -10,6 +10,11 @@ import svelte from '@astrojs/svelte';
  */
 const built = !!process.env.ASTRO_BUILD;
 
+// Single source of truth for session lifetime. Used for both the
+// server-side KV ttl and the browser cookie's maxAge below — see the
+// comment on `session` for why both are required.
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // one week
+
 export default defineConfig({
   output: 'server',
   adapter: cloudflare({
@@ -74,8 +79,18 @@ export default defineConfig({
      * Astro stamps the expiry when a key is written, so this is a hard cap
      * measured from sign-in rather than a sliding window.
      */
-    ttl: 60 * 60 * 24 * 7,
+    ttl: SESSION_TTL_SECONDS,
     cookie: {
+      /**
+       * Without this, Astro's cookie config has no `maxAge`, which makes it
+       * a browser session cookie: gone the moment the browser actually
+       * closes, even though the server-side session (KV, bounded by `ttl`
+       * above) is still valid. That mismatch is what caused close-and-reopen
+       * to look like a logout. Keep this equal to `ttl` — a longer maxAge
+       * would let the cookie outlive the KV entry, a shorter one would log
+       * people out client-side before the server session actually expires.
+       */
+      maxAge: SESSION_TTL_SECONDS,
       /**
        * The `__Host-` prefix is a browser-enforced rule, not a hint: a cookie
        * whose name starts with it is only accepted when it is Secure, has
