@@ -133,12 +133,15 @@ export async function announceFiled(
   });
 }
 
-export async function testWebhook(webhookUrl: string, origin: string, actor: string) {
+export async function testWebhook(webhookUrl: string, origin: string, actor: string, kind: 'announce' | 'log' = 'announce') {
   return send(webhookUrl, {
     title: 'Webhook connected',
     description:
-      `Sent from the AnymeX tracker dashboard by ${actor}. Status change ` +
-      `announcements and demand alerts will arrive in this channel.`,
+      kind === 'log'
+        ? `Sent from the AnymeX tracker dashboard by ${actor}. Votes, comments, replies, ` +
+          `reports, and staff actions will be logged in this channel.`
+        : `Sent from the AnymeX tracker dashboard by ${actor}. Status change ` +
+          `announcements and demand alerts will arrive in this channel.`,
     url: origin,
   });
 }

@@ -5,7 +5,7 @@ import { canWriteNow, currentUser, avatarUrl } from '../lib/auth';
 import { db } from '../lib/db/client';
 import { comments, reports, users, notifications, attachments } from '../lib/db/schema';
 import { atLeast } from '../lib/levels';
-import { levelOf } from '../lib/staff';
+import { levelOf, logAction } from '../lib/staff';
 import { isReportId } from '../lib/writes';
 import { sendDiscordDm } from '../lib/notify';
 
@@ -218,6 +218,15 @@ export const POST: APIRoute = async (ctx) => {
     dmTasks.push(notif, dm);
   }
 
+  const logMsg = body ? body.slice(0, 200) : '(attachment only)';
+  const log = logAction(
+    user,
+    replyToId != null ? 'comment.reply' : 'comment.add',
+    `report #${reportId}`,
+    logMsg,
+  );
+  dmTasks.push(log);
+
   if (cf) for (const task of dmTasks) cf.waitUntil(task);
   else await Promise.all(dmTasks);
 
@@ -276,6 +285,16 @@ export const DELETE: APIRoute = async (ctx) => {
       .set({ commentCount: sql`max(0, ${reports.commentCount} - 1)` })
       .where(eq(reports.id, comment.reportId)),
   ]);
+
+  const log = logAction(
+    user,
+    'comment.delete',
+    `report #${comment.reportId}`,
+    isAuthor ? 'own comment' : 'by staff',
+  );
+  const cf = ctx.locals.cfContext;
+  if (cf) cf.waitUntil(log);
+  else await log;
 
   return new Response(null, { status: 204 });
 };

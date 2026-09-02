@@ -75,6 +75,32 @@ if (Astro.request.method === 'POST') {
       done = res.ok ? 'Test message sent. Check the channel.' : null;
       error = res.ok ? null : `Discord rejected it (${res.status}). ${res.body.slice(0, 200)}`;
     }
+  } else if (intent === 'log-webhook') {
+    const raw = String(form.get('log_webhook_url') ?? '').trim();
+    const patch: Record<string, string> = {};
+    if (raw === '__clear__') {
+      patch.log_webhook_url = '';
+    } else if (raw) {
+      if (!/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//.test(raw)) {
+        error = 'That is not a Discord webhook URL. Copy it from Channel → Edit Channel → Integrations → Webhooks.';
+      } else {
+        patch.log_webhook_url = raw;
+      }
+    }
+    if (!error) {
+      await writeSettings(patch, user.id);
+      await logAction(user, 'settings.log_webhook', null, patch.log_webhook_url === '' ? 'cleared' : 'replaced');
+      done = 'Logs channel saved. Votes, comments, replies, reports, and staff actions will post there.';
+    }
+  } else if (intent === 'log-webhook-test') {
+    const cfg = await readConfig();
+    if (!cfg.log_webhook_url) {
+      error = 'Save a logs webhook URL first.';
+    } else {
+      const res = await testWebhook(cfg.log_webhook_url, origin, user.username, 'log');
+      done = res.ok ? 'Test message sent. Check the logs channel.' : null;
+      error = res.ok ? null : `Discord rejected it (${res.status}). ${res.body.slice(0, 200)}`;
+    }
   } else if (intent === 'dm') {
     const dmEnabled = form.get('discord_dm_enabled') === '1' ? '1' : '0';
     const botToken = String(form.get('discord_bot_token') ?? '').trim();
@@ -161,6 +187,8 @@ const [cfg, staff, blocked, log] = await Promise.all([
 ]);
 const webhookSet = !!cfg.webhook_url;
 const webhookTail = webhookSet ? cfg.webhook_url.slice(-6) : '';
+const logWebhookSet = !!cfg.log_webhook_url;
+const logWebhookTail = logWebhookSet ? cfg.log_webhook_url.slice(-6) : '';
 const dmEnabled = cfg.discord_dm_enabled === '1';
 const botTokenSet = !!cfg.discord_bot_token;
 ---
@@ -308,6 +336,39 @@ const botTokenSet = !!cfg.discord_bot_token;
     <form method="POST" class="test">
       <input type="hidden" name="intent" value="webhook-test" />
       <button class="btn" type="submit" disabled={!webhookSet}>Send a test message</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Logs channel</h2>
+    <p class="panel-sub">
+      A separate webhook (usually a private staff channel) that gets a line for
+      every vote, comment, reply, filed report, and staff action — everything
+      already recorded in the audit log below, mirrored to Discord in real time.
+    </p>
+    <form method="POST" class="rows-2">
+      <input type="hidden" name="intent" value="log-webhook" />
+      <div class="field wide">
+        <label class="label" for="log_webhook_url">Logs webhook URL</label>
+        <input
+          class="input"
+          id="log_webhook_url"
+          name="log_webhook_url"
+          type="password"
+          placeholder={logWebhookSet ? `saved, ending …${logWebhookTail}. Paste a new one to replace` : 'https://discord.com/api/webhooks/…'}
+          autocomplete="off"
+        />
+        <p class="field-hint">
+          {logWebhookSet ? 'Leave empty to keep it, or type __clear__ to remove it.' : 'Nothing is logged to Discord until this is set — the audit log below still records everything either way.'}
+        </p>
+      </div>
+      <div class="wide actions">
+        <button class="btn btn-primary" type="submit">Save logs channel</button>
+      </div>
+    </form>
+    <form method="POST" class="test">
+      <input type="hidden" name="intent" value="log-webhook-test" />
+      <button class="btn" type="submit" disabled={!logWebhookSet}>Send a test message</button>
     </form>
   </section>
 

@@ -5,6 +5,7 @@ import { db } from './db/client';
 import { audit, users, type StaffLevel } from './db/schema';
 import { atLeast, combine as combineLevels, type Level } from './levels';
 import { currentUser, type SessionUser } from './auth';
+import { readSetting } from './settings';
 
 export { atLeast, combine, LEVEL_LABELS, type Level } from './levels';
 
@@ -61,6 +62,16 @@ export const isResponse = (v: unknown): v is Response => v instanceof Response;
  * `Pick` rather than `SessionUser`, so any actor that holds id + username
  * can be logged — staff actions, automations, etc.
  */
+/**
+ * `Pick` rather than `SessionUser`, so any actor that holds id + username
+ * can be logged — staff actions, automations, etc.
+ *
+ * Every call writes to the `audit` table (source of truth, shown on the
+ * admin dashboard) and, if a logs-channel webhook is configured, best-effort
+ * mirrors the same line to Discord. The webhook post never blocks or fails
+ * the caller's action — a broken/unset webhook only means the Discord copy
+ * is missing, not that the DB write is skipped.
+ */
 export async function logAction(
   actor: Pick<SessionUser, 'id' | 'username'>,
   action: string,
@@ -76,6 +87,21 @@ export async function logAction(
       target: target ?? null,
       detail: detail ?? null,
     });
+
+  try {
+    const logUrl = await readSetting('log_webhook_url');
+    if (!logUrl) return;
+    const parts = [`**${actor.username}** \`${action}\``];
+    if (target) parts.push(`→ ${target}`);
+    if (detail) parts.push(`— ${detail}`);
+    await fetch(logUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: parts.join(' '), allowed_mentions: { parse: [] } }),
+    });
+  } catch (err) {
+    console.error('[log webhook] failed to post', err);
+  }
 }
 
 /** Grant or clear a manual level. Clearing passes null. */

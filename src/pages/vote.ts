@@ -4,6 +4,7 @@ import { toggleVote } from '../lib/vote';
 import { announceDemand } from '../lib/webhook';
 import { safeReturnTo } from '../lib/redirect';
 import { isReportId, isVotableReport } from '../lib/writes';
+import { logAction } from '../lib/staff';
 
 export const prerender = false;
 
@@ -23,11 +24,15 @@ export const POST: APIRoute = async (ctx) => {
   if (!(await canWriteNow(user))) return ctx.redirect('/cant-post', 302);
 
   const result = await toggleVote(reportId, user.id);
+  const cf = ctx.locals.cfContext;
+  const log = logAction(user, result === 'added' ? 'vote.add' : 'vote.remove', String(reportId));
   if (result === 'added') {
     const announce = announceDemand(reportId, ctx.url.origin);
-    const cf = ctx.locals.cfContext;
-    if (cf) cf.waitUntil(announce);
-    else await announce;
+    if (cf) { cf.waitUntil(log); cf.waitUntil(announce); }
+    else { await log; await announce; }
+  } else {
+    if (cf) cf.waitUntil(log);
+    else await log;
   }
   return ctx.redirect(back, 303);
 };

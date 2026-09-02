@@ -16,6 +16,7 @@ import { canWriteNow, currentUser } from '../lib/auth';
 import { ensureVote } from '../lib/vote';
 import { FILING_COOLDOWN_MESSAGE, overFilingLimit, findDuplicate } from '../lib/writes';
 import { announceFiled } from '../lib/webhook';
+import { logAction } from '../lib/staff';
 import { db } from '../lib/db/client';
 import { sql } from 'drizzle-orm';
 
@@ -87,6 +88,10 @@ if (Astro.request.method === 'POST') {
     const dup = await findDuplicate(kind, category, platform, normalizeTitle(title));
     if (dup) {
       await ensureVote(dup.id, user.id);
+      const log = logAction(user, 'report.join_duplicate', `report #${dup.id}`, normalizeTitle(title));
+      const cf1 = Astro.locals.cfContext;
+      if (cf1) cf1.waitUntil(log);
+      else await log;
       if (isAjax) return json({ id: dup.id, joined: true }, 200);
       return Astro.redirect(`/report/${dup.id}?joined=1`, 303);
     }
@@ -116,7 +121,10 @@ if (Astro.request.method === 'POST') {
 
     if (created) {
       await ensureVote(created.id, user.id);
-      const after: Promise<unknown>[] = [announceFiled(created, Astro.url.origin)];
+      const after: Promise<unknown>[] = [
+        announceFiled(created, Astro.url.origin),
+        logAction(user, 'report.file', `report #${created.id}`, `${created.kind}: ${created.title}`),
+      ];
       const cf = Astro.locals.cfContext;
       if (cf) for (const task of after) cf.waitUntil(task);
       else await Promise.all(after);
