@@ -89,7 +89,7 @@ export async function logAction(
     });
 
   try {
-    const logUrl = await readSetting('log_webhook_url');
+    const logUrl = await readSetting('webhook_url');
     if (!logUrl) return;
     const parts = [`**${actor.username}** \`${action}\``];
     if (target) parts.push(`→ ${target}`);
