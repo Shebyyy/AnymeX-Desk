@@ -137,6 +137,11 @@ if (Astro.request.method === 'DELETE') {
 const [report] = await db().select().from(reports).where(eq(reports.id, id));
 if (!report) return Astro.rewrite('/404');
 
+// Report body and steps-to-reproduce get the same Discord-markdown
+// rendering as comments — see richtext.ts. Title stays plain text.
+const bodyRich = report.body ? prepareCommentBody(report.body) : null;
+const stepsRich = report.stepsToReproduce ? prepareCommentBody(report.stepsToReproduce) : null;
+
 const [user, reporter, reportAttachments, reportComments, commentAttachments] = await Promise.all([
   currentUser(Astro),
   dbUser(report.reporterId),
@@ -222,7 +227,11 @@ const richByComment = new Map<number, ReturnType<typeof prepareCommentBody>>();
 for (const { comment: c } of orderedComments) {
   if (c.body) richByComment.set(c.id, prepareCommentBody(c.body));
 }
-const allPreviewUrls = [...richByComment.values()].flatMap((r) => r.previewUrls);
+const allPreviewUrls = [
+  ...(bodyRich?.previewUrls ?? []),
+  ...(stepsRich?.previewUrls ?? []),
+  ...[...richByComment.values()].flatMap((r) => r.previewUrls),
+];
 const linkPreviews = allPreviewUrls.length ? await fetchLinkPreviews(allPreviewUrls) : new Map();
 
 const canModerate = user ? atLeast(await levelOf(user.id), 'mod') : false;
@@ -323,14 +332,44 @@ Astro.response.headers.set(
       )}
     </dl>
 
-    {report.body && <div class="body"><p>{report.body}</p></div>}
+    {report.body && (
+      <div class="body" set:html={bodyRich?.html ?? ''} />
+    )}
+    {(bodyRich?.previewUrls ?? []).map((u) => {
+      const p = linkPreviews.get(u);
+      if (!p) return null;
+      return (
+        <a class="link-preview-card" href={u} target="_blank" rel="noopener noreferrer nofollow">
+          {p.image && <img class="link-preview-thumb" src={p.image} alt="" loading="lazy" />}
+          <div class="link-preview-text">
+            {p.siteName && <span class="link-preview-site">{p.siteName}</span>}
+            {p.title && <span class="link-preview-title">{p.title}</span>}
+            {p.description && <span class="link-preview-desc">{p.description}</span>}
+          </div>
+        </a>
+      );
+    })}
 
     {report.stepsToReproduce && (
       <div class="steps">
         <h2>Steps to reproduce</h2>
-        <pre class="steps-pre">{report.stepsToReproduce}</pre>
+        <div class="steps-body" set:html={stepsRich?.html ?? ''} />
       </div>
     )}
+    {(stepsRich?.previewUrls ?? []).map((u) => {
+      const p = linkPreviews.get(u);
+      if (!p) return null;
+      return (
+        <a class="link-preview-card" href={u} target="_blank" rel="noopener noreferrer nofollow">
+          {p.image && <img class="link-preview-thumb" src={p.image} alt="" loading="lazy" />}
+          <div class="link-preview-text">
+            {p.siteName && <span class="link-preview-site">{p.siteName}</span>}
+            {p.title && <span class="link-preview-title">{p.title}</span>}
+            {p.description && <span class="link-preview-desc">{p.description}</span>}
+          </div>
+        </a>
+      );
+    })}
 
     {report.kind === 'extension' && (
       <dl class="grid extension-details">
@@ -937,7 +976,6 @@ Astro.response.headers.set(
   .facts .wide { flex-basis: 100%; }
   .facts dd a { color: var(--signal-ink); text-decoration: underline; text-underline-offset: 2px; }
 
-  .body p { color: var(--text-secondary); white-space: pre-wrap; }
   .steps { margin-block-start: var(--space-4); }
   .steps h2, .attachments-section h2, .comments-section h2 {
     font-size: var(--text-md);
@@ -952,6 +990,70 @@ Astro.response.headers.set(
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     background: var(--surface-inset);
+  }
+  .steps-body { font-size: var(--text-sm); color: var(--text-secondary); }
+
+  /* ── Discord-flavored markdown (report body/steps + comments share these) ── */
+  .body :global(p), .steps-body :global(p), .comment-body :global(p) { margin: 0 0 var(--space-2); color: var(--text-secondary); }
+  .body :global(p:last-child), .steps-body :global(p:last-child), .comment-body :global(p:last-child) { margin-block-end: 0; }
+  .body :global(u), .steps-body :global(u), .comment-body :global(u) { text-decoration: underline; text-underline-offset: 2px; }
+  .body :global(.md-code), .steps-body :global(.md-code), .comment-body :global(.md-code) {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.9em;
+    padding: 0.1em 0.4em;
+    border-radius: var(--radius-sm, 4px);
+    background: var(--surface-inset);
+    border: 1px solid var(--border-subtle);
+  }
+  .body :global(.md-codeblock), .steps-body :global(.md-codeblock), .comment-body :global(.md-codeblock) {
+    font-family: var(--font-mono, monospace);
+    font-size: var(--text-sm);
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+    overflow-x: auto;
+    margin: var(--space-2) 0;
+  }
+  .body :global(.md-codeblock code), .steps-body :global(.md-codeblock code), .comment-body :global(.md-codeblock code) {
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .body :global(.md-quote), .steps-body :global(.md-quote), .comment-body :global(.md-quote) {
+    margin: var(--space-2) 0;
+    padding-inline-start: var(--space-3);
+    border-inline-start: 3px solid var(--border-default);
+    color: var(--text-tertiary);
+  }
+  .body :global(.md-heading), .steps-body :global(.md-heading), .comment-body :global(.md-heading) {
+    font-weight: var(--weight-semibold, 600);
+    color: var(--text-primary);
+    margin: var(--space-2) 0 var(--space-1);
+  }
+  .body :global(.md-h1), .steps-body :global(.md-h1), .comment-body :global(.md-h1) { font-size: 1.4em; }
+  .body :global(.md-h2), .steps-body :global(.md-h2), .comment-body :global(.md-h2) { font-size: 1.2em; }
+  .body :global(.md-h3), .steps-body :global(.md-h3), .comment-body :global(.md-h3) { font-size: 1.05em; }
+  .body :global(.md-subtext), .steps-body :global(.md-subtext), .comment-body :global(.md-subtext) {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+  .body :global(.md-list), .steps-body :global(.md-list), .comment-body :global(.md-list) {
+    margin: var(--space-2) 0;
+    padding-inline-start: 1.4em;
+  }
+  .body :global(.md-list li), .steps-body :global(.md-list li), .comment-body :global(.md-list li) { margin-block-end: 2px; }
+  .body :global(.md-spoiler), .steps-body :global(.md-spoiler), .comment-body :global(.md-spoiler) {
+    background: var(--text-primary);
+    color: transparent;
+    border-radius: var(--radius-sm, 4px);
+    padding: 0 2px;
+    cursor: pointer;
+    transition: color 0.1s;
+  }
+  .body :global(.md-spoiler.is-revealed), .steps-body :global(.md-spoiler.is-revealed), .comment-body :global(.md-spoiler.is-revealed) {
+    background: var(--surface-inset);
+    color: inherit;
   }
 
   /* ── Attachments gallery ── */
