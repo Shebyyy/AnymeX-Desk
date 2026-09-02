@@ -17,6 +17,15 @@ import { dbUser } from './auth';
 export const GREEN = 0x3ba55d;
 export const YELLOW = 0xf5c542;
 export const RED = 0xed4245;
+/** Discord's own brand color — used for DMs that aren't a status/outcome (replies, mentions): neutral, not tied to good/bad. */
+export const BLURPLE = 0x5865f2;
+
+/** Same red/yellow/green scheme the announcement embeds use, so a status DM matches what the report page shows. */
+export function statusColor(status: string): number {
+  if (status === 'fixed') return GREEN;
+  if (status === 'wont_fix' || status === 'duplicate') return RED;
+  return YELLOW; // open, confirmed, in_progress
+}
 
 export interface Embed {
   title: string;

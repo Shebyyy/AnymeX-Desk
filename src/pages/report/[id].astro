@@ -11,7 +11,7 @@ import { avatarUrl, currentUser, dbUser } from '../../lib/auth';
 import { reporterMeta } from '../../lib/reporter';
 import { atLeast } from '../../lib/levels';
 import { isResponse, levelOf, logAction, requireStaff } from '../../lib/staff';
-import { announceFixed } from '../../lib/webhook';
+import { announceFixed, statusColor } from '../../lib/webhook';
 import { notifyWatchers, sendDiscordDm } from '../../lib/notify';
 import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } from '../../lib/format';
 import { prepareCommentBody } from '../../lib/richtext';
@@ -50,10 +50,16 @@ if (Astro.request.method === 'POST') {
       ];
 
       if (updated.reporterId && updated.reporterId !== gate.user.id) {
-        const dmMsg = statusNote
-          ? `Your ${updated.kind} report \"${updated.title}\" has been marked as **${statusLabel(status)}**: ${statusNote}\n${reportUrl}`
-          : `Your ${updated.kind} report \"${updated.title}\" has been marked as **${statusLabel(status)}**.\n${reportUrl}`;
-        after.push(sendDiscordDm(updated.reporterId, dmMsg));
+        after.push(
+          sendDiscordDm(updated.reporterId, {
+            author: gate.user.username,
+            title: `Report marked as ${statusLabel(status)}`,
+            description: statusNote || undefined,
+            url: reportUrl,
+            color: statusColor(status),
+            footer: updated.title,
+          }),
+        );
       }
 
       if (status === 'fixed') after.push(announceFixed(updated, Astro.url.origin));

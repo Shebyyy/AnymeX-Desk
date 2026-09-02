@@ -7,8 +7,9 @@ import { comments, reports, users, notifications, attachments } from '../lib/db/
 import { atLeast } from '../lib/levels';
 import { levelOf, logAction } from '../lib/staff';
 import { isReportId } from '../lib/writes';
-import { sendDiscordDm } from '../lib/notify';
+import { sendDiscordDm, truncateQuote } from '../lib/notify';
 import { resolveMentions } from '../lib/mentions';
+import { BLURPLE } from '../lib/webhook';
 
 export const prerender = false;
 
@@ -214,10 +215,14 @@ export const POST: APIRoute = async (ctx) => {
         kind: 'comment',
       });
     const commentUrl = `${reportUrl}#comment-${comment.id}`;
-    const dmText = body
-      ? `**${user.username}** replied to your comment on "${report.title}":\n> ${body.slice(0, 300)}\n${commentUrl}`
-      : `**${user.username}** replied with an attachment to your comment on "${report.title}".\n${commentUrl}`;
-    const dm = sendDiscordDm(parentAuthorId, dmText);
+    const dm = sendDiscordDm(parentAuthorId, {
+      author: user.username,
+      title: body ? 'New reply' : 'New reply with attachment',
+      description: body ? truncateQuote(body) : undefined,
+      url: commentUrl,
+      color: BLURPLE,
+      footer: report.title,
+    });
     dmTasks.push(notif, dm);
     alreadyNotified.add(parentAuthorId);
   }
@@ -235,8 +240,15 @@ export const POST: APIRoute = async (ctx) => {
           kind: 'mentioned',
           detail: `${user.username} mentioned you`,
         });
-      const dmText = `**${user.username}** mentioned you in a comment on "${report.title}":\n> ${body.slice(0, 300)}\n${commentUrl}`;
-      dmTasks.push(notif, sendDiscordDm(target.id, dmText));
+      const dm = sendDiscordDm(target.id, {
+        author: user.username,
+        title: 'You were mentioned',
+        description: truncateQuote(body),
+        url: commentUrl,
+        color: BLURPLE,
+        footer: report.title,
+      });
+      dmTasks.push(notif, dm);
       alreadyNotified.add(target.id);
     }
   }
@@ -331,10 +343,14 @@ export const PUT: APIRoute = async (ctx) => {
           kind: 'mentioned',
           detail: `${user.username} mentioned you`,
         }),
-        sendDiscordDm(
-          target.id,
-          `**${user.username}** mentioned you in an edited comment on "${report.title}":\n> ${body.slice(0, 300)}\n${commentUrl}`,
-        ),
+        sendDiscordDm(target.id, {
+          author: user.username,
+          title: 'You were mentioned (edited comment)',
+          description: truncateQuote(body),
+          url: commentUrl,
+          color: BLURPLE,
+          footer: report.title,
+        }),
       );
     }
   }

@@ -3,6 +3,7 @@ import { db } from './db/client';
 import { inIds } from './db/sql';
 import { notifications, reports, votes } from './db/schema';
 import { readSetting } from './settings';
+import { BLURPLE } from './webhook';
 
 /**
  * Telling people what happened to the thing they reported or voted on.
@@ -120,15 +121,40 @@ export async function markRead(userId: string, ids: number[]) {
 
 const DISCORD_API = 'https://discord.com/api/v10';
 
+export interface DmEmbed {
+  /** Shown as the small line above the title — who did this. */
+  author?: string;
+  /** What happened, in plain words — no emoji, no markdown flourishes. e.g. "New reply", "You were mentioned", "Report marked as Fixed". */
+  title: string;
+  /** The quoted comment / status note, if any. Already truncated by the caller — see `truncateQuote` below. */
+  description?: string;
+  /** Clicking the title takes them here — a specific comment when there is one, the report otherwise. */
+  url?: string;
+  /** One of GREEN / YELLOW / RED / BLURPLE from webhook.ts, or any 0xRRGGBB. */
+  color?: number;
+  /** Small line under the embed — the report title, so the DM makes sense out of context. */
+  footer?: string;
+}
+
+/** Truncates comment text for an embed description without cutting a word in half. */
+export function truncateQuote(text: string, max = 300): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${cut.slice(0, lastSpace > max * 0.6 ? lastSpace : max)}…`;
+}
+
 /**
- * Send a DM to a Discord user via a bot token.
+ * Send a DM to a Discord user via a bot token, as a single embed rather than
+ * plain text — matches the announcement/log channel's visual style instead
+ * of ad-hoc bold-text-and-quote-block markdown.
  *
  * The bot must share a guild with the target user, otherwise Discord returns
  * 403. This is best-effort: a failure is logged but never propagated.
  */
 export async function sendDiscordDm(
   discordId: string,
-  message: string,
+  embed: DmEmbed,
 ): Promise<boolean> {
   const botToken = await readSetting('discord_bot_token');
   const dmEnabled = await readSetting('discord_dm_enabled');
@@ -161,7 +187,16 @@ export async function sendDiscordDm(
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        content: message,
+        embeds: [
+          {
+            author: embed.author ? { name: embed.author } : undefined,
+            title: embed.title,
+            description: embed.description,
+            url: embed.url,
+            color: embed.color ?? BLURPLE,
+            footer: embed.footer ? { text: embed.footer } : undefined,
+          },
+        ],
         allowed_mentions: { parse: [] },
       }),
     });
