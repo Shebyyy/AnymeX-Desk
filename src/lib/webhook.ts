@@ -14,9 +14,9 @@ import { dbUser } from './auth';
  * permission.
  */
 
-const GREEN = 0x3ba55d;
-const YELLOW = 0xf5c542;
-const RED = 0xed4245;
+export const GREEN = 0x3ba55d;
+export const YELLOW = 0xf5c542;
+export const RED = 0xed4245;
 
 export interface Embed {
   title: string;

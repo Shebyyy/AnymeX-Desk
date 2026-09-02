@@ -40,14 +40,14 @@ if (Astro.request.method === 'POST') {
       .where(eq(reports.id, id))
       .returning();
     if (updated) {
-      await logAction(gate.user, 'report.status', String(id), detail);
+      const reportUrl = `${Astro.url.origin}/report/${id}`;
+      await logAction(gate.user, 'report.status', String(id), detail, reportUrl);
 
       const after: Promise<unknown>[] = [
         notifyWatchers(id, 'status_changed', detail, gate.user.id),
       ];
 
       if (updated.reporterId && updated.reporterId !== gate.user.id) {
-        const reportUrl = `${Astro.url.origin}/report/${id}`;
         const dmMsg = statusNote
           ? `Your ${updated.kind} report \"${updated.title}\" has been marked as **${statusLabel(status)}**: ${statusNote}\n${reportUrl}`
           : `Your ${updated.kind} report \"${updated.title}\" has been marked as **${statusLabel(status)}**.\n${reportUrl}`;
@@ -74,7 +74,7 @@ if (Astro.request.method === 'POST') {
         .where(eq(reports.id, id))
         .returning();
       if (updated) {
-        await logAction(gate.user, 'report.duplicate', String(id), `merged into ${dupId}`);
+        await logAction(gate.user, 'report.duplicate', String(id), `merged into ${dupId}`, `${Astro.url.origin}/report/${id}`);
         const detail = `duplicate: merged into #${dupId}`;
         await notifyWatchers(id, 'duplicate', detail, gate.user.id);
       }

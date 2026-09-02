@@ -6,6 +6,7 @@ import { audit, users, type StaffLevel } from './db/schema';
 import { atLeast, combine as combineLevels, type Level } from './levels';
 import { currentUser, type SessionUser } from './auth';
 import { readSetting } from './settings';
+import { send, GREEN, RED } from './webhook';
 
 export { atLeast, combine, LEVEL_LABELS, type Level } from './levels';
 
@@ -61,22 +62,42 @@ export const isResponse = (v: unknown): v is Response => v instanceof Response;
 /**
  * `Pick` rather than `SessionUser`, so any actor that holds id + username
  * can be logged — staff actions, automations, etc.
- */
-/**
- * `Pick` rather than `SessionUser`, so any actor that holds id + username
- * can be logged — staff actions, automations, etc.
  *
  * Every call writes to the `audit` table (source of truth, shown on the
- * admin dashboard) and, if a logs-channel webhook is configured, best-effort
- * mirrors the same line to Discord. The webhook post never blocks or fails
- * the caller's action — a broken/unset webhook only means the Discord copy
- * is missing, not that the DB write is skipped.
+ * admin dashboard) and, if the announcement webhook is configured, also
+ * posts the same event as an embed to that channel — with a link back to
+ * the report when one is given. The webhook post is best-effort: it never
+ * blocks or fails the caller's action, it just won't have a Discord copy if
+ * the webhook is down or unset.
  */
+const ACTION_META: Record<string, { label: string; color?: number }> = {
+  'vote.add': { label: 'Vote added', color: GREEN },
+  'vote.remove': { label: 'Vote removed' },
+  'comment.add': { label: 'New comment' },
+  'comment.reply': { label: 'New reply' },
+  'comment.delete': { label: 'Comment deleted', color: RED },
+  'report.file': { label: 'Report filed', color: GREEN },
+  'report.join_duplicate': { label: 'Joined duplicate report' },
+  'report.status': { label: 'Status changed' },
+  'report.duplicate': { label: 'Marked duplicate' },
+  'report.delete': { label: 'Report deleted', color: RED },
+  'attachment.pin': { label: 'Attachment pinned' },
+  'settings.roles': { label: 'Role mapping updated' },
+  'settings.gate': { label: 'Account-age gate updated' },
+  'settings.webhook': { label: 'Announcement settings updated' },
+  'settings.dm': { label: 'DM settings updated' },
+  'user.block': { label: 'User blocked', color: RED },
+  'user.unblock': { label: 'User unblocked', color: GREEN },
+  'staff.grant': { label: 'Staff granted', color: GREEN },
+  'staff.revoke': { label: 'Staff revoked', color: RED },
+};
+
 export async function logAction(
   actor: Pick<SessionUser, 'id' | 'username'>,
   action: string,
   target?: string | null,
   detail?: string | null,
+  url?: string | null,
 ) {
   await db()
     .insert(audit)
@@ -89,15 +110,19 @@ export async function logAction(
     });
 
   try {
-    const logUrl = await readSetting('webhook_url');
-    if (!logUrl) return;
-    const parts = [`**${actor.username}** \`${action}\``];
-    if (target) parts.push(`→ ${target}`);
-    if (detail) parts.push(`— ${detail}`);
-    await fetch(logUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: parts.join(' '), allowed_mentions: { parse: [] } }),
+    const webhookUrl = await readSetting('webhook_url');
+    if (!webhookUrl) return;
+    const meta = ACTION_META[action];
+    const fields: { name: string; value: string; inline?: boolean }[] = [
+      { name: 'By', value: actor.username, inline: true },
+    ];
+    if (target) fields.push({ name: 'Target', value: target, inline: true });
+    await send(webhookUrl, {
+      title: meta?.label ?? action,
+      description: detail ?? undefined,
+      url: url ?? undefined,
+      color: meta?.color,
+      fields,
     });
   } catch (err) {
     console.error('[log webhook] failed to post', err);

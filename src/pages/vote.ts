@@ -25,7 +25,13 @@ export const POST: APIRoute = async (ctx) => {
 
   const result = await toggleVote(reportId, user.id);
   const cf = ctx.locals.cfContext;
-  const log = logAction(user, result === 'added' ? 'vote.add' : 'vote.remove', String(reportId));
+  const log = logAction(
+    user,
+    result === 'added' ? 'vote.add' : 'vote.remove',
+    String(reportId),
+    null,
+    `${ctx.url.origin}/report/${reportId}`,
+  );
   if (result === 'added') {
     const announce = announceDemand(reportId, ctx.url.origin);
     if (cf) { cf.waitUntil(log); cf.waitUntil(announce); }

@@ -220,6 +220,7 @@ export const POST: APIRoute = async (ctx) => {
     replyToId != null ? 'comment.reply' : 'comment.add',
     `report #${reportId}`,
     logMsg,
+    reportUrl,
   );
   dmTasks.push(log);
 
@@ -287,6 +288,7 @@ export const DELETE: APIRoute = async (ctx) => {
     'comment.delete',
     `report #${comment.reportId}`,
     isAuthor ? 'own comment' : 'by staff',
+    `${ctx.url.origin}/report/${comment.reportId}`,
   );
   const cf = ctx.locals.cfContext;
   if (cf) cf.waitUntil(log);

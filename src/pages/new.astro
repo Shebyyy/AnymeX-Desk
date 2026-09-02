@@ -88,7 +88,13 @@ if (Astro.request.method === 'POST') {
     const dup = await findDuplicate(kind, category, platform, normalizeTitle(title));
     if (dup) {
       await ensureVote(dup.id, user.id);
-      const log = logAction(user, 'report.join_duplicate', `report #${dup.id}`, normalizeTitle(title));
+      const log = logAction(
+        user,
+        'report.join_duplicate',
+        `report #${dup.id}`,
+        normalizeTitle(title),
+        `${Astro.url.origin}/report/${dup.id}`,
+      );
       const cf1 = Astro.locals.cfContext;
       if (cf1) cf1.waitUntil(log);
       else await log;
@@ -123,7 +129,13 @@ if (Astro.request.method === 'POST') {
       await ensureVote(created.id, user.id);
       const after: Promise<unknown>[] = [
         announceFiled(created, Astro.url.origin),
-        logAction(user, 'report.file', `report #${created.id}`, `${created.kind}: ${created.title}`),
+        logAction(
+          user,
+          'report.file',
+          `report #${created.id}`,
+          `${created.kind}: ${created.title}`,
+          `${Astro.url.origin}/report/${created.id}`,
+        ),
       ];
       const cf = Astro.locals.cfContext;
       if (cf) for (const task of after) cf.waitUntil(task);

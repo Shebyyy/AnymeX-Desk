@@ -49,7 +49,13 @@ export const PUT: APIRoute = async (ctx) => {
     .set({ attachmentCount: sql`${reports.attachmentCount} + 1` })
     .where(eq(reports.id, reportId));
 
-  await logAction(gate.user, 'attachment.pin', String(attachmentId), `pinned ${updated.fileName} to report #${reportId}`);
+  await logAction(
+    gate.user,
+    'attachment.pin',
+    String(attachmentId),
+    `pinned ${updated.fileName} to report #${reportId}`,
+    `${ctx.url.origin}/report/${reportId}`,
+  );
 
   return json({ pinned: true });
 };
