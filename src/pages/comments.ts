@@ -204,9 +204,8 @@ export const POST: APIRoute = async (ctx) => {
     dmTasks.push(notif);
   }
 
-  /* Notify whoever they replied to, if that's a different person than the
-     reporter (already notified above) and not themself. */
-  if (replyToId != null && parentAuthorId && parentAuthorId !== user.id && parentAuthorId !== report.reporterId) {
+  /* Notify whoever they replied to, if it's not themself. */
+  if (replyToId != null && parentAuthorId && parentAuthorId !== user.id) {
     const notif = db()
       .insert(notifications)
       .values({
