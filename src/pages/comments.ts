@@ -213,9 +213,10 @@ export const POST: APIRoute = async (ctx) => {
         reportId,
         kind: 'comment',
       });
+    const commentUrl = `${reportUrl}#comment-${comment.id}`;
     const dmText = body
-      ? `**${user.username}** replied to your comment on "${report.title}":\n> ${body.slice(0, 300)}\n${reportUrl}`
-      : `**${user.username}** replied with an attachment to your comment on "${report.title}".\n${reportUrl}`;
+      ? `**${user.username}** replied to your comment on "${report.title}":\n> ${body.slice(0, 300)}\n${commentUrl}`
+      : `**${user.username}** replied with an attachment to your comment on "${report.title}".\n${commentUrl}`;
     const dm = sendDiscordDm(parentAuthorId, dmText);
     dmTasks.push(notif, dm);
     alreadyNotified.add(parentAuthorId);
@@ -224,6 +225,7 @@ export const POST: APIRoute = async (ctx) => {
   /* @mentions — notify + DM anyone tagged who isn't already being notified. */
   if (body) {
     const mentioned = await resolveMentions(body, user.id, alreadyNotified);
+    const commentUrl = `${reportUrl}#comment-${comment.id}`;
     for (const target of mentioned) {
       const notif = db()
         .insert(notifications)
@@ -233,7 +235,7 @@ export const POST: APIRoute = async (ctx) => {
           kind: 'mentioned',
           detail: `${user.username} mentioned you`,
         });
-      const dmText = `**${user.username}** mentioned you in a comment on "${report.title}":\n> ${body.slice(0, 300)}\n${reportUrl}`;
+      const dmText = `**${user.username}** mentioned you in a comment on "${report.title}":\n> ${body.slice(0, 300)}\n${commentUrl}`;
       dmTasks.push(notif, sendDiscordDm(target.id, dmText));
       alreadyNotified.add(target.id);
     }
@@ -245,7 +247,7 @@ export const POST: APIRoute = async (ctx) => {
     replyToId != null ? 'comment.reply' : 'comment.add',
     `report #${reportId}`,
     logMsg,
-    reportUrl,
+    `${reportUrl}#comment-${comment.id}`,
   );
   dmTasks.push(log);
 
@@ -317,8 +319,9 @@ export const PUT: APIRoute = async (ctx) => {
 
   /* @mentions added on edit still notify + DM (skip the author themself). */
   const dmTasks: Promise<unknown>[] = [];
+  const reportUrl = `${ctx.url.origin}/report/${comment.reportId}`;
+  const commentUrl = `${reportUrl}#comment-${commentId}`;
   if (report) {
-    const reportUrl = `${ctx.url.origin}/report/${comment.reportId}`;
     const mentioned = await resolveMentions(body, user.id);
     for (const target of mentioned) {
       dmTasks.push(
@@ -330,12 +333,12 @@ export const PUT: APIRoute = async (ctx) => {
         }),
         sendDiscordDm(
           target.id,
-          `**${user.username}** mentioned you in an edited comment on "${report.title}":\n> ${body.slice(0, 300)}\n${reportUrl}`,
+          `**${user.username}** mentioned you in an edited comment on "${report.title}":\n> ${body.slice(0, 300)}\n${commentUrl}`,
         ),
       );
     }
   }
-  const log = logAction(user, 'comment.edit', `report #${comment.reportId}`, body.slice(0, 200), `${ctx.url.origin}/report/${comment.reportId}`);
+  const log = logAction(user, 'comment.edit', `report #${comment.reportId}`, body.slice(0, 200), commentUrl);
   dmTasks.push(log);
 
   const cf = ctx.locals.cfContext;

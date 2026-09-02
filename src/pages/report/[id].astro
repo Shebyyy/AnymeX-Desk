@@ -387,6 +387,7 @@ Astro.response.headers.set(
           return (
             <div
               class="comment"
+              id={`comment-${c.id}`}
               data-comment-id={c.id}
               data-is-reply={c.replyToId != null}
               style={depth > 0 ? `margin-inline-start: calc(${depth} * var(--space-6));` : undefined}
@@ -959,7 +960,15 @@ Astro.response.headers.set(
     color: var(--text-muted);
     font-size: var(--text-sm);
   }
-  .comment { padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-inset); }
+  .comment { padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-inset); scroll-margin-top: var(--space-6); }
+  .comment:target {
+    border-color: var(--accent, #f5c542);
+    animation: comment-highlight 2s ease-out;
+  }
+  @keyframes comment-highlight {
+    from { background: color-mix(in srgb, var(--accent, #f5c542) 18%, var(--surface-inset)); }
+    to { background: var(--surface-inset); }
+  }
   .comment[data-is-reply="true"] {
     margin-inline-start: var(--space-6);
     border-inline-start: 2px solid var(--border-default);
