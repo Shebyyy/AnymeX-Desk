@@ -199,7 +199,10 @@ export const POST: APIRoute = async (ctx) => {
         reportId,
         kind: 'comment',
       });
-    dmTasks.push(notif);
+    const dmText = body
+      ? `**${user.username}** commented on your report "${report.title}":\n> ${body.slice(0, 300)}\n${reportUrl}`
+      : `**${user.username}** added an attachment to your report "${report.title}".\n${reportUrl}`;
+    dmTasks.push(notif, sendDiscordDm(report.reporterId, dmText));
     alreadyNotified.add(report.reporterId);
   }
 
