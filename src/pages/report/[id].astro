@@ -142,6 +142,7 @@ const [user, reporter, reportAttachments, reportComments, commentAttachments] = 
       id: comments.id,
       body: comments.body,
       createdAt: comments.createdAt,
+      updatedAt: comments.updatedAt,
       userId: comments.userId,
       username: users.username,
       avatarHash: users.avatarHash,
@@ -398,12 +399,13 @@ Astro.response.headers.set(
                   )}
                   <span class="comment-username">{c.username}</span>
                   <span class="comment-time">{relativeAge(c.createdAt)} ago</span>
+                  {c.updatedAt !== c.createdAt && <span class="comment-edited">(edited)</span>}
                 </div>
               </div>
               {replyToUsername && (
                 <p class="reply-context">↳ replying to <strong>{replyToUsername}</strong></p>
               )}
-              {c.body && <p class="comment-body">{c.body}</p>}
+              {c.body && <p class="comment-body" data-comment-body>{c.body}</p>}
               {cAtts.length > 0 && (
                 <div class="comment-attachments">
                   {cAtts.map((att) => (
@@ -433,16 +435,36 @@ Astro.response.headers.set(
                   ))}
                 </div>
               )}
-              {user && (
-                <button
-                  type="button"
-                  class="reply-btn"
-                  data-comment-id={c.id}
-                  data-username={c.username}
-                >
-                  Reply
-                </button>
-              )}
+              <div class="comment-actions">
+                {user && (
+                  <button
+                    type="button"
+                    class="reply-btn"
+                    data-comment-id={c.id}
+                    data-username={c.username}
+                  >
+                    Reply
+                  </button>
+                )}
+                {user && user.id === c.userId && c.body && (
+                  <button
+                    type="button"
+                    class="reply-btn edit-btn"
+                    data-comment-id={c.id}
+                  >
+                    Edit
+                  </button>
+                )}
+                {user && (user.id === c.userId || canModerate) && (
+                  <button
+                    type="button"
+                    class="reply-btn delete-comment-btn"
+                    data-comment-id={c.id}
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}
@@ -461,14 +483,17 @@ Astro.response.headers.set(
             <button type="button" class="btn btn-ghost" id="attach-btn" title="Attach a file">📎</button>
             <span class="file-chip" id="file-chip"></span>
           </div>
-          <textarea
-            name="body"
-            class="textarea"
-            id="comment-body"
-            rows="3"
-            maxlength="2000"
-            placeholder="Add a comment..."
-          ></textarea>
+          <div class="mention-wrap">
+            <textarea
+              name="body"
+              class="textarea"
+              id="comment-body"
+              rows="3"
+              maxlength="2000"
+              placeholder="Add a comment... use @ to mention someone"
+            ></textarea>
+            <ul class="mention-dropdown" id="mention-dropdown" style="display: none;"></ul>
+          </div>
           <div class="comment-form-actions">
             <span class="char-hint">Max 2000 characters</span>
             <button class="btn" type="submit" id="comment-btn">Post</button>
@@ -601,6 +626,183 @@ Astro.response.headers.set(
       commentBtn!.disabled = false;
       commentBtn!.textContent = 'Post';
     }
+  });
+
+  // ── @mention autocomplete ───────────────────────────────────────────
+  const mentionDropdown = document.getElementById('mention-dropdown') as HTMLUListElement | null;
+  let mentionStart = -1; // index of the '@' that's currently being completed
+  let mentionResults: { id: string; username: string; avatarUrl: string | null }[] = [];
+  let mentionActiveIndex = -1;
+  let mentionAbort: AbortController | null = null;
+
+  function closeMentionDropdown() {
+    mentionStart = -1;
+    mentionActiveIndex = -1;
+    if (mentionDropdown) { mentionDropdown.style.display = 'none'; mentionDropdown.innerHTML = ''; }
+  }
+
+  function renderMentionDropdown() {
+    if (!mentionDropdown) return;
+    if (mentionResults.length === 0) { closeMentionDropdown(); return; }
+    mentionDropdown.innerHTML = '';
+    mentionResults.forEach((u, i) => {
+      const li = document.createElement('li');
+      li.className = 'mention-option' + (i === mentionActiveIndex ? ' active' : '');
+      li.dataset.index = String(i);
+      li.innerHTML = `${u.avatarUrl ? `<img src="${u.avatarUrl}" width="18" height="18" alt="" />` : ''}<span>${u.username}</span>`;
+      li.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // keep textarea focus
+        applyMention(i);
+      });
+      mentionDropdown.appendChild(li);
+    });
+    mentionDropdown.style.display = '';
+  }
+
+  function applyMention(i: number) {
+    const u = mentionResults[i];
+    if (!u || !commentBody || mentionStart < 0) return;
+    const caret = commentBody.selectionStart ?? commentBody.value.length;
+    const before = commentBody.value.slice(0, mentionStart);
+    const after = commentBody.value.slice(caret);
+    const insertion = `@${u.username} `;
+    commentBody.value = before + insertion + after;
+    const newCaret = before.length + insertion.length;
+    commentBody.setSelectionRange(newCaret, newCaret);
+    closeMentionDropdown();
+  }
+
+  async function queryMentions(q: string) {
+    mentionAbort?.abort();
+    mentionAbort = new AbortController();
+    try {
+      const res = await fetch(`/users/search?q=${encodeURIComponent(q)}`, { signal: mentionAbort.signal });
+      if (!res.ok) { closeMentionDropdown(); return; }
+      mentionResults = await res.json();
+      mentionActiveIndex = mentionResults.length > 0 ? 0 : -1;
+      renderMentionDropdown();
+    } catch {
+      // aborted or network hiccup — just drop it, not worth surfacing
+    }
+  }
+
+  commentBody?.addEventListener('input', () => {
+    const caret = commentBody.selectionStart ?? 0;
+    const uptoCaret = commentBody.value.slice(0, caret);
+    const match = uptoCaret.match(/(?:^|\s)@([a-zA-Z0-9_.]{0,32})$/);
+    if (match) {
+      mentionStart = caret - match[1].length - 1;
+      const q = match[1];
+      if (q.length > 0) queryMentions(q);
+      else closeMentionDropdown();
+    } else {
+      closeMentionDropdown();
+    }
+  });
+
+  commentBody?.addEventListener('keydown', (e) => {
+    if (mentionStart < 0 || mentionResults.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      mentionActiveIndex = (mentionActiveIndex + 1) % mentionResults.length;
+      renderMentionDropdown();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      mentionActiveIndex = (mentionActiveIndex - 1 + mentionResults.length) % mentionResults.length;
+      renderMentionDropdown();
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      if (mentionActiveIndex >= 0) {
+        e.preventDefault();
+        applyMention(mentionActiveIndex);
+      }
+    } else if (e.key === 'Escape') {
+      closeMentionDropdown();
+    }
+  });
+
+  commentBody?.addEventListener('blur', () => {
+    // Delay so a mousedown selection on the dropdown can still register.
+    setTimeout(closeMentionDropdown, 150);
+  });
+
+  // ── Edit a comment ───────────────────────────────────────────────────
+  document.querySelectorAll('.edit-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const commentId = (btn as HTMLElement).dataset.commentId;
+      const commentEl = document.querySelector(`.comment[data-comment-id="${commentId}"]`);
+      const bodyEl = commentEl?.querySelector('[data-comment-body]') as HTMLElement | null;
+      if (!commentId || !commentEl || !bodyEl || commentEl.querySelector('.edit-form')) return;
+
+      const original = bodyEl.textContent ?? '';
+      bodyEl.style.display = 'none';
+
+      const form = document.createElement('div');
+      form.className = 'edit-form';
+      form.innerHTML = `
+        <textarea class="textarea edit-textarea" maxlength="2000">${original.replace(/</g, '&lt;')}</textarea>
+        <div class="edit-form-actions">
+          <button type="button" class="btn edit-save-btn">Save</button>
+          <button type="button" class="btn btn-ghost edit-cancel-btn">Cancel</button>
+        </div>
+      `;
+      bodyEl.insertAdjacentElement('afterend', form);
+      const textarea = form.querySelector('.edit-textarea') as HTMLTextAreaElement;
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+      form.querySelector('.edit-cancel-btn')?.addEventListener('click', () => {
+        form.remove();
+        bodyEl.style.display = '';
+      });
+
+      form.querySelector('.edit-save-btn')?.addEventListener('click', async () => {
+        const newBody = textarea.value.trim();
+        if (!newBody) { alert('Comment cannot be empty'); return; }
+        const saveBtn = form.querySelector('.edit-save-btn') as HTMLButtonElement;
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+        try {
+          const fd = new FormData();
+          fd.append('commentId', commentId);
+          fd.append('body', newBody);
+          const res = await fetch('/comments', { method: 'PUT', body: fd });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: 'Failed to save' }));
+            alert(err.error || 'Failed to save');
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save';
+            return;
+          }
+          window.location.reload();
+        } catch {
+          alert('Network error');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save';
+        }
+      });
+    });
+  });
+
+  // ── Delete a comment ─────────────────────────────────────────────────
+  document.querySelectorAll('.delete-comment-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Delete this comment? This cannot be undone.')) return;
+      const commentId = (btn as HTMLElement).dataset.commentId;
+      if (!commentId) return;
+      (btn as HTMLButtonElement).disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('commentId', commentId);
+        const res = await fetch('/comments', { method: 'DELETE', body: fd });
+        if (res.ok) { window.location.reload(); return; }
+        const err = await res.json().catch(() => ({ error: 'Failed to delete' }));
+        alert(err.error || 'Failed to delete');
+        (btn as HTMLButtonElement).disabled = false;
+      } catch {
+        alert('Network error');
+        (btn as HTMLButtonElement).disabled = false;
+      }
+    });
   });
 
   // ── Pin attachment (mod only) ─────────────────────────────────────
@@ -777,6 +979,40 @@ Astro.response.headers.set(
     padding: 0;
   }
   .reply-btn:hover { color: var(--text-primary); text-decoration: underline; }
+  .comment-actions { display: flex; gap: var(--space-3); margin-block-start: var(--space-2); }
+  .comment-edited { color: var(--text-muted); font-size: var(--text-xs); font-style: italic; }
+  .edit-form { margin-block-start: var(--space-2); }
+  .edit-textarea { width: 100%; min-block-size: 4rem; }
+  .edit-form-actions { display: flex; gap: var(--space-2); margin-block-start: var(--space-2); }
+  .mention-wrap { position: relative; }
+  .mention-dropdown {
+    position: absolute;
+    z-index: 20;
+    inset-inline-start: 0;
+    inset-block-start: calc(100% + 2px);
+    min-inline-size: 180px;
+    max-inline-size: 260px;
+    max-block-size: 220px;
+    overflow-y: auto;
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    background: var(--surface-raised, var(--surface-inset));
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  .mention-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    cursor: pointer;
+  }
+  .mention-option img { border-radius: 50%; display: block; }
+  .mention-option.active, .mention-option:hover { background: var(--surface-active); }
   .reply-indicator {
     font-size: var(--text-sm);
     color: var(--text-secondary);

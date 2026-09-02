@@ -9,8 +9,9 @@ _params.delete('_cb');
 const here = Astro.url.pathname + (_params.toString() ? `?${_params.toString()}` : '');
 const signInHref = `/me?next=${encodeURIComponent(here)}`;
 const tabs = [
-  { href: '/', label: 'Bugs', match: (p: string) => p === '/' },
+  { href: '/', label: 'Bugs', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') !== 'suggestion' && new URL(Astro.url).searchParams.get('kind') !== 'extension' },
   { href: '/?kind=suggestion', label: 'Suggestions', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') === 'suggestion' },
+  { href: '/?kind=extension', label: 'Extension Issues', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') === 'extension' },
 ];
 
 const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';

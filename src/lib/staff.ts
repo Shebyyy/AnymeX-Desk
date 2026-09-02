@@ -75,6 +75,7 @@ const ACTION_META: Record<string, { label: string; color?: number }> = {
   'vote.remove': { label: 'Vote removed' },
   'comment.add': { label: 'New comment' },
   'comment.reply': { label: 'New reply' },
+  'comment.edit': { label: 'Comment edited' },
   'comment.delete': { label: 'Comment deleted', color: RED },
   'report.file': { label: 'Report filed', color: GREEN },
   'report.join_duplicate': { label: 'Joined duplicate report' },

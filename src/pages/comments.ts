@@ -8,6 +8,7 @@ import { atLeast } from '../lib/levels';
 import { levelOf, logAction } from '../lib/staff';
 import { isReportId } from '../lib/writes';
 import { sendDiscordDm } from '../lib/notify';
+import { resolveMentions } from '../lib/mentions';
 
 export const prerender = false;
 
@@ -31,6 +32,7 @@ export const GET: APIRoute = async (ctx) => {
       username: users.username,
       avatarHash: users.avatarHash,
       createdAt: comments.createdAt,
+      updatedAt: comments.updatedAt,
       replyToId: comments.replyToId,
     })
     .from(comments)
@@ -71,6 +73,8 @@ export const GET: APIRoute = async (ctx) => {
       username: r.username,
       avatarUrl: avatarUrl({ id: r.userId, avatarHash: r.avatarHash }),
       createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+      edited: r.updatedAt !== r.createdAt,
       attachments: attByComment.get(r.id) ?? [],
       replyToId: r.replyToId,
       replyToUsername: r.replyToId != null ? usernameById.get(r.replyToId) ?? null : null,
@@ -185,6 +189,7 @@ export const POST: APIRoute = async (ctx) => {
   const reportUrl = `${ctx.url.origin}/report/${reportId}`;
   const dmTasks: Promise<unknown>[] = [];
   const cf = ctx.locals.cfContext;
+  const alreadyNotified = new Set<string>();
 
   if (report.reporterId !== user.id) {
     const notif = db()
@@ -195,6 +200,7 @@ export const POST: APIRoute = async (ctx) => {
         kind: 'comment',
       });
     dmTasks.push(notif);
+    alreadyNotified.add(report.reporterId);
   }
 
   /* Notify whoever they replied to, if that's a different person than the
@@ -212,6 +218,25 @@ export const POST: APIRoute = async (ctx) => {
       : `**${user.username}** replied with an attachment to your comment on "${report.title}".\n${reportUrl}`;
     const dm = sendDiscordDm(parentAuthorId, dmText);
     dmTasks.push(notif, dm);
+    alreadyNotified.add(parentAuthorId);
+  }
+
+  /* @mentions — notify + DM anyone tagged who isn't already being notified. */
+  if (body) {
+    const mentioned = await resolveMentions(body, user.id, alreadyNotified);
+    for (const target of mentioned) {
+      const notif = db()
+        .insert(notifications)
+        .values({
+          userId: target.id,
+          reportId,
+          kind: 'mentioned',
+          detail: `${user.username} mentioned you`,
+        });
+      const dmText = `**${user.username}** mentioned you in a comment on "${report.title}":\n> ${body.slice(0, 300)}\n${reportUrl}`;
+      dmTasks.push(notif, sendDiscordDm(target.id, dmText));
+      alreadyNotified.add(target.id);
+    }
   }
 
   const logMsg = body ? body.slice(0, 200) : '(attachment only)';
@@ -247,6 +272,82 @@ export const POST: APIRoute = async (ctx) => {
     attachment,
     replyToId: comment.replyToId,
     replyToUsername,
+  });
+};
+
+/* ── PUT — edit a comment ─────────────────────────────────────────────── */
+export const PUT: APIRoute = async (ctx) => {
+  const user = await currentUser(ctx);
+  if (!user) return json({ error: 'sign-in' }, 401);
+
+  const form = await ctx.request.formData();
+  const commentId = Number(form.get('commentId'));
+  const body = String(form.get('body') ?? '').trim();
+  if (!Number.isSafeInteger(commentId) || commentId <= 0) {
+    return json({ error: 'invalid comment id' }, 400);
+  }
+  if (!body) return json({ error: 'body is required' }, 400);
+  if (body.length > 2000) return json({ error: 'body too long (max 2000 chars)' }, 400);
+
+  /* Load the comment to check ownership + get the report for mention DMs. */
+  const [comment] = await db()
+    .select({ id: comments.id, userId: comments.userId, reportId: comments.reportId })
+    .from(comments)
+    .where(eq(comments.id, commentId));
+  if (!comment) return json({ error: 'comment not found' }, 404);
+
+  /* Only the author can edit — staff use delete for moderation, not rewrites. */
+  if (comment.userId !== user.id) return json({ error: 'forbidden' }, 403);
+
+  const [report] = await db()
+    .select({ id: reports.id, title: reports.title })
+    .from(reports)
+    .where(eq(reports.id, comment.reportId));
+
+  const [updated] = await db()
+    .update(comments)
+    .set({ body, updatedAt: sql`(unixepoch())` })
+    .where(eq(comments.id, commentId))
+    .returning({
+      id: comments.id,
+      body: comments.body,
+      createdAt: comments.createdAt,
+      updatedAt: comments.updatedAt,
+    });
+
+  /* @mentions added on edit still notify + DM (skip the author themself). */
+  const dmTasks: Promise<unknown>[] = [];
+  if (report) {
+    const reportUrl = `${ctx.url.origin}/report/${comment.reportId}`;
+    const mentioned = await resolveMentions(body, user.id);
+    for (const target of mentioned) {
+      dmTasks.push(
+        db().insert(notifications).values({
+          userId: target.id,
+          reportId: comment.reportId,
+          kind: 'mentioned',
+          detail: `${user.username} mentioned you`,
+        }),
+        sendDiscordDm(
+          target.id,
+          `**${user.username}** mentioned you in an edited comment on "${report.title}":\n> ${body.slice(0, 300)}\n${reportUrl}`,
+        ),
+      );
+    }
+  }
+  const log = logAction(user, 'comment.edit', `report #${comment.reportId}`, body.slice(0, 200), `${ctx.url.origin}/report/${comment.reportId}`);
+  dmTasks.push(log);
+
+  const cf = ctx.locals.cfContext;
+  if (cf) for (const task of dmTasks) cf.waitUntil(task);
+  else await Promise.all(dmTasks);
+
+  return json({
+    id: updated.id,
+    body: updated.body,
+    createdAt: updated.createdAt,
+    updatedAt: updated.updatedAt,
+    edited: updated.updatedAt !== updated.createdAt,
   });
 };
 
