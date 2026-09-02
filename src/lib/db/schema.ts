@@ -18,7 +18,7 @@ import {
 
 // ─── Report kinds ───────────────────────────────────────────────────────────
 
-export const KINDS = ['bug', 'suggestion'] as const;
+export const KINDS = ['bug', 'suggestion', 'extension'] as const;
 
 // ─── Bug categories ─────────────────────────────────────────────────────────
 
@@ -47,6 +47,23 @@ export const SUGGESTION_CATEGORIES = [
   'manga_reader',
   'novel_reader',
   'download',
+  'other',
+] as const;
+
+// ─── Extension issue sources ─────────────────────────────────────────────────
+//
+// "Category" for an extension-issue report is which source app the affected
+// extension runs on. Mirrors the Discord ticket bot's "Extension type(s)
+// affected" checkbox group, collapsed to a single pick to match this table's
+// one-category-per-report shape (see the `reports_dedup` index).
+
+export const EXTENSION_SOURCES = [
+  'mihon_aniyomi',
+  'mangayomi',
+  'sora',
+  'lnreader',
+  'cloudstream',
+  'kotatsu',
   'other',
 ] as const;
 
@@ -93,6 +110,12 @@ export const CATEGORY_LABELS: Record<string, string> = {
   extensions: 'Extensions',
   download: 'Download',
   other: 'Other',
+  mihon_aniyomi: 'Mihon / Aniyomi',
+  mangayomi: 'Mangayomi',
+  sora: 'Sora',
+  lnreader: 'LNReader',
+  cloudstream: 'Cloudstream',
+  kotatsu: 'Kotatsu',
 };
 
 export const PLATFORM_LABELS: Record<string, string> = {
@@ -116,6 +139,7 @@ export const STATUS_LABELS: Record<string, string> = {
 export const KIND_LABELS: Record<string, string> = {
   bug: 'Bug',
   suggestion: 'Suggestion',
+  extension: 'Extension Issue',
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -156,6 +180,16 @@ export const reports = sqliteTable(
 
     /** For bugs: steps to reproduce the issue. */
     stepsToReproduce: text('steps_to_reproduce'),
+
+    /**
+     * For extension-issue reports only, mirroring the Discord ticket bot form:
+     */
+    /** Gate: reporter confirms the extension works in its native app and only fails in AnymeX. */
+    testedNativeApp: integer('tested_native_app', { mode: 'boolean' }),
+    /** Exact name(s) of the affected extension(s), one per line. */
+    extensionNames: text('extension_names'),
+    /** Optional link to the extension's repository. */
+    extensionRepo: text('extension_repo'),
 
     status: text('status', { enum: STATUSES }).notNull().default('open'),
     reporterId: text('reporter_id')

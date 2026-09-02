@@ -5,6 +5,7 @@ import {
   KIND_LABELS,
   BUG_CATEGORIES,
   SUGGESTION_CATEGORIES,
+  EXTENSION_SOURCES,
   CATEGORY_LABELS,
   PLATFORMS,
   PLATFORM_LABELS,
@@ -36,6 +37,9 @@ type Draft = {
   title: string;
   body: string;
   stepsToReproduce: string;
+  testedNativeApp: boolean;
+  extensionNames: string;
+  extensionRepo: string;
 };
 
 let posted: Draft | null = null;
@@ -52,10 +56,24 @@ if (Astro.request.method === 'POST') {
   const title = String(form.get('title') ?? '').trim().slice(0, 200);
   const body = String(form.get('body') ?? '').trim().slice(0, 5000);
   const stepsToReproduce = String(form.get('stepsToReproduce') ?? '').trim().slice(0, 5000);
+  const testedNativeApp = form.get('testedNativeApp') === 'on';
+  const extensionNames = String(form.get('extensionNames') ?? '').trim().slice(0, 4000);
+  const extensionRepo = String(form.get('extensionRepo') ?? '').trim().slice(0, 2000);
 
   const isAjax = Astro.request.headers.get('accept') === 'application/json';
 
-  const submitted: Draft = { kind, category, platform, appVersion, title, body, stepsToReproduce };
+  const submitted: Draft = {
+    kind,
+    category,
+    platform,
+    appVersion,
+    title,
+    body,
+    stepsToReproduce,
+    testedNativeApp,
+    extensionNames,
+    extensionRepo,
+  };
 
   if (!user) {
     if (isAjax) return json({ error: 'sign-in' }, 401);
@@ -70,17 +88,28 @@ if (Astro.request.method === 'POST') {
   posted = submitted;
 
   const validKinds = KINDS as readonly string[];
-  const validCats = kind === 'suggestion' ? SUGGESTION_CATEGORIES as readonly string[] : BUG_CATEGORIES as readonly string[];
+  const validCats =
+    kind === 'suggestion'
+      ? (SUGGESTION_CATEGORIES as readonly string[])
+      : kind === 'extension'
+        ? (EXTENSION_SOURCES as readonly string[])
+        : (BUG_CATEGORIES as readonly string[]);
   const validPlatforms = PLATFORMS as readonly string[];
 
   if (!validKinds.includes(kind)) {
-    error = 'Pick a type: bug or suggestion.';
+    error = 'Pick a type: bug, suggestion, or extension issue.';
   } else if (!validCats.includes(category)) {
-    error = 'Pick a category.';
+    error = kind === 'extension' ? 'Pick which source the extension is for.' : 'Pick a category.';
   } else if (!validPlatforms.includes(platform)) {
     error = 'Pick a platform.';
   } else if (!title || title.length < 5) {
     error = 'Give your report a title, at least 5 characters.';
+  } else if (kind === 'extension' && !testedNativeApp) {
+    error = 'Confirm you tested the extension in its native app and the issue only happens in AnymeX.';
+  } else if (kind === 'extension' && !extensionNames) {
+    error = 'Enter the exact name of the affected extension(s).';
+  } else if (kind === 'extension' && !body) {
+    error = 'Describe what is wrong with the extension.';
   } else if (await overFilingLimit(user.id)) {
     error = FILING_COOLDOWN_MESSAGE;
   } else {
@@ -112,6 +141,9 @@ if (Astro.request.method === 'POST') {
         title: normalizeTitle(title),
         body: body || null,
         stepsToReproduce: kind === 'bug' ? (stepsToReproduce || null) : null,
+        testedNativeApp: kind === 'extension' ? testedNativeApp : null,
+        extensionNames: kind === 'extension' ? (extensionNames || null) : null,
+        extensionRepo: kind === 'extension' ? (extensionRepo || null) : null,
         reporterId: user.id,
       })
       .returning({
@@ -169,7 +201,7 @@ if (draft) {
 }
 
 const queryKind = Astro.url.searchParams.get('kind') ?? '';
-const kindLocked = queryKind === 'bug' || queryKind === 'suggestion';
+const kindLocked = queryKind === 'bug' || queryKind === 'suggestion' || queryKind === 'extension';
 
 const shown = {
   kind: posted?.kind || draft?.kind || queryKind || 'bug',
@@ -179,17 +211,55 @@ const shown = {
   title: posted?.title || draft?.title || '',
   body: posted?.body || draft?.body || '',
   stepsToReproduce: posted?.stepsToReproduce || draft?.stepsToReproduce || '',
+  testedNativeApp: posted?.testedNativeApp || draft?.testedNativeApp || false,
+  extensionNames: posted?.extensionNames || draft?.extensionNames || '',
+  extensionRepo: posted?.extensionRepo || draft?.extensionRepo || '',
 };
 
-const activeKind = (kindLocked ? queryKind : shown.kind) as 'bug' | 'suggestion';
-const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CATEGORIES;
+const activeKind = (kindLocked ? queryKind : shown.kind) as 'bug' | 'suggestion' | 'extension';
+const categories =
+  activeKind === 'suggestion'
+    ? SUGGESTION_CATEGORIES
+    : activeKind === 'extension'
+      ? EXTENSION_SOURCES
+      : BUG_CATEGORIES;
+
+const TITLES: Record<'bug' | 'suggestion' | 'extension', string> = {
+  bug: 'File a Bug Report',
+  suggestion: 'File a Suggestion',
+  extension: 'Report an Extension Issue',
+};
+const LEDES: Record<'bug' | 'suggestion' | 'extension', string> = {
+  bug: 'Describe a problem you found in AnymeX.',
+  suggestion: 'Suggest a feature or improvement for AnymeX.',
+  extension: 'Report an extension that works correctly in its own app but not in AnymeX.',
+};
+const SUBMIT_LABELS: Record<'bug' | 'suggestion' | 'extension', string> = {
+  bug: 'Submit bug report',
+  suggestion: 'Submit suggestion',
+  extension: 'Submit extension issue report',
+};
+const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> = {
+  bug: 'Category',
+  suggestion: 'Category',
+  extension: 'Extension source',
+};
 ---
 
-<Base title={activeKind === 'bug' ? 'File a Bug Report' : 'File a Suggestion'} narrow>
-  <h1>{activeKind === 'bug' ? 'File a Bug Report' : 'File a Suggestion'}</h1>
-  <p class="lede">{activeKind === 'bug'
-    ? 'Describe a problem you found in AnymeX.'
-    : 'Suggest a feature or improvement for AnymeX.'}</p>
+<Base title={TITLES[activeKind]} narrow>
+  <h1>{TITLES[activeKind]}</h1>
+  <p class="lede">{LEDES[activeKind]}</p>
+
+  {
+    activeKind === 'extension' && (
+      <p class="note extension-warning" role="note">
+        Only report an extension issue if the extension works correctly in its dedicated
+        app but does <strong>not</strong> work in AnymeX. Please verify the source is
+        working outside AnymeX before submitting — reports found to be an issue with the
+        extension itself, not AnymeX, may get you blacklisted from reporting.
+      </p>
+    )
+  }
 
   {
     !user && (
@@ -228,7 +298,7 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
 
     {/* Step {kindLocked ? 1 : 2}: Category */}
     <section class="step">
-      <h2 class="step-h"><span class="step-n">{kindLocked ? 1 : 2}</span> Category</h2>
+      <h2 class="step-h"><span class="step-n">{kindLocked ? 1 : 2}</span> {CATEGORY_STEP_LABELS[activeKind]}</h2>
       <div class="segmented cats">
         {categories.map((c) => (
           <label class:active={shown.category === c}>
@@ -255,6 +325,22 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
     {/* Step {kindLocked ? 3 : 4}: Details */}
     <section class="step">
       <h2 class="step-h"><span class="step-n">{kindLocked ? 3 : 4}</span> Details</h2>
+
+      {shown.kind === 'extension' && (
+        <div class="field checkbox-field">
+          <label class="checkbox-label">
+            <input
+              type="checkbox"
+              name="testedNativeApp"
+              checked={shown.testedNativeApp}
+              required
+            />
+            <span>Yes, I tested it in the native app and the issue only occurs in AnymeX</span>
+          </label>
+          <p class="field-hint">If the issue is found to be with the extension itself, you may be blacklisted from reporting it.</p>
+        </div>
+      )}
+
       <div class="field">
         <label class="label" for="title">Title</label>
         <input
@@ -283,17 +369,52 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
         />
         <p class="field-hint">Found in AnymeX → Settings → About. Optional but very helpful.</p>
       </div>
+      {shown.kind === 'extension' && (
+        <div class="field">
+          <label class="label" for="extensionNames">Extension name(s)</label>
+          <textarea
+            class="textarea"
+            id="extensionNames"
+            name="extensionNames"
+            rows="2"
+            maxlength="4000"
+            required
+            placeholder="Enter the exact name of the affected extension(s), one per line"
+          >{shown.extensionNames}</textarea>
+        </div>
+      )}
+
       <div class="field">
-        <label class="label" for="body">Description</label>
+        <label class="label" for="body">{shown.kind === 'extension' ? 'Issue description' : 'Description'}</label>
         <textarea
           class="textarea"
           id="body"
           name="body"
           rows="4"
           maxlength="5000"
-          placeholder="What happened? What did you expect to happen?"
+          required={shown.kind === 'extension'}
+          placeholder={shown.kind === 'extension'
+            ? 'Describe what is wrong with the extension.'
+            : 'What happened? What did you expect to happen?'}
         >{shown.body}</textarea>
       </div>
+
+      {shown.kind === 'extension' && (
+        <div class="field">
+          <label class="label" for="extensionRepo">Extension repository</label>
+          <input
+            class="input"
+            id="extensionRepo"
+            name="extensionRepo"
+            type="text"
+            maxlength="2000"
+            value={shown.extensionRepo}
+            placeholder="Paste the extension repository URL"
+          />
+          <p class="field-hint">Optional.</p>
+        </div>
+      )}
+
       {shown.kind === 'bug' && (
         <div class="field">
           <label class="label" for="stepsToReproduce">Steps to reproduce</label>
@@ -313,7 +434,10 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
     {/* Step {kindLocked ? 4 : 5}: Attachments */}
     <section class="step">
       <h2 class="step-h"><span class="step-n">{kindLocked ? 4 : 5}</span> Attachments</h2>
-      <p class="field-hint">Images (JPG, PNG, WebP, GIF) up to 5 MB · Videos (MP4, WebM) up to 50 MB. You can also add more after submitting.</p>
+      <p class="field-hint">
+        Images (JPG, PNG, WebP, GIF) up to 5 MB · Videos (MP4, WebM) up to 50 MB. You can also add more after submitting.
+        {shown.kind === 'extension' && ' A screenshot from the native app alongside one from AnymeX helps a lot.'}
+      </p>
       <div class="upload-area" id="upload-area">
         <label class="upload-dropzone" for="file-input">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -329,8 +453,8 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
     </section>
 
     <div class="submit-row">
-      <button class="btn btn-primary btn-lg" type="submit" id="submit-btn">
-        {activeKind === 'bug' ? 'Submit bug report' : 'Submit suggestion'}
+      <button class="btn btn-primary btn-lg" type="submit" id="submit-btn" data-label={SUBMIT_LABELS[activeKind]}>
+        {SUBMIT_LABELS[activeKind]}
       </button>
     </div>
   </form>
@@ -445,7 +569,7 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
       } catch {
         alert('Network error — please try again.');
         submitBtn.disabled = false;
-        submitBtn.textContent = activeKind === 'bug' ? 'Submit bug report' : 'Submit suggestion';
+        submitBtn.textContent = submitBtn.dataset.label ?? 'Submit';
       }
     });
   </script>
@@ -459,6 +583,17 @@ const categories = activeKind === 'suggestion' ? SUGGESTION_CATEGORIES : BUG_CAT
 <style>
   h1 { font-size: var(--text-xl); }
   .lede { color: var(--text-tertiary); margin-block: var(--space-1) var(--space-6); }
+  .extension-warning { border-inline-start-color: var(--dead, #ed4245); }
+  .checkbox-field { margin-block-end: var(--space-4); }
+  .checkbox-label {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    cursor: pointer;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+  .checkbox-label input { margin-block-start: 3px; }
   .note {
     margin-block-end: var(--space-6);
     padding: var(--space-2) var(--space-3);

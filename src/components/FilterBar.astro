@@ -2,6 +2,7 @@
 import {
   BUG_CATEGORIES,
   SUGGESTION_CATEGORIES,
+  EXTENSION_SOURCES,
   PLATFORMS,
   CATEGORY_LABELS,
   PLATFORM_LABELS,
@@ -32,7 +33,8 @@ const {
 } = Astro.props;
 const views = BOARD_VIEW_COPY[kind];
 
-const categories = kind === 'bug' ? BUG_CATEGORIES : SUGGESTION_CATEGORIES;
+const categories =
+  kind === 'bug' ? BUG_CATEGORIES : kind === 'extension' ? EXTENSION_SOURCES : SUGGESTION_CATEGORIES;
 
 const sorts =
   state === 'open'

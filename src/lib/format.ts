@@ -81,7 +81,7 @@ export function platformLabel(platform: string): string {
 /* --- board views ---------------------------------------------------------- */
 
 /** Which kind the board is showing. Matches queries.BoardFilter. */
-export type BoardKind = 'bug' | 'suggestion';
+export type BoardKind = 'bug' | 'suggestion' | 'extension';
 
 /**
  * Everything a page says about the view it is showing.
@@ -177,7 +177,44 @@ const SUGGESTION_VIEWS: Record<BoardState, BoardViewCopy> = {
   },
 };
 
+const EXTENSION_VIEWS: Record<BoardState, BoardViewCopy> = {
+  open: {
+    chip: 'Open',
+    heading: 'Extension Issues',
+    lede: 'Extensions that work in their native app but not in AnymeX, ranked by demand.',
+    emptyTitle: 'No open extension issues',
+    emptyFiltered: 'No open extension issues match these filters. Try widening them.',
+    emptyAlone: 'No open extension issues yet. Found one? Be the first to report it.',
+    cta: { href: '/new?kind=extension', label: 'Report an extension issue', primary: true },
+    defaultSort: 'demand',
+    pagerNoun: 'open extension issues',
+  },
+  fixed: {
+    chip: 'Fixed',
+    heading: 'Fixed extension issues',
+    lede: 'Extension issues that have been fixed, most recently closed first.',
+    emptyTitle: 'Nothing fixed here yet',
+    emptyFiltered: 'No fixed extension issues match these filters. Try widening them.',
+    emptyAlone: 'No extension issue has been marked fixed yet.',
+    cta: { href: '/', label: 'See what is still open' },
+    defaultSort: 'fixed',
+    pagerNoun: 'fixed extension issues',
+  },
+  other: {
+    chip: 'Other',
+    heading: "Won't fix and duplicates",
+    lede: 'Extension issues closed without a fix: decided against, or merged into another report.',
+    emptyTitle: 'Nothing here yet',
+    emptyFiltered: 'No closed reports match these filters. Try widening them.',
+    emptyAlone: 'Nothing has been closed without a fix yet.',
+    cta: { href: '/', label: 'See what is still open' },
+    defaultSort: 'fixed',
+    pagerNoun: 'closed without a fix',
+  },
+};
+
 export const BOARD_VIEW_COPY: Record<BoardKind, Record<BoardState, BoardViewCopy>> = {
   bug: BUG_VIEWS,
   suggestion: SUGGESTION_VIEWS,
+  extension: EXTENSION_VIEWS,
 };

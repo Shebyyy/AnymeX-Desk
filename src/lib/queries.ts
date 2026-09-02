@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from './db/client';
 import { inIds } from './db/sql';
-import { OPEN_STATUSES, OTHER_STATUSES, STATUSES, reports, votes, type Report } from './db/schema';
+import { KINDS, OPEN_STATUSES, OTHER_STATUSES, STATUSES, reports, votes, type Report } from './db/schema';
 
 export type Sort = 'demand' | 'stalled' | 'recent' | 'fixed';
 
@@ -25,8 +25,8 @@ export function parseBoardState(raw: string | null): BoardState {
 export const PAGE_SIZE = 60;
 
 export interface BoardFilter {
-  /** `bug` or `suggestion`. */
-  kind?: 'bug' | 'suggestion';
+  /** `bug`, `suggestion`, or `extension`. */
+  kind?: 'bug' | 'suggestion' | 'extension';
   /** Category to filter by (e.g. 'video_player', 'ui_ux'). */
   category?: string;
   /** Platform to filter by (e.g. 'android', 'windows'). */
@@ -131,57 +131,52 @@ export async function myVotes(discordId: string, reportIds: number[]) {
   return new Set(rows.map((r) => r.reportId));
 }
 
-export interface BoardCounts {
-  bugs: number;
-  suggestions: number;
-  bugsStalled: number;
-  suggestionsStalled: number;
-  /** Fixed, per kind. */
-  bugsFixed: number;
-  suggestionsFixed: number;
-  /** Closed without a fix (`wont_fix` + `duplicate`), per kind. */
-  bugsOther: number;
-  suggestionsOther: number;
+/** Open / fixed / other / stalled tallies for one report kind. */
+export interface KindCounts {
+  open: number;
+  fixed: number;
+  other: number;
+  stalled: number;
 }
 
+/** Header counters, one entry per kind in {@link KINDS}. */
+export type BoardCounts = Record<(typeof KINDS)[number], KindCounts>;
+
 /**
- * Header counters. One round trip, not four.
+ * Header counters. One round trip, not one query per kind.
  *
  * All columns referenced are in reports_tallies, so this stays a covering index read.
+ * Generic over {@link KINDS}, so a new report kind needs no change here.
  */
 export async function boardCounts(): Promise<BoardCounts> {
-  const isBug = sql`kind = 'bug'`;
-  const isSuggestion = sql`kind = 'suggestion'`;
   const stalled = sql`created_at < unixepoch() - ${STALLED_AFTER}`;
-
   const isOpen = sql`status in ('open', 'confirmed', 'in_progress')`;
   const isFixed = sql`status = 'fixed'`;
   const isOther = sql`status in ('wont_fix', 'duplicate')`;
 
+  const selection = Object.fromEntries(
+    KINDS.flatMap((k) => {
+      const isKind = sql`kind = ${k}`;
+      return [
+        [`${k}__open`, sql<number>`sum(case when ${isKind} and ${isOpen} then 1 else 0 end)`],
+        [`${k}__fixed`, sql<number>`sum(case when ${isKind} and ${isFixed} then 1 else 0 end)`],
+        [`${k}__other`, sql<number>`sum(case when ${isKind} and ${isOther} then 1 else 0 end)`],
+        [`${k}__stalled`, sql<number>`sum(case when ${isKind} and ${isOpen} and ${stalled} then 1 else 0 end)`],
+      ];
+    }),
+  ) as Record<string, ReturnType<typeof sql<number>>>;
+
   const where = [inArray(reports.status, [...STATUSES])];
+  const [row] = await db().select(selection).from(reports).where(and(...where));
 
-  const [row] = await db()
-    .select({
-      bugs: sql<number>`sum(case when ${isBug} and ${isOpen} then 1 else 0 end)`,
-      suggestions: sql<number>`sum(case when ${isSuggestion} and ${isOpen} then 1 else 0 end)`,
-      bugsStalled: sql<number>`sum(case when ${isBug} and ${isOpen} and ${stalled} then 1 else 0 end)`,
-      suggestionsStalled: sql<number>`sum(case when ${isSuggestion} and ${isOpen} and ${stalled} then 1 else 0 end)`,
-      bugsFixed: sql<number>`sum(case when ${isBug} and ${isFixed} then 1 else 0 end)`,
-      suggestionsFixed: sql<number>`sum(case when ${isSuggestion} and ${isFixed} then 1 else 0 end)`,
-      bugsOther: sql<number>`sum(case when ${isBug} and ${isOther} then 1 else 0 end)`,
-      suggestionsOther: sql<number>`sum(case when ${isSuggestion} and ${isOther} then 1 else 0 end)`,
-    })
-    .from(reports)
-    .where(and(...where));
-
-  return {
-    bugs: Number(row?.bugs ?? 0),
-    suggestions: Number(row?.suggestions ?? 0),
-    bugsStalled: Number(row?.bugsStalled ?? 0),
-    suggestionsStalled: Number(row?.suggestionsStalled ?? 0),
-    bugsFixed: Number(row?.bugsFixed ?? 0),
-    suggestionsFixed: Number(row?.suggestionsFixed ?? 0),
-    bugsOther: Number(row?.bugsOther ?? 0),
-    suggestionsOther: Number(row?.suggestionsOther ?? 0),
-  };
+  const out = {} as BoardCounts;
+  for (const k of KINDS) {
+    out[k] = {
+      open: Number((row as Record<string, unknown>)?.[`${k}__open`] ?? 0),
+      fixed: Number((row as Record<string, unknown>)?.[`${k}__fixed`] ?? 0),
+      other: Number((row as Record<string, unknown>)?.[`${k}__other`] ?? 0),
+      stalled: Number((row as Record<string, unknown>)?.[`${k}__stalled`] ?? 0),
+    };
+  }
+  return out;
 }

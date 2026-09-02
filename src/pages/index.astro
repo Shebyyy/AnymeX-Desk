@@ -70,9 +70,7 @@ const shownTo = offset + rows.length;
 const nextCount = Math.min(PAGE_SIZE, total - shownTo);
 
 // Counters for the header, chosen based on current kind.
-const countsForKind = kind === 'bug'
-  ? { open: counts.bugs, fixed: counts.bugsFixed, other: counts.bugsOther, stalled: counts.bugsStalled }
-  : { open: counts.suggestions, fixed: counts.suggestionsFixed, other: counts.suggestionsOther, stalled: counts.suggestionsStalled };
+const countsForKind = counts[kind];
 
 Astro.response.headers.set(
   'Cache-Control',
@@ -120,9 +118,7 @@ Astro.response.headers.set(
         aria-selected={kind === k}>
         {KIND_LABELS[k]}
         <span class="kind-count">
-          {k === 'bug'
-            ? counts.bugs + counts.bugsFixed + counts.bugsOther
-            : counts.suggestions + counts.suggestionsFixed + counts.suggestionsOther}
+          {counts[k].open + counts[k].fixed + counts[k].other}
         </span>
       </a>
     ))}

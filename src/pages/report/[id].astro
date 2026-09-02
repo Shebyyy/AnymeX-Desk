@@ -312,6 +312,27 @@ Astro.response.headers.set(
       </div>
     )}
 
+    {report.kind === 'extension' && (
+      <dl class="grid extension-details">
+        <div class="wide">
+          <dt class="label">Tested in native app</dt>
+          <dd>{report.testedNativeApp ? 'Yes — only occurs in AnymeX' : 'Not confirmed'}</dd>
+        </div>
+        {report.extensionNames && (
+          <div class="wide">
+            <dt class="label">Extension name(s)</dt>
+            <dd><pre class="steps-pre">{report.extensionNames}</pre></dd>
+          </div>
+        )}
+        {report.extensionRepo && (
+          <div class="wide">
+            <dt class="label">Extension repository</dt>
+            <dd><a href={report.extensionRepo} rel="noopener noreferrer nofollow">{report.extensionRepo}</a></dd>
+          </div>
+        )}
+      </dl>
+    )}
+
     {/* ── Attachments gallery ──────────────────────────────────────────── */}
     {reportAttachments.length > 0 && (
       <section class="attachments-section">
