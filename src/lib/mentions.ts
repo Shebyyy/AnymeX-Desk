@@ -5,11 +5,11 @@ import { users } from './db/schema';
 /**
  * @mentions inside comment bodies.
  *
- * Discord usernames are lowercase-ish, 2–32 chars, letters/digits/._ — this
- * mirrors that shape closely enough to avoid false positives on things like
- * email addresses (which have a dot immediately before an @, not after).
+ * A mention must start at the beginning of the body or after a non-word
+ * boundary. This allows punctuation around mentions, e.g. "(@user)", while
+ * avoiding false positives inside email addresses or words such as foo@bar.
  */
-const MENTION_RE = /(?:^|\s)@([a-z0-9_.]{2,32})/gi;
+const MENTION_RE = /(?:^|[^a-z0-9_])@([a-z0-9_.]{2,32})(?![a-z0-9_])/gi;
 
 /** Pull the raw @handles out of a comment body, de-duplicated, lowercased. */
 export function extractMentionHandles(body: string): string[] {
@@ -23,7 +23,7 @@ export function extractMentionHandles(body: string): string[] {
 /**
  * Resolve @handles to real users, excluding the author (self-mentions don't
  * notify) and anyone already in `alreadyNotified` (so a mention doesn't
- * double-DM someone who's getting a comment/reply notification already).
+ * double-DM someone who's getting a reply notification already).
  */
 export async function resolveMentions(
   body: string,
