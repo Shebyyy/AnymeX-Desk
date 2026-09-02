@@ -194,11 +194,7 @@ export const POST: APIRoute = async (ctx) => {
         reportId,
         kind: 'comment',
       });
-    const dmText = body
-      ? `**${user.username}** commented on your report "${report.title}":\n> ${body.slice(0, 300)}\n${reportUrl}`
-      : `**${user.username}** attached a file to your report "${report.title}".\n${reportUrl}`;
-    const dm = sendDiscordDm(report.reporterId, dmText);
-    dmTasks.push(notif, dm);
+    dmTasks.push(notif);
   }
 
   /* Notify whoever they replied to, if that's a different person than the
