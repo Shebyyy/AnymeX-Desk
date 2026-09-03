@@ -7,6 +7,7 @@ import { OPEN_STATUSES, STATUSES, reports, votes, attachments, comments, users,
   KIND_LABELS, CATEGORY_LABELS, PLATFORM_LABELS,
   BUG_CATEGORIES, SUGGESTION_CATEGORIES, EXTENSION_SOURCES, PLATFORMS,
   reportEdits, labels, reportLabels, commentReactions,
+  ROADMAP_STAGES, ROADMAP_STAGE_LABELS, type RoadmapStage,
 } from '../../lib/db/schema';
 import { avatarUrl, currentUser, dbUser } from '../../lib/auth';
 import { reporterMeta } from '../../lib/reporter';
@@ -43,6 +44,21 @@ if (Astro.request.method === 'POST') {
       }
     }
     return Astro.redirect(`/report/${id}`, 303);
+  }
+
+  if (intent === 'roadmap') {
+    const gate = await requireStaff(Astro, 'mod');
+    if (isResponse(gate)) return gate;
+    const rawStage = String(form.get('roadmap_stage') ?? '').trim();
+    const stage = (ROADMAP_STAGES as readonly string[]).includes(rawStage) ? (rawStage as RoadmapStage) : null;
+    const milestone = String(form.get('milestone') ?? '').trim().slice(0, 32) || null;
+
+    await db()
+      .update(reports)
+      .set({ roadmapStage: stage, milestone, updatedAt: sql`(unixepoch())` })
+      .where(eq(reports.id, id));
+    await logAction(gate.user, 'report.roadmap', String(id), `stage=${stage ?? 'none'}, milestone=${milestone ?? 'none'}`);
+    return Astro.redirect(`/report/${id}?saved=roadmap`, 303);
   }
 
   if (intent === 'edit') {
@@ -140,17 +156,49 @@ if (Astro.request.method === 'POST') {
     return Astro.redirect(`/report/${id}?saved=status`, 303);
   }
 
-  /* Duplicate marking. */
+  /* Duplicate marking with smart voter migration. */
   const dupOf = String(form.get('duplicate_of') ?? '').trim();
   if (dupOf) {
     const dupId = Number(dupOf);
-    if (Number.isSafeInteger(dupId) && dupId > 0) {
+    if (Number.isSafeInteger(dupId) && dupId > 0 && dupId !== id) {
       const [updated] = await db()
         .update(reports)
         .set({ status: 'duplicate', duplicateOf: dupId, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
         .where(eq(reports.id, id))
         .returning();
       if (updated) {
+        // Smart voter migration: transfer votes to canonical report
+        const duplicateVoters = await db()
+          .select({ discordId: votes.discordId })
+          .from(votes)
+          .where(eq(votes.reportId, id));
+
+        if (duplicateVoters.length > 0) {
+          const existingTargetVotes = await db()
+            .select({ discordId: votes.discordId })
+            .from(votes)
+            .where(
+              and(
+                eq(votes.reportId, dupId),
+                inArray(votes.discordId, duplicateVoters.map((v) => v.discordId)),
+              ),
+            );
+          const existingSet = new Set(existingTargetVotes.map((v) => v.discordId));
+          const newVotesToMigrate = duplicateVoters
+            .filter((v) => !existingSet.has(v.discordId))
+            .map((v) => ({ reportId: dupId, discordId: v.discordId }));
+
+          if (newVotesToMigrate.length > 0) {
+            await db().batch([
+              db().insert(votes).values(newVotesToMigrate).onConflictDoNothing(),
+              db()
+                .update(reports)
+                .set({ votes: sql`${reports.votes} + ${newVotesToMigrate.length}` })
+                .where(eq(reports.id, dupId)),
+            ]);
+          }
+        }
+
         await logAction(gate.user, 'report.duplicate', String(id), `merged into ${dupId}`, `${Astro.url.origin}/report/${id}`);
         const detail = `duplicate: merged into #${dupId}`;
         await notifyWatchers(id, 'duplicate', detail, gate.user.id);
@@ -428,7 +476,13 @@ Astro.response.headers.set(
                 <span class="avatar avatar-blank" aria-hidden="true" />
               );
             })()}
-            <span>{reporterMeta(report.reporterId, reporter).display}</span>
+            {report.reporterId ? (
+              <a href={`/user/${report.reporterId}`} class="reporter-link">
+                {reporterMeta(report.reporterId, reporter).display}
+              </a>
+            ) : (
+              <span>{reporterMeta(report.reporterId, reporter).display}</span>
+            )}
           </span>
         </p>
       </div>
@@ -869,6 +923,39 @@ Astro.response.headers.set(
             </form>
           )}
 
+          <form method="POST" class="mod-extra">
+            <input type="hidden" name="intent" value="roadmap" />
+            <p class="mod-label">Roadmap &amp; Milestone</p>
+            <div class="field-row">
+              <div class="field">
+                <label class="label" for="roadmap-stage">Stage</label>
+                <select id="roadmap-stage" name="roadmap_stage" class="select">
+                  <option value="" selected={!report.roadmapStage}>None (Not on roadmap)</option>
+                  {ROADMAP_STAGES.map((st) => (
+                    <option value={st} selected={st === report.roadmapStage}>
+                      {ROADMAP_STAGE_LABELS[st]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div class="field">
+                <label class="label" for="milestone">Target Release / Milestone</label>
+                <input
+                  id="milestone"
+                  name="milestone"
+                  class="input"
+                  type="text"
+                  maxlength="32"
+                  placeholder="e.g. v2.4.0"
+                  value={report.milestone ?? ''}
+                />
+              </div>
+            </div>
+            <div class="mod-row" style="margin-block-start: var(--space-2);">
+              <button class="btn" type="submit">Update roadmap</button>
+            </div>
+          </form>
+
           <div class="mod-extra mod-danger">
             <p class="mod-label">Danger zone</p>
             <p class="mod-hint">Permanently delete this report and all its votes, comments, and attachments. This cannot be undone.</p>
@@ -1247,6 +1334,8 @@ Astro.response.headers.set(
   .by { color: var(--text-muted); }
   .filed-by { display: inline-flex; align-items: center; gap: var(--space-1); vertical-align: middle; }
   .filed-by .avatar, .filed-by .avatar-blank { inline-size: 20px; block-size: 20px; }
+  .reporter-link { color: inherit; text-decoration: none; font-weight: 500; }
+  .reporter-link:hover { text-decoration: underline; color: var(--signal-ink); }
 
   .facts {
     display: flex;

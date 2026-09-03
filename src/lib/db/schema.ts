@@ -142,6 +142,15 @@ export const KIND_LABELS: Record<string, string> = {
   extension: 'Extension Issue',
 };
 
+export const ROADMAP_STAGES = ['under_review', 'planned', 'in_progress', 'shipped'] as const;
+export type RoadmapStage = (typeof ROADMAP_STAGES)[number];
+export const ROADMAP_STAGE_LABELS: Record<RoadmapStage, string> = {
+  under_review: 'Under Review',
+  planned: 'Planned',
+  in_progress: 'In Progress',
+  shipped: 'Shipped',
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Tables
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -218,6 +227,10 @@ export const reports = sqliteTable(
     announcedAt: integer('announced_at'),
 
     statusNote: text('status_note'),
+    roadmapStage: text('roadmap_stage', {
+      enum: ['under_review', 'planned', 'in_progress', 'shipped'],
+    }),
+    milestone: text('milestone'),
   },
   (t) => [
     /**

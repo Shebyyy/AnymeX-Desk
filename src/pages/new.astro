@@ -383,6 +383,13 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           value={shown.title}
           placeholder="Briefly describe the issue or suggestion"
         />
+        <div id="similar-reports" class="similar-box" style="display: none;">
+          <p class="similar-heading">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            Similar open reports found — already reported?
+          </p>
+          <ul id="similar-list" class="similar-list"></ul>
+        </div>
       </div>
       <div class="field">
         <label class="label" for="appVersion">App version</label>
@@ -445,6 +452,27 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       )}
 
       {shown.kind === 'bug' && (
+        <details class="diagnostics-drawer">
+          <summary class="diagnostics-summary">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            Paste Crash Log / Diagnostics (Auto-detects App Version & Device)
+          </summary>
+          <div class="diagnostics-body">
+            <textarea
+              id="diagnostics-input"
+              class="textarea log-input"
+              rows="3"
+              placeholder="Paste crash log, stack trace, or device info here..."
+            ></textarea>
+            <div class="diagnostics-actions">
+              <button type="button" id="parse-log-btn" class="btn btn-sm">Auto-extract details</button>
+              <span id="log-status" class="log-status"></span>
+            </div>
+          </div>
+        </details>
+      )}
+
+      {shown.kind === 'bug' && (
         <div class="field">
           <label class="label" for="stepsToReproduce">Steps to reproduce</label>
           <textarea
@@ -494,6 +522,79 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     const fileList = document.getElementById('file-list');
     const submitBtn = document.getElementById('submit-btn') as HTMLButtonElement;
     const selectedFiles: File[] = [];
+
+    // ── Live Similar Reports Debounce ──────────────────────────────────
+    const titleInput = document.getElementById('title') as HTMLInputElement | null;
+    const similarBox = document.getElementById('similar-reports');
+    const similarList = document.getElementById('similar-list');
+    let similarTimer: number | undefined;
+
+    titleInput?.addEventListener('input', () => {
+      window.clearTimeout(similarTimer);
+      const val = titleInput.value.trim();
+      if (val.length < 4) {
+        if (similarBox) similarBox.style.display = 'none';
+        return;
+      }
+      similarTimer = window.setTimeout(async () => {
+        try {
+          const kindInput = document.querySelector('input[name="kind"]:checked') as HTMLInputElement | null;
+          const kindVal = kindInput?.value ?? '';
+          const res = await fetch(`/api/v1/similar?q=${encodeURIComponent(val)}&kind=${encodeURIComponent(kindVal)}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.results?.length > 0 && similarList && similarBox) {
+            similarList.innerHTML = data.results.map((r: any) => `
+              <li class="similar-item">
+                <a href="/report/${r.id}" target="_blank" class="similar-link">
+                  <span class="similar-title">#${r.id} ${r.title}</span>
+                  <span class="similar-meta">
+                    <span class="tag">${r.categoryLabel ?? r.category}</span>
+                    <span class="tag">${r.platformLabel ?? r.platform}</span>
+                    <span class="similar-votes">${r.votes} votes</span>
+                  </span>
+                </a>
+              </li>
+            `).join('');
+            similarBox.style.display = '';
+          } else if (similarBox) {
+            similarBox.style.display = 'none';
+          }
+        } catch {
+          // ignore network glitch
+        }
+      }, 350);
+    });
+
+    // ── Crash Log / Diagnostics Parser ────────────────────────────────
+    const logInput = document.getElementById('diagnostics-input') as HTMLTextAreaElement | null;
+    const parseBtn = document.getElementById('parse-log-btn') as HTMLButtonElement | null;
+    const logStatus = document.getElementById('log-status');
+    const appVerInput = document.getElementById('appVersion') as HTMLInputElement | null;
+    const bodyInput = document.getElementById('body') as HTMLTextAreaElement | null;
+
+    parseBtn?.addEventListener('click', () => {
+      const raw = logInput?.value.trim() ?? '';
+      if (!raw) return;
+
+      const verMatch = raw.match(/(?:AnymeX|version|app[_\s-]?ver|build)[\s:=v]+([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:[+-_a-zA-Z0-9]+)?)/i);
+      if (verMatch && appVerInput && !appVerInput.value) {
+        appVerInput.value = verMatch[1].trim();
+      }
+
+      const androidMatch = raw.match(/Android[\s:]+([0-9]+(?:\.[0-9]+)?)/i);
+      const platRadio = document.querySelector('input[name="platform"][value="android"]') as HTMLInputElement | null;
+      if (androidMatch && platRadio) platRadio.checked = true;
+
+      if (bodyInput && !bodyInput.value.includes('### Crash Diagnostics')) {
+        bodyInput.value = (bodyInput.value ? bodyInput.value + '\n\n' : '') +
+          '### Crash Diagnostics\n```\n' + raw.slice(0, 2000) + '\n```';
+      }
+
+      if (logStatus) {
+        logStatus.textContent = '✓ Extracted details to form fields';
+      }
+    });
 
     // File selection handling
     fileInput?.addEventListener('change', () => {
@@ -747,6 +848,110 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     border-block-start: 1px solid var(--border-subtle);
     font-size: var(--text-sm);
     color: var(--text-muted);
+  }
+
+  /* ── Similar reports alert ── */
+  .similar-box {
+    margin-block-start: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--signal-dim);
+    border-inline-start: 3px solid var(--signal);
+    border-radius: var(--radius-md);
+    background: var(--signal-fill);
+  }
+  .similar-heading {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semi);
+    color: var(--signal-ink);
+    margin-block-end: var(--space-2);
+  }
+  .similar-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .similar-item {
+    border-radius: var(--radius-sm);
+  }
+  .similar-link {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 4px 8px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    color: var(--text-primary);
+    text-decoration: none;
+  }
+  .similar-link:hover {
+    border-color: var(--signal);
+  }
+  .similar-title {
+    font-weight: var(--weight-medium);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .similar-meta {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .similar-votes {
+    font-family: var(--font-data);
+    color: var(--text-tertiary);
+  }
+
+  /* ── Diagnostics drawer ── */
+  .diagnostics-drawer {
+    margin-block: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+  }
+  .diagnostics-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+  }
+  .diagnostics-summary::-webkit-details-marker { display: none; }
+  .diagnostics-summary:hover { color: var(--text-primary); }
+  .diagnostics-body {
+    padding: var(--space-3);
+    border-block-start: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .log-input {
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    min-block-size: 80px;
+  }
+  .diagnostics-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .log-status {
+    font-size: var(--text-xs);
+    color: var(--live);
   }
 
   @media (max-width: 640px) {

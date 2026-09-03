@@ -16,6 +16,11 @@ const {
   description = 'AnymeX bug and suggestion tracker. Vote on what matters most.',
   narrow = false,
 } = Astro.props;
+
+const reportIdMatch = Astro.url.pathname.match(/^\/report\/(\d+)$/);
+const ogImage = reportIdMatch
+  ? `${Astro.url.origin}/og/${reportIdMatch[1]}.svg`
+  : undefined;
 ---
 
 <!doctype html>
@@ -27,6 +32,15 @@ const {
     <meta name="description" content={description} />
     <meta name="color-scheme" content="dark light" />
     <link rel="icon" href="/favicon.gif" type="image/gif" />
+
+    <meta property="og:title" content={`${title} · AnymeX Desk`} />
+    <meta property="og:description" content={description} />
+    {ogImage && <meta property="og:image" content={ogImage} />}
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content={ogImage ? "summary_large_image" : "summary"} />
+    <meta name="twitter:title" content={`${title} · AnymeX Desk`} />
+    <meta name="twitter:description" content={description} />
+    {ogImage && <meta name="twitter:image" content={ogImage} />}
 
     <Font cssVariable="--font-ui-family" preload={[{ subset: 'latin' }]} />
     <Font
