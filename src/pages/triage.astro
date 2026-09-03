@@ -1,12 +1,11 @@
 ---
 import Base from '../layouts/Base.astro';
+import { eq, sql, inArray } from 'drizzle-orm';
 import { db } from '../lib/db/client';
-import { reports, users } from '../lib/db/schema';
-import { sql, eq } from 'drizzle-orm';
-import { isResponse, requireStaff, logAction } from '../lib/staff';
-import { STATUSES, STATUS_LABELS, KIND_LABELS, CATEGORY_LABELS, PLATFORM_LABELS } from '../lib/db/schema';
+import { reports, STATUSES, STATUS_LABELS } from '../lib/db/schema';
+import { requireStaff, isResponse, logAction } from '../lib/staff';
 import { notifyWatchers } from '../lib/notify';
-import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } from '../lib/format';
+import { relativeAge, kindLabel, categoryLabel, platformLabel } from '../lib/format';
 
 export const prerender = false;
 
@@ -24,40 +23,60 @@ const { user } = gate;
 let done: string | null = null;
 let error: string | null = null;
 
-/* ── Inline status action ─────────────────────────────────────────────────── */
+/* ── Status action (Single or Bulk) ───────────────────────────────────────── */
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const reportId = Number(form.get('report_id') ?? '');
-  const wanted = String(form.get('status') ?? '').trim();
-  const rawNote = String(form.get('note') ?? '').trim().slice(0, 500);
-  const statusNote = rawNote || null;
+  const intent = String(form.get('intent') ?? '');
 
-  if (!Number.isSafeInteger(reportId) || reportId <= 0) {
-    error = 'Invalid report ID.';
-  } else if (!(STATUSES as readonly string[]).includes(wanted)) {
-    error = 'Invalid status.';
-  } else {
-    const status = wanted as (typeof STATUSES)[number];
-    const detail = statusNote ? `${status}: ${statusNote}` : status;
-    const reportUrl = `${Astro.url.origin}/report/${reportId}`;
-
-    const [updated] = await db()
-      .update(reports)
-      .set({ status, statusNote, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
-      .where(eq(reports.id, reportId))
-      .returning();
-
-    if (updated) {
-      const cf = Astro.locals.cfContext;
-      const tasks: Promise<unknown>[] = [
-        logAction(user, 'report.status', String(reportId), detail, reportUrl),
-        notifyWatchers(reportId, 'status_changed', detail, user.id),
-      ];
-      if (cf) for (const t of tasks) cf.waitUntil(t);
-      else await Promise.all(tasks);
-      done = `Report #${reportId} → ${STATUS_LABELS[status] ?? status}`;
+  if (intent === 'bulk_status') {
+    const rawIds = String(form.get('ids') ?? '').split(',').map(Number).filter((n) => Number.isSafeInteger(n) && n > 0);
+    const wanted = String(form.get('status') ?? '').trim();
+    if (rawIds.length === 0) {
+      error = 'No reports selected.';
+    } else if (!(STATUSES as readonly string[]).includes(wanted)) {
+      error = 'Invalid status.';
     } else {
-      error = `Report #${reportId} not found.`;
+      const status = wanted as (typeof STATUSES)[number];
+      await db()
+        .update(reports)
+        .set({ status, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
+        .where(inArray(reports.id, rawIds));
+      await logAction(user, 'triage.bulk_status', `${rawIds.length} reports`, `status=${status}`);
+      done = `Updated ${rawIds.length} reports to ${STATUS_LABELS[status] ?? status}.`;
+    }
+  } else {
+    const reportId = Number(form.get('report_id') ?? '');
+    const wanted = String(form.get('status') ?? '').trim();
+    const rawNote = String(form.get('note') ?? '').trim().slice(0, 500);
+    const statusNote = rawNote || null;
+
+    if (!Number.isSafeInteger(reportId) || reportId <= 0) {
+      error = 'Invalid report ID.';
+    } else if (!(STATUSES as readonly string[]).includes(wanted)) {
+      error = 'Invalid status.';
+    } else {
+      const status = wanted as (typeof STATUSES)[number];
+      const detail = statusNote ? `${status}: ${statusNote}` : status;
+      const reportUrl = `${Astro.url.origin}/report/${reportId}`;
+
+      const [updated] = await db()
+        .update(reports)
+        .set({ status, statusNote, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
+        .where(eq(reports.id, reportId))
+        .returning();
+
+      if (updated) {
+        const cf = Astro.locals.cfContext;
+        const tasks: Promise<unknown>[] = [
+          logAction(user, 'report.status', String(reportId), detail, reportUrl),
+          notifyWatchers(reportId, 'status_changed', detail, user.id),
+        ];
+        if (cf) for (const t of tasks) cf.waitUntil(t);
+        else await Promise.all(tasks);
+        done = `Report #${reportId} → ${STATUS_LABELS[status] ?? status}`;
+      } else {
+        error = `Report #${reportId} not found.`;
+      }
     }
   }
 }
@@ -107,6 +126,9 @@ const queue = await db().all(sql`
     <ol class="queue">
       {queue.map((r) => (
         <li class="item" id={`triage-${r.id}`}>
+          <label class="triage-check-label">
+            <input type="checkbox" class="triage-check" value={r.id} />
+          </label>
           <div class="item-meta">
             <a class="item-title" href={`/report/${r.id}`} target="_blank">
               #{r.id} {r.title}
@@ -148,8 +170,38 @@ const queue = await db().all(sql`
         </li>
       ))}
     </ol>
+    <form method="POST" id="bulk-bar" class="bulk-bar" style="display: none;">
+      <input type="hidden" name="intent" value="bulk_status" />
+      <input type="hidden" name="ids" id="bulk-ids" value="" />
+      <span class="bulk-count" id="bulk-count">0 selected</span>
+      <div class="bulk-actions">
+        <button class="btn btn-sm btn-confirm" type="submit" name="status" value="confirmed">Confirm Selected</button>
+        <button class="btn btn-sm btn-wip" type="submit" name="status" value="in_progress">WIP Selected</button>
+        <button class="btn btn-sm btn-dead" type="submit" name="status" value="wont_fix">Won't Fix Selected</button>
+      </div>
+    </form>
   )}
 </Base>
+
+<script>
+  const checks = document.querySelectorAll('.triage-check') as NodeListOf<HTMLInputElement>;
+  const bulkBar = document.getElementById('bulk-bar');
+  const bulkIds = document.getElementById('bulk-ids') as HTMLInputElement | null;
+  const bulkCount = document.getElementById('bulk-count');
+
+  function updateBulk() {
+    const selected = Array.from(checks).filter((c) => c.checked).map((c) => c.value);
+    if (selected.length > 0 && bulkBar && bulkIds && bulkCount) {
+      bulkIds.value = selected.join(',');
+      bulkCount.textContent = `${selected.length} selected`;
+      bulkBar.style.display = 'flex';
+    } else if (bulkBar) {
+      bulkBar.style.display = 'none';
+    }
+  }
+
+  checks.forEach((c) => c.addEventListener('change', updateBulk));
+</script>
 
 <style>
   .head {
@@ -244,4 +296,46 @@ const queue = await db().all(sql`
 
   .empty { margin-block-start: var(--space-8); text-align: center; }
   .empty-title { font-size: var(--text-lg); margin-block-end: var(--space-2); }
+
+  /* ── Bulk actions ── */
+  .item {
+    position: relative;
+    padding-inline-start: var(--space-8);
+  }
+  .triage-check-label {
+    position: absolute;
+    top: var(--space-3);
+    left: var(--space-3);
+    cursor: pointer;
+  }
+  .triage-check {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+  }
+  .bulk-bar {
+    position: fixed;
+    bottom: var(--space-6);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    padding: var(--space-2) var(--space-4);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    z-index: 100;
+  }
+  .bulk-count {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semi);
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+  .bulk-actions {
+    display: flex;
+    gap: var(--space-2);
+  }
 </style>

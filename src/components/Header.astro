@@ -12,6 +12,7 @@ const tabs = [
   { href: '/', label: 'Bugs', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') !== 'suggestion' && new URL(Astro.url).searchParams.get('kind') !== 'extension' },
   { href: '/?kind=suggestion', label: 'Suggestions', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') === 'suggestion' },
   { href: '/?kind=extension', label: 'Extension Issues', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') === 'extension' },
+  { href: '/roadmap', label: 'Roadmap', match: (p: string) => p === '/roadmap' },
   { href: '/changelog', label: 'Changelog', match: (p: string) => p === '/changelog' },
   { href: '/stats', label: 'Stats', match: (p: string) => p === '/stats' },
 ];

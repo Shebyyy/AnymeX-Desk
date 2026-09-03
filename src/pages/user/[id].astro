@@ -1,0 +1,283 @@
+---
+import Base from '../../layouts/Base.astro';
+import { db } from '../../lib/db/client';
+import { reports, votes, users } from '../../lib/db/schema';
+import { eq, sql } from 'drizzle-orm';
+import { avatarUrl } from '../../lib/auth';
+import { relativeAge, kindLabel, categoryLabel, platformLabel, statusLabel } from '../../lib/format';
+import { computeBadges, type UserStats } from '../../lib/badges';
+import { levelOf } from '../../lib/staff';
+
+export const prerender = false;
+
+const targetId = String(Astro.params.id ?? '').trim();
+if (!/^\d{17,20}$/.test(targetId)) return Astro.rewrite('/404');
+
+const [userRow] = await db().select().from(users).where(eq(users.discordId, targetId));
+if (!userRow) return Astro.rewrite('/404');
+
+// User's filed reports
+const userReports = await db()
+  .select({
+    id: reports.id,
+    kind: reports.kind,
+    category: reports.category,
+    platform: reports.platform,
+    title: reports.title,
+    status: reports.status,
+    votes: reports.votes,
+    commentCount: reports.commentCount,
+    createdAt: reports.createdAt,
+  })
+  .from(reports)
+  .where(eq(reports.reporterId, targetId))
+  .orderBy(sql`${reports.createdAt} DESC`);
+
+// Total votes user has cast
+const votesGivenRows = await db().all(sql`
+  SELECT COUNT(*) AS c FROM votes WHERE discord_id = ${targetId}
+`) as { c: number }[];
+const votesGivenCount = votesGivenRows[0]?.c ?? 0;
+
+// Calculate stats
+const reportsCount = userReports.length;
+const fixedCount = userReports.filter((r) => r.status === 'fixed').length;
+const totalVotesReceived = userReports.reduce((sum, r) => sum + r.votes, 0);
+const hasExtensionFix = userReports.some((r) => r.kind === 'extension' && r.status === 'fixed');
+const hasTopSuggestion = userReports.some((r) => r.kind === 'suggestion' && r.votes >= 20);
+const staffLevel = await levelOf(targetId);
+const isStaff = staffLevel !== 'none';
+
+const stats: UserStats = {
+  reportsCount,
+  fixedCount,
+  totalVotesReceived,
+  votesGivenCount,
+  hasExtensionFix,
+  hasTopSuggestion,
+  isStaff,
+};
+
+const badges = computeBadges(stats);
+const avatar = avatarUrl({ id: userRow.discordId, avatarHash: userRow.avatarHash }, 80);
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, stale-while-revalidate=300');
+---
+
+<Base title={`${userRow.username} · Contributor Profile`} narrow>
+  <header class="profile-head">
+    <div class="avatar-wrap">
+      {avatar ? (
+        <img class="avatar" src={avatar} alt="" width="80" height="80" />
+      ) : (
+        <div class="avatar avatar-blank" />
+      )}
+    </div>
+    <div class="profile-meta">
+      <h1 class="username">{userRow.username}</h1>
+      <p class="discord-id num">ID: {userRow.discordId}</p>
+      <p class="account-age">Member on AnymeX Desk</p>
+    </div>
+  </header>
+
+  {/* ── Badges & Achievements ── */}
+  <section class="block">
+    <h2 class="section-title">Badges &amp; Achievements ({badges.length})</h2>
+    {badges.length === 0 ? (
+      <p class="empty-line">No badges earned yet. Filing reports and voting helps earn contributor achievements.</p>
+    ) : (
+      <div class="badges-grid">
+        {badges.map((b) => (
+          <div class="badge-card" style={`--badge-color: ${b.color};`}>
+            <span class="badge-icon">{b.icon}</span>
+            <div class="badge-info">
+              <span class="badge-name">{b.name}</span>
+              <span class="badge-desc">{b.description}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    )}
+  </section>
+
+  {/* ── Activity Metrics ── */}
+  <section class="block">
+    <h2 class="section-title">Contribution Metrics</h2>
+    <div class="stats-row">
+      <div class="stat-pill">
+        <span class="stat-n">{reportsCount}</span>
+        <span class="stat-l">Reports Filed</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-n">{fixedCount}</span>
+        <span class="stat-l">Bugs Resolved</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-n">{totalVotesReceived}</span>
+        <span class="stat-l">Votes Received</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-n">{votesGivenCount}</span>
+        <span class="stat-l">Votes Cast</span>
+      </div>
+    </div>
+  </section>
+
+  {/* ── Reports Filed by User ── */}
+  <section class="block">
+    <h2 class="section-title">Reports Filed ({userReports.length})</h2>
+    {userReports.length === 0 ? (
+      <p class="empty-line">No reports filed yet.</p>
+    ) : (
+      <ol class="report-list">
+        {userReports.map((r) => (
+          <li class="report-item">
+            <div class="report-main">
+              <a href={`/report/${r.id}`} class="report-title">
+                #{r.id} {r.title}
+              </a>
+              <div class="report-meta">
+                <span class="tag">{kindLabel(r.kind)}</span>
+                <span class="tag">{categoryLabel(r.category)}</span>
+                <span class="tag">{platformLabel(r.platform)}</span>
+                <span class="report-status tag">{statusLabel(r.status)}</span>
+                <span class="report-age">{relativeAge(r.createdAt)} ago</span>
+              </div>
+            </div>
+            <div class="report-votes num">▲ {r.votes}</div>
+          </li>
+        ))}
+      </ol>
+    )}
+  </section>
+</Base>
+
+<style>
+  .profile-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding-block-end: var(--space-5);
+    border-block-end: 1px solid var(--border-subtle);
+  }
+  .avatar-wrap { flex-shrink: 0; }
+  .avatar {
+    width: 80px;
+    height: 80px;
+    border-radius: var(--radius-full);
+    border: 2px solid var(--border-default);
+    display: block;
+  }
+  .avatar-blank { background: var(--surface-raised); }
+  .profile-meta { display: flex; flex-direction: column; gap: 2px; }
+  .username { font-size: var(--text-xl); font-weight: var(--weight-bold); }
+  .discord-id { font-size: var(--text-xs); color: var(--text-muted); }
+  .account-age { font-size: var(--text-xs); color: var(--text-tertiary); margin-block-start: 2px; }
+
+  .block { margin-block-start: var(--space-6); }
+  .section-title {
+    font-size: var(--text-md);
+    font-weight: var(--weight-semi);
+    margin-block-end: var(--space-3);
+  }
+
+  /* ── Badges ── */
+  .badges-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--space-3);
+  }
+  .badge-card {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-inline-start: 3px solid var(--badge-color);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+  }
+  .badge-icon { font-size: 1.5rem; line-height: 1; }
+  .badge-info { display: flex; flex-direction: column; gap: 2px; }
+  .badge-name {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semi);
+    color: var(--text-primary);
+  }
+  .badge-desc {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    line-height: var(--leading-snug);
+  }
+
+  /* ── Stats Row ── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-3);
+  }
+  .stat-pill {
+    padding: var(--space-3);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .stat-n {
+    font-family: var(--font-data);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-bold);
+    color: var(--signal-ink);
+  }
+  .stat-l {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+
+  /* ── Reports list ── */
+  .report-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .report-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
+  .report-main { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+  .report-title {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-primary);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .report-title:hover { color: var(--signal-ink); text-decoration: underline; }
+  .report-meta { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
+  .report-status { border-color: var(--border-strong); }
+  .report-age { font-size: var(--text-xs); color: var(--text-muted); }
+  .report-votes {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semi);
+    color: var(--signal-ink);
+    flex-shrink: 0;
+  }
+  .empty-line { color: var(--text-muted); font-size: var(--text-sm); }
+
+  @media (max-width: 640px) {
+    .stats-row { grid-template-columns: 1fr 1fr; }
+  }
+</style>

@@ -1,0 +1,275 @@
+---
+import Base from '../layouts/Base.astro';
+import { db } from '../lib/db/client';
+import { sql } from 'drizzle-orm';
+import {
+  KIND_LABELS,
+  PLATFORM_LABELS,
+  ROADMAP_STAGES,
+  ROADMAP_STAGE_LABELS,
+  type RoadmapStage,
+} from '../lib/db/schema';
+
+export const prerender = false;
+
+/**
+ * /roadmap — Public roadmap board.
+ * Shows reports mapped to roadmap stages: 'planned', 'in_progress', 'shipped'.
+ */
+
+const selectedMilestone = Astro.url.searchParams.get('milestone') ?? '';
+
+// Load roadmap items
+const items = (await db().all(sql`
+  SELECT id, kind, category, platform, title, status, votes,
+         roadmap_stage AS roadmapStage, milestone
+  FROM reports
+  WHERE roadmap_stage IS NOT NULL
+    AND (${!selectedMilestone} OR milestone = ${selectedMilestone})
+  ORDER BY votes DESC, created_at DESC
+`)) as {
+  id: number;
+  kind: string;
+  category: string;
+  platform: string;
+  title: string;
+  status: string;
+  votes: number;
+  roadmapStage: RoadmapStage;
+  milestone: string | null;
+}[];
+
+// Distinct milestones for filter dropdown
+const milestoneRows = (await db().all(sql`
+  SELECT DISTINCT milestone
+  FROM reports
+  WHERE milestone IS NOT NULL AND milestone != ''
+  ORDER BY milestone DESC
+`)) as { milestone: string }[];
+const milestones = milestoneRows.map((m) => m.milestone);
+
+const columns: { stage: RoadmapStage; title: string; desc: string }[] = [
+  { stage: 'planned', title: 'Planned', desc: 'Accepted and queued for development' },
+  { stage: 'in_progress', title: 'In Progress', desc: 'Actively being developed' },
+  { stage: 'shipped', title: 'Shipped', desc: 'Released in recent updates' },
+];
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, stale-while-revalidate=300');
+---
+
+<Base title="Public Roadmap" description="See what features and bug fixes are planned, in progress, and shipped for AnymeX.">
+  <header class="head">
+    <div class="head-title">
+      <h1>AnymeX Roadmap</h1>
+      <p class="sub">Track what is currently planned, actively being built, and shipped.</p>
+    </div>
+
+    {milestones.length > 0 && (
+      <form method="GET" class="milestone-filter">
+        <label class="sr-only" for="milestone-select">Filter by release</label>
+        <select
+          id="milestone-select"
+          name="milestone"
+          class="select compact"
+          onchange="this.form.requestSubmit()"
+        >
+          <option value="">All releases</option>
+          {milestones.map((m) => (
+            <option value={m} selected={m === selectedMilestone}>Release {m}</option>
+          ))}
+        </select>
+      </form>
+    )}
+  </header>
+
+  <div class="kanban">
+    {columns.map((col) => {
+      const colItems = items.filter((it) => it.roadmapStage === col.stage);
+      return (
+        <section class="kanban-col">
+          <header class="col-head">
+            <div class="col-title-wrap">
+              <h2 class="col-title">{col.title}</h2>
+              <span class="col-count">{colItems.length}</span>
+            </div>
+            <p class="col-desc">{col.desc}</p>
+          </header>
+
+          <div class="col-body">
+            {colItems.length === 0 ? (
+              <p class="col-empty">No items currently in this stage.</p>
+            ) : (
+              colItems.map((item) => (
+                <a href={`/report/${item.id}`} class="card">
+                  <div class="card-header">
+                    <span class={`card-kind kind-${item.kind}`}>
+                      {KIND_LABELS[item.kind] ?? item.kind}
+                    </span>
+                    {item.milestone && (
+                      <span class="card-milestone">{item.milestone}</span>
+                    )}
+                  </div>
+                  <h3 class="card-title">{item.title}</h3>
+                  <div class="card-footer">
+                    <span class="card-platform">{PLATFORM_LABELS[item.platform] ?? item.platform}</span>
+                    <span class="card-votes">▲ {item.votes}</span>
+                  </div>
+                </a>
+              ))
+            )}
+          </div>
+        </section>
+      );
+    })}
+  </div>
+</Base>
+
+<style>
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    padding-block-end: var(--space-4);
+    border-block-end: 1px solid var(--border-subtle);
+    margin-block-end: var(--space-6);
+  }
+  h1 { font-size: var(--text-xl); letter-spacing: var(--track-tight); }
+  .sub {
+    margin-block-start: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+  }
+
+  .kanban {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-4);
+    align-items: start;
+  }
+
+  .kanban-col {
+    background: var(--surface-inset);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .col-head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding-block-end: var(--space-2);
+    border-block-end: 1px solid var(--border-subtle);
+  }
+  .col-title-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .col-title {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semi);
+    letter-spacing: var(--track-wide);
+    text-transform: uppercase;
+    color: var(--text-primary);
+  }
+  .col-count {
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    background: var(--surface-raised);
+    border-radius: var(--radius-full);
+    padding: 1px 7px;
+  }
+  .col-desc {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+
+  .col-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-block-size: 140px;
+  }
+  .col-empty {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    text-align: center;
+    padding-block: var(--space-8);
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color var(--dur-fast) var(--ease-standard),
+                transform var(--dur-fast) var(--ease-standard);
+  }
+  .card:hover {
+    border-color: var(--border-strong);
+    transform: translateY(-1px);
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .card-kind {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+  }
+  .kind-bug { color: var(--live); }
+  .kind-suggestion { color: var(--signal-ink); }
+  .kind-extension { color: var(--discord); }
+
+  .card-milestone {
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    background: var(--surface-active);
+    color: var(--text-secondary);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+  }
+
+  .card-title {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-primary);
+    line-height: var(--leading-snug);
+  }
+  .card:hover .card-title {
+    color: var(--signal-ink);
+  }
+
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    margin-block-start: var(--space-1);
+  }
+  .card-votes {
+    font-family: var(--font-data);
+    color: var(--signal-ink);
+    font-weight: var(--weight-medium);
+  }
+
+  @media (max-width: 800px) {
+    .kanban { grid-template-columns: 1fr; }
+  }
+</style>
