@@ -98,7 +98,6 @@ if (Astro.request.method === 'POST') {
   const gate = await requireStaff(Astro, 'mod');
   if (isResponse(gate)) return gate;
 
-  const form = await Astro.request.formData();
   const wanted = String(form.get('status') ?? '');
 
   if ((STATUSES as readonly string[]).includes(wanted)) {
