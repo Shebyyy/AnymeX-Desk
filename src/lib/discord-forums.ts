@@ -4,6 +4,7 @@ import {
   reports,
   comments,
   attachments,
+  users,
   type Report,
   type Comment,
   type User,
@@ -907,38 +908,43 @@ export async function syncExistingReports(
   let failed = 0;
 
   for (const report of unsynced) {
-    const res = await createForumThread(report, origin, c);
-    if (res) {
-      success++;
+    try {
+      const res = await createForumThread(report, origin, c);
+      if (res) {
+        success++;
 
-      // Sync existing comments for this report if any
-      const existingComments = await d
-        .select()
-        .from(comments)
-        .where(eq(comments.reportId, report.id))
-        .orderBy(asc(comments.createdAt));
+        // Sync existing comments for this report if any
+        const existingComments = await d
+          .select()
+          .from(comments)
+          .where(eq(comments.reportId, report.id))
+          .orderBy(asc(comments.createdAt));
 
-      for (const comm of existingComments) {
-        if (!comm.discordMessageId) {
-          const [u] = await d.select().from(users).where(eq(users.discordId, comm.userId));
-          if (u) {
-            const commAtts = await d
-              .select()
-              .from(attachments)
-              .where(eq(attachments.commentId, comm.id));
-            const attUrls = commAtts.map((a) => `${origin}/uploads/${a.filePath}`);
-            await syncCommentToDiscord(
-              { id: report.id, discordThreadId: res.threadId },
-              comm,
-              u,
-              attUrls.length ? attUrls : undefined,
-              c,
-            );
-            await new Promise((r) => setTimeout(r, 200));
+        for (const comm of existingComments) {
+          if (!comm.discordMessageId) {
+            const [u] = await d.select().from(users).where(eq(users.discordId, comm.userId));
+            if (u) {
+              const commAtts = await d
+                .select()
+                .from(attachments)
+                .where(eq(attachments.commentId, comm.id));
+              const attUrls = commAtts.map((a) => `${origin}/uploads/${a.filePath}`);
+              await syncCommentToDiscord(
+                { id: report.id, discordThreadId: res.threadId, kind: report.kind },
+                comm,
+                u,
+                attUrls.length ? attUrls : undefined,
+                c,
+              );
+              await new Promise((r) => setTimeout(r, 200));
+            }
           }
         }
+      } else {
+        failed++;
       }
-    } else {
+    } catch (err) {
+      console.error(`[ForumSync] Error syncing report #${report.id}:`, err);
       failed++;
     }
 
