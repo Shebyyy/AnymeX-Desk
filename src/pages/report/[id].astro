@@ -1368,69 +1368,6 @@ Astro.response.headers.set(
   }
   .steps-body { font-size: var(--text-sm); color: var(--text-secondary); }
 
-  /* ── Discord-flavored markdown (report body/steps + comments share these) ── */
-  .body :global(p), .steps-body :global(p), .comment-body :global(p) { margin: 0 0 var(--space-2); color: var(--text-secondary); }
-  .body :global(p:last-child), .steps-body :global(p:last-child), .comment-body :global(p:last-child) { margin-block-end: 0; }
-  .body :global(u), .steps-body :global(u), .comment-body :global(u) { text-decoration: underline; text-underline-offset: 2px; }
-  .body :global(.md-code), .steps-body :global(.md-code), .comment-body :global(.md-code) {
-    font-family: var(--font-mono, monospace);
-    font-size: 0.9em;
-    padding: 0.1em 0.4em;
-    border-radius: var(--radius-sm, 4px);
-    background: var(--surface-inset);
-    border: 1px solid var(--border-subtle);
-  }
-  .body :global(.md-codeblock), .steps-body :global(.md-codeblock), .comment-body :global(.md-codeblock) {
-    font-family: var(--font-mono, monospace);
-    font-size: var(--text-sm);
-    padding: var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-inset);
-    overflow-x: auto;
-    margin: var(--space-2) 0;
-  }
-  .body :global(.md-codeblock code), .steps-body :global(.md-codeblock code), .comment-body :global(.md-codeblock code) {
-    background: none;
-    border: none;
-    padding: 0;
-  }
-  .body :global(.md-quote), .steps-body :global(.md-quote), .comment-body :global(.md-quote) {
-    margin: var(--space-2) 0;
-    padding-inline-start: var(--space-3);
-    border-inline-start: 3px solid var(--border-default);
-    color: var(--text-tertiary);
-  }
-  .body :global(.md-heading), .steps-body :global(.md-heading), .comment-body :global(.md-heading) {
-    font-weight: var(--weight-semibold, 600);
-    color: var(--text-primary);
-    margin: var(--space-2) 0 var(--space-1);
-  }
-  .body :global(.md-h1), .steps-body :global(.md-h1), .comment-body :global(.md-h1) { font-size: 1.4em; }
-  .body :global(.md-h2), .steps-body :global(.md-h2), .comment-body :global(.md-h2) { font-size: 1.2em; }
-  .body :global(.md-h3), .steps-body :global(.md-h3), .comment-body :global(.md-h3) { font-size: 1.05em; }
-  .body :global(.md-subtext), .steps-body :global(.md-subtext), .comment-body :global(.md-subtext) {
-    font-size: var(--text-xs);
-    color: var(--text-muted);
-  }
-  .body :global(.md-list), .steps-body :global(.md-list), .comment-body :global(.md-list) {
-    margin: var(--space-2) 0;
-    padding-inline-start: 1.4em;
-  }
-  .body :global(.md-list li), .steps-body :global(.md-list li), .comment-body :global(.md-list li) { margin-block-end: 2px; }
-  .body :global(.md-spoiler), .steps-body :global(.md-spoiler), .comment-body :global(.md-spoiler) {
-    background: var(--text-primary);
-    color: transparent;
-    border-radius: var(--radius-sm, 4px);
-    padding: 0 2px;
-    cursor: pointer;
-    transition: color 0.1s;
-  }
-  .body :global(.md-spoiler.is-revealed), .steps-body :global(.md-spoiler.is-revealed), .comment-body :global(.md-spoiler.is-revealed) {
-    background: var(--surface-inset);
-    color: inherit;
-  }
-
   /* ── Attachments gallery ── */
   .gallery {
     display: grid;

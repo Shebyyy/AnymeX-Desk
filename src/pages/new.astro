@@ -433,6 +433,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
             ? 'Describe what is wrong with the extension.'
             : 'What happened? What did you expect to happen?'}
         >{shown.body}</textarea>
+        <p class="field-hint">Supports Discord Markdown: <code>**bold**</code>, <code>*italic*</code>, <code>__underline__</code>, <code>~~strike~~</code>, <code>`code`</code>, <code>&gt; quote</code>, <code>||spoiler||</code>, <code>-# subtext</code></p>
       </div>
 
       {shown.kind === 'extension' && (

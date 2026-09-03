@@ -1,41 +1,36 @@
 /**
- * Renders raw text — comment bodies, report descriptions, steps-to-reproduce —
- * as safe HTML using Discord's own markdown subset, so text typed the same
- * way you'd type it in a Discord message looks the same here.
- * Reference: https://support.discord.com/hc/en-us/articles/210298617
+ * Complete Discord Markdown Parser & Rich Text Formatter.
  *
- * Covered: bold, italic, underline, strikethrough, bold+italic and
- * underline+bold/italic combos, inline code, fenced code blocks (with an
- * optional language class — no syntax-highlighting colors, since we don't
- * ship a highlighter), single-line (`>`) and multi-line (`>>>`) blockquotes,
- * spoilers (`||text||`, click to reveal), headers (`#`/`##`/`###`), subtext
- * (`-#`), unordered and ordered lists with 2-space nesting, masked links
- * (`[label](url)`), and raw URL autolinking — direct image/video links are
- * inlined as actual media instead of plain text.
- *
- * Deliberately NOT covered: Discord's @mention / #channel / emoji / timestamp
- * tags (`<@id>`, `<:name:id>`, `<t:...>`) — those reference Discord snowflake
- * IDs this site has no way to resolve.
- *
- * Titles are never run through this — see report/[id].astro — a title is
- * plain text everywhere else it appears (board rows, <title>, webhook embeds,
- * notifications), so markup there would look broken rather than helpful.
- *
- * IMPORTANT implementation note: block-level markers (`>`, `#`, `-`, digits)
- * are detected on the RAW, not-yet-HTML-escaped text. `>` in particular is
- * one of the characters escapeHtml() rewrites to `&gt;` — if escaping ran
- * first, blockquote lines would never match. Only once a line has been
- * classified and its marker stripped does its remaining content get
- * escaped, linkified, and emphasized.
+ * Fully supports Discord's rich markdown syntax:
+ * - Bold (**text**), Italics (*text* or _text_), Underline (__text__), Strikethrough (~~text~~)
+ * - Combinations: Underline Bold Italics (__***text***__), Bold Italics (***text***, **_text_**, _**text**_)
+ * - Underline Bold (__**text**__), Underline Italics (__*text*__, ___text___), Strikethrough Bold (~~**text**~~)
+ * - Fenced code blocks (```lang ... ```) & inline code (`code`)
+ * - Blockquotes: Single-line (> quote) and Multi-line (>>> quote)
+ * - Headers: # H1, ## H2, ### H3
+ * - Subtext: -# small subtext
+ * - Lists: Unordered (- or *) and Ordered (1.) with 2-space indentation
+ * - Spoilers: ||spoiler text|| (click-to-reveal)
+ * - Masked links [label](url) & automatic raw URL linking (with image/video inlining)
+ * - Discord Timestamps: <t:1756886400:R>, <t:1756886400:f>, <t:1756886400:D>, etc.
+ * - Discord Custom Emojis: <:name:id> and animated <a:name:id>
+ * - Discord Mentions: <@id>, <#id>, <@&id>
  */
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?\S*)?$/i;
 const VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v|ogv)(\?\S*)?$/i;
 
-// A masked link `[label](url)` or a bare URL, matched in one pass so a URL
-// is never processed twice (once as itself, again as part of an <a> we just
-// built for it).
+// A masked link `[label](url)` or a bare URL
 const LINKISH_RE = /\[([^[\]\n]+)]\((https?:\/\/[^\s()]+)\)|(\bhttps?:\/\/[^\s<>"')\]]+)/gi;
+
+// Discord custom emojis: <:name:id> or <a:name:id>
+const DISCORD_EMOJI_RE = /<(a)?:([a-zA-Z0-9_]{2,32}):(\d{17,21})>/g;
+
+// Discord timestamps: <t:1756886400> or <t:1756886400:R>
+const DISCORD_TIMESTAMP_RE = /<t:(\d{9,12})(?::([tTdDfFR]))?>/g;
+
+// Discord snowflake mentions: <@id>, <@!id>, <#id>, <@&id>
+const DISCORD_MENTION_RE = /<(@!?|#|@&)(\d{17,21})>/g;
 
 function escapeHtml(s: string): string {
   return s
@@ -47,9 +42,9 @@ function escapeHtml(s: string): string {
 }
 
 export interface RichBody {
-  /** Safe HTML — text is escaped, only our own markdown/linkify/media tags are raw. */
+  /** Safe HTML — all text is escaped, only validated markdown tags are raw. */
   html: string;
-  /** Non-media URLs found in the body, in order, de-duplicated — candidates for an OG preview card. */
+  /** Non-media URLs found in the body, in order, de-duplicated — candidates for link preview cards. */
   previewUrls: string[];
 }
 
@@ -59,56 +54,154 @@ interface ListLine {
   content: string;
 }
 
+/**
+ * Format a unix epoch timestamp (seconds) into Discord timestamp format styles.
+ */
+function formatDiscordTimestamp(timestampSec: number, style = 'f'): { text: string; full: string } {
+  const date = new Date(timestampSec * 1000);
+  if (isNaN(date.getTime())) {
+    return { text: `<t:${timestampSec}:${style}>`, full: '' };
+  }
+
+  const full = date.toLocaleString('en-US', {
+    dateStyle: 'full',
+    timeStyle: 'medium',
+  });
+
+  if (style === 'R') {
+    const diffSec = Math.round((date.getTime() - Date.now()) / 1000);
+    const abs = Math.abs(diffSec);
+    const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+    if (abs < 60) return { text: rtf.format(diffSec, 'second'), full };
+    if (abs < 3600) return { text: rtf.format(Math.round(diffSec / 60), 'minute'), full };
+    if (abs < 86400) return { text: rtf.format(Math.round(diffSec / 3600), 'hour'), full };
+    if (abs < 2592000) return { text: rtf.format(Math.round(diffSec / 86400), 'day'), full };
+    if (abs < 31536000) return { text: rtf.format(Math.round(diffSec / 2592000), 'month'), full };
+    return { text: rtf.format(Math.round(diffSec / 31536000), 'year'), full };
+  }
+
+  const optionsMap: Record<string, Intl.DateTimeFormatOptions> = {
+    t: { hour: 'numeric', minute: 'numeric' },
+    T: { hour: 'numeric', minute: 'numeric', second: 'numeric' },
+    d: { month: '2-digit', day: '2-digit', year: 'numeric' },
+    D: { month: 'long', day: 'numeric', year: 'numeric' },
+    f: { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric' },
+    F: { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric' },
+  };
+
+  try {
+    const text = new Intl.DateTimeFormat('en-US', optionsMap[style] || optionsMap.f).format(date);
+    return { text, full };
+  } catch {
+    return { text: date.toLocaleString(), full };
+  }
+}
+
 export function prepareCommentBody(body: string): RichBody {
   const previewUrls: string[] = [];
   const seenPreview = new Set<string>();
 
-  // Stashed raw HTML (code blocks, inline code, links/media) — kept opaque
-  // through every later regex pass and restored verbatim at the very end.
+  // Stashed raw HTML tokens
   const store: string[] = [];
   const stash = (html: string): string => {
     store.push(html);
     return `\u0000${store.length - 1}\u0000`;
   };
 
-  // ── Inline emphasis (bold/italic/underline/strike/spoiler) ──
-  // Applied to text that's already been HTML-escaped and had its
-  // links/code swapped for opaque placeholder tokens.
+  // 1. Fenced Code Blocks (```lang\n...```) — protected first
+  let working = body.replace(/```([a-zA-Z0-9_-]+)?\n?([\s\S]*?)```/g, (_m, lang: string | undefined, code: string) => {
+    const cls = lang ? ` class="language-${escapeHtml(lang.toLowerCase())}"` : '';
+    const trimmed = code.replace(/\n$/, '');
+    return stash(`<pre class="md-codeblock"><code${cls}>${escapeHtml(trimmed)}</code></pre>`);
+  });
+
+  // 2. Inline code spans (`code`)
+  working = working.replace(/`([^`\n]+)`/g, (_m, code: string) => stash(`<code class="md-code">${escapeHtml(code)}</code>`));
+
+  // 3. Discord Custom Emojis (<:name:id> or <a:name:id>)
+  working = working.replace(DISCORD_EMOJI_RE, (_m, isAnim: string | undefined, name: string, id: string) => {
+    const ext = isAnim ? 'gif' : 'webp';
+    const url = `https://cdn.discordapp.com/emojis/${id}.${ext}?size=48&quality=lossless`;
+    const alt = `:${name}:`;
+    return stash(`<img class="md-emoji" src="${url}" alt="${escapeHtml(alt)}" title="${escapeHtml(alt)}" loading="lazy" />`);
+  });
+
+  // 4. Discord Timestamps (<t:timestamp:format>)
+  working = working.replace(DISCORD_TIMESTAMP_RE, (_m, secStr: string, style: string | undefined) => {
+    const sec = parseInt(secStr, 10);
+    const { text, full } = formatDiscordTimestamp(sec, style || 'f');
+    const iso = new Date(sec * 1000).toISOString();
+    return stash(`<time class="md-timestamp" datetime="${iso}" title="${escapeHtml(full)}">${escapeHtml(text)}</time>`);
+  });
+
+  // 5. Discord Mentions (<@id>, <#id>, <@&id>)
+  working = working.replace(DISCORD_MENTION_RE, (_m, prefix: string, id: string) => {
+    let label = '@user';
+    let cls = 'md-mention';
+    if (prefix === '#') {
+      label = '#channel';
+      cls = 'md-mention md-channel';
+    } else if (prefix === '@&') {
+      label = '@role';
+      cls = 'md-mention md-role';
+    }
+    return stash(`<span class="${cls}" data-id="${id}">${label}</span>`);
+  });
+
+  // ── Inline emphasis (Bold, Italic, Underline, Strikethrough, Spoilers) ──
   function emphasize(input: string): string {
     let t = input;
 
-    // Backslash-escaped punctuation (`\*`, `\_`, ...) is protected from
-    // every pass below, then restored as a literal character at the end.
+    // Protect escaped characters (\*, \_, \~, \|, \#, \-)
     const escaped: string[] = [];
     t = t.replace(/\\([*_~|>#\\-])/g, (_m, ch: string) => {
       escaped.push(ch);
       return `\u0001${escaped.length - 1}\u0001`;
     });
 
-    // Longest / most specific delimiters first so e.g. `***x***` doesn't get
-    // partially consumed by the plain-bold pass before the combo pass sees it.
-    t = t.replace(/\*\*\*([^\n]+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-    t = t.replace(/__\*\*([^\n]+?)\*\*__/g, '<u><strong>$1</strong></u>');
-    t = t.replace(/__\*([^\n]+?)\*__/g, '<u><em>$1</em></u>');
-    t = t.replace(/\*\*([^\n]+?)\*\*/g, '<strong>$1</strong>');
-    t = t.replace(/__([^\n]+?)__/g, '<u>$1</u>');
-    t = t.replace(/\*([^\n]+?)\*/g, '<em>$1</em>');
-    // Underscore italics only trigger outside of word characters, so
-    // `snake_case_words` doesn't get half-italicized.
-    t = t.replace(/(?<![\w\u0001])_([^\n_]+?)_(?![\w\u0001])/g, '<em>$1</em>');
-    t = t.replace(/~~([^\n]+?)~~/g, '<del>$1</del>');
+    // Spoilers ||spoiler||
     t = t.replace(
       /\|\|([^\n]+?)\|\|/g,
       '<span class="md-spoiler" tabindex="0" role="button" aria-label="Spoiler, click to reveal" onclick="this.classList.toggle(\'is-revealed\')">$1</span>',
     );
 
+    // Underline Bold Italics
+    t = t.replace(/__\*\*\*([^\n]+?)\*\*\*__/g, '<u><strong><em>$1</em></strong></u>');
+    t = t.replace(/__\*\*\_([^\n]+?)\_\*\*__/g, '<u><strong><em>$1</em></strong></u>');
+
+    // Bold Italics (***text***, **_text_**, _**text**_)
+    t = t.replace(/\*\*\*([^\n]+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    t = t.replace(/\*\*\_([^\n]+?)\_\*\*/g, '<strong><em>$1</em></strong>');
+    t = t.replace(/\_\*\*([^\n]+?)\*\*\_/g, '<strong><em>$1</em></strong>');
+
+    // Underline Bold (__**text**__ or **__text__**)
+    t = t.replace(/__\*\*([^\n]+?)\*\*__/g, '<u><strong>$1</strong></u>');
+    t = t.replace(/\*\*__([^\n]+?)__\*\*/g, '<strong><u>$1</u></strong>');
+
+    // Underline Italics (__*text*__, *__text__*, ___text___)
+    t = t.replace(/__\*([^\n]+?)\*__/g, '<u><em>$1</em></u>');
+    t = t.replace(/\*__([^\n]+?)__\*/g, '<em><u>$1</u></em>');
+    t = t.replace(/___([^\n]+?)___/g, '<u><em>$1</em></u>');
+
+    // Strikethrough combos
+    t = t.replace(/~~\*\*([^\n]+?)\*\*~~/g, '<del><strong>$1</strong></del>');
+    t = t.replace(/\*\*~~([^\n]+?)~~\*\*/g, '<strong><del>$1</del></strong>');
+    t = t.replace(/~~\*([^\n]+?)\*~~/g, '<del><em>$1</em></del>');
+    t = t.replace(/\*~~([^\n]+?)~~\*/g, '<em><del>$1</del></em>');
+
+    // Standard Bold, Underline, Italic, Strikethrough
+    t = t.replace(/\*\*([^\n]+?)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/__([^\n]+?)__/g, '<u>$1</u>');
+    t = t.replace(/\*([^\n]+?)\*/g, '<em>$1</em>');
+    t = t.replace(/(?<![\w\u0001])_([^\n_]+?)_(?![\w\u0001])/g, '<em>$1</em>');
+    t = t.replace(/~~([^\n]+?)~~/g, '<del>$1</del>');
+
+    // Restore escaped characters
     t = t.replace(/\u0001(\d+)\u0001/g, (_m, idx: string) => escaped[Number(idx)]);
     return t;
   }
 
-  // ── Links + media, then emphasis, for one line of RAW content ──
-  // (raw = not yet HTML-escaped; may still contain earlier code-placeholder
-  // tokens, which LINKISH_RE and escapeHtml both simply pass through.)
+  // ── Links + Media + Inline Emphasis for one line ──
   function renderInline(raw: string): string {
     let out = '';
     let last = 0;
@@ -128,7 +221,7 @@ export function prepareCommentBody(body: string): RichBody {
 
         if (IMAGE_EXT_RE.test(url)) {
           out += stash(
-            `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer nofollow">` +
+            `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer nofollow" class="md-media-wrap">` +
               `<img src="${safeUrl}" alt="" loading="lazy" class="comment-inline-media" /></a>`,
           );
         } else if (VIDEO_EXT_RE.test(url)) {
@@ -179,7 +272,7 @@ export function prepareCommentBody(body: string): RichBody {
     return top.join('');
   }
 
-  // ── Block structure, scanning RAW (unescaped) lines ──
+  // ── Block structure scanner ──
   function parseBlocks(text: string): string {
     const lines = text.split('\n');
     const out: string[] = [];
@@ -211,7 +304,7 @@ export function prepareCommentBody(body: string): RichBody {
     while (i < lines.length) {
       const line = lines[i];
 
-      // `>>>` turns the rest of the message into one blockquote.
+      // `>>>` multi-line quote until end of message
       const multiQuote = line.match(/^>>>\s?(.*)$/);
       if (multiQuote) {
         flushParagraph();
@@ -222,7 +315,7 @@ export function prepareCommentBody(body: string): RichBody {
         break;
       }
 
-      // Single-line `>` quotes — consecutive ones are grouped into one block.
+      // Single-line `>` quote
       const quote = line.match(/^>\s?(.*)$/);
       if (quote) {
         flushParagraph();
@@ -233,7 +326,7 @@ export function prepareCommentBody(body: string): RichBody {
       }
       flushQuote();
 
-      // `#`/`##`/`###` headers (4+ hashes are not a header, matching Discord).
+      // Headers (#, ##, ###)
       const header = line.match(/^(#{1,3})\s+(.*)$/);
       if (header) {
         flushParagraph();
@@ -243,7 +336,7 @@ export function prepareCommentBody(body: string): RichBody {
         continue;
       }
 
-      // `-#` subtext.
+      // Subtext (-# text)
       const subtext = line.match(/^-#\s+(.*)$/);
       if (subtext) {
         flushParagraph();
@@ -253,7 +346,7 @@ export function prepareCommentBody(body: string): RichBody {
         continue;
       }
 
-      // `- `/`* ` bullets or `1. ` ordered items; two leading spaces nest a level.
+      // Lists: `- `, `* `, or `1. `
       const listItem = line.match(/^( *)([-*]|\d+\.)\s+(.*)$/);
       if (listItem) {
         flushParagraph();
@@ -284,24 +377,9 @@ export function prepareCommentBody(body: string): RichBody {
     return out.join('');
   }
 
-  // 1. Fenced code blocks — nothing inside these is markdown. Extracted
-  // first, on the fully raw body, so their content is never touched by
-  // anything below (block detection, links, emphasis).
-  let working = body.replace(/```(\w+)?\n?([\s\S]*?)```/g, (_m, lang: string | undefined, code: string) => {
-    const cls = lang ? ` class="language-${escapeHtml(lang.toLowerCase())}"` : '';
-    const trimmed = code.replace(/\n$/, '');
-    return stash(`<pre class="md-codeblock"><code${cls}>${escapeHtml(trimmed)}</code></pre>`);
-  });
-
-  // 2. Inline code spans — also protected from further processing.
-  working = working.replace(/`([^`\n]+)`/g, (_m, code: string) => stash(`<code class="md-code">${escapeHtml(code)}</code>`));
-
-  // 3. Block structure — still-raw text (markdown punctuation intact) is
-  // where `>`/`#`/`-`/digits get classified; escaping/linkifying/emphasis
-  // happens per-line, inside renderInline(), only after that classification.
   const blocked = parseBlocks(working);
 
-  // 4. Swap the stashed code/link/media HTML back in.
+  // Restore stashed tokens
   const html = blocked.replace(/\u0000(\d+)\u0000/g, (_m, idx: string) => store[Number(idx)]);
 
   return { html, previewUrls };
