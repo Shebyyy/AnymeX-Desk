@@ -8,7 +8,7 @@ import { LEVEL_LABELS, combine } from '../lib/levels';
 import { idList, readConfig, writeSettings } from '../lib/settings';
 import { isOwner, isResponse, logAction, requireStaff, setManualLevel } from '../lib/staff';
 import { testWebhook } from '../lib/webhook';
-import { ensureForumTags } from '../lib/discord-forums';
+import { ensureForumTags, syncExistingReports } from '../lib/discord-forums';
 import { relativeAge } from '../lib/format';
 
 export const prerender = false;
@@ -125,6 +125,9 @@ if (Astro.request.method === 'POST') {
       }
       done = `Successfully verified and auto-created forum tags across ${count} channel(s)!`;
     }
+  } else if (intent === 'sync-existing-reports') {
+    const res = await syncExistingReports(origin, 50);
+    done = `Sync completed: ${res.success} existing report(s) created in Discord! (${res.failed} failed)`;
   } else if (intent === 'block') {
     const target = String(form.get('discord_id') ?? '').trim();
     const blocked = form.get('blocked') === '1';
@@ -445,6 +448,11 @@ const botTokenSet = !!cfg.discord_bot_token;
       <input type="hidden" name="intent" value="setup-forum-tags" />
       <button class="btn" type="submit">⚡ Auto-Generate / Verify Forum Tags on Discord</button>
       <p class="field-hint" style="margin-top: 6px;">Creates Open, In Progress, Fixed, Duplicate, Won't Fix, and Platform/Source tags in all 3 channels automatically.</p>
+    </form>
+    <form method="POST" class="test" style="margin-top: 16px;">
+      <input type="hidden" name="intent" value="sync-existing-reports" />
+      <button class="btn" type="submit">📦 Sync All Existing Reports to Discord Forums</button>
+      <p class="field-hint" style="margin-top: 6px;">Creates Discord threads for any existing bugs, suggestions, or extension issues that don't have one yet, and syncs their comments.</p>
     </form>
   </section>
 

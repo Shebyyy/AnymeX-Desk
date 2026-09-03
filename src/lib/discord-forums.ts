@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import { db } from './db/client';
 import {
   reports,
@@ -770,3 +770,58 @@ export async function deleteCommentFromDiscord(
     return false;
   }
 }
+
+/**
+ * Backfill & sync existing reports that don't have a Discord Forum thread yet.
+ */
+export async function syncExistingReports(
+  origin: string,
+  limit = 50,
+  cfg?: Config,
+): Promise<{ success: number; failed: number; totalUnsynced: number }> {
+  const c = cfg ?? (await readConfig());
+  const d = db();
+
+  const unsynced = await d
+    .select()
+    .from(reports)
+    .where(isNull(reports.discordThreadId))
+    .orderBy(asc(reports.id))
+    .limit(limit);
+
+  let success = 0;
+  let failed = 0;
+
+  for (const report of unsynced) {
+    const res = await createForumThread(report, origin, c);
+    if (res) {
+      success++;
+
+      // Sync existing comments for this report if any
+      const existingComments = await d
+        .select()
+        .from(comments)
+        .where(eq(comments.reportId, report.id))
+        .orderBy(asc(comments.createdAt));
+
+      for (const comm of existingComments) {
+        if (!comm.discordMessageId) {
+          const [commentUser] = await d.select().from(reports).where(eq(reports.id, comm.reportId));
+          const [u] = await d.select().from(users).where(eq(users.discordId, comm.userId));
+          if (u) {
+            await syncCommentToDiscord({ id: report.id, discordThreadId: res.threadId }, comm, u, undefined, c);
+            await new Promise((r) => setTimeout(r, 200));
+          }
+        }
+      }
+    } else {
+      failed++;
+    }
+
+    // Rate-limit pause between thread creations (Discord forum limit is 30/min)
+    await new Promise((r) => setTimeout(r, 800));
+  }
+
+  return { success, failed, totalUnsynced: unsynced.length };
+}
+
