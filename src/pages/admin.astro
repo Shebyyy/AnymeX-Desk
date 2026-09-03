@@ -127,7 +127,7 @@ if (Astro.request.method === 'POST') {
     }
   } else if (intent === 'sync-existing-reports') {
     const res = await syncExistingReports(origin, 50);
-    done = `Sync completed: ${res.success} existing report(s) created in Discord! (${res.failed} failed)`;
+    done = `Sync completed: ${res.success} new report thread(s) created, ${res.commentsSynced} comment(s) posted to Discord!`;
   } else if (intent === 'block') {
     const target = String(form.get('discord_id') ?? '').trim();
     const blocked = form.get('blocked') === '1';
