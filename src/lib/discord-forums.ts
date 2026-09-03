@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, isNotNull } from 'drizzle-orm';
+import { and, asc, eq, isNull, isNotNull, sql } from 'drizzle-orm';
 import { db } from './db/client';
 import {
   reports,
@@ -1104,4 +1104,72 @@ export async function syncAttachmentToDiscord(
     return false;
   }
 }
+
+/**
+ * Sync status from Discord Thread applied tags back to report.
+ * Returns the updated status if changed, or null.
+ */
+export async function syncReportStatusFromDiscord(
+  report: Pick<Report, 'id' | 'kind' | 'status' | 'discordThreadId'>,
+  cfg?: Config,
+): Promise<Status | null> {
+  const c = cfg ?? (await readConfig());
+  if (c.discord_forum_sync_enabled !== '1') return null;
+
+  const botToken = c.discord_bot_token;
+  if (!botToken || !report.discordThreadId) return null;
+
+  const channelId = getForumChannelId(report.kind, c);
+  if (!channelId) return null;
+
+  try {
+    const threadRes = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {
+      headers: { Authorization: `Bot ${botToken}` },
+    });
+
+    if (!threadRes.ok) return null;
+    const threadData = (await threadRes.json()) as DiscordChannel;
+    const appliedTags = threadData.applied_tags || [];
+    if (appliedTags.length === 0) return null;
+
+    const tagsMap = await ensureForumTags(channelId, botToken, report.kind);
+    // Invert tagsMap: tagId -> tagName
+    const idToName = new Map<string, string>();
+    for (const [name, id] of tagsMap.entries()) {
+      idToName.set(id, name);
+    }
+
+    let targetStatus: Status | null = null;
+    for (const tagId of appliedTags) {
+      const name = idToName.get(tagId);
+      if (!name) continue;
+
+      if (name === 'fixed' || name === 'completed') targetStatus = 'fixed';
+      else if (name === 'in progress') targetStatus = 'in_progress';
+      else if (name === 'planned' || name === 'confirmed') targetStatus = 'confirmed';
+      else if (name === 'open' || name === 'under review') targetStatus = 'open';
+      else if (name === "won't fix" || name === 'declined') targetStatus = 'wont_fix';
+      else if (name === 'duplicate') targetStatus = 'duplicate';
+    }
+
+    if (targetStatus && targetStatus !== report.status) {
+      await db()
+        .update(reports)
+        .set({
+          status: targetStatus,
+          statusChangedAt: sql`(unixepoch())`,
+          updatedAt: sql`(unixepoch())`,
+        })
+        .where(eq(reports.id, report.id));
+
+      console.log(`[ForumSync] Auto-synced status from Discord for report #${report.id}: ${report.status} -> ${targetStatus}`);
+      return targetStatus;
+    }
+  } catch (err) {
+    console.error('[ForumSync] Failed to sync status from Discord:', err);
+  }
+
+  return null;
+}
+
 

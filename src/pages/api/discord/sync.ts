@@ -6,6 +6,7 @@ import { readConfig } from '../../../lib/settings';
 import { notifyWatchers, sendDiscordDm, truncateQuote } from '../../../lib/notify';
 import { BLURPLE } from '../../../lib/webhook';
 import { logAction } from '../../../lib/staff';
+import { syncReportStatusFromDiscord } from '../../../lib/discord-forums';
 
 export const prerender = false;
 
@@ -190,37 +191,20 @@ export const POST: APIRoute = async (ctx) => {
 
   // 4. THREAD STATUS / TAG UPDATE (Status change from Discord)
   if (event === 'THREAD_UPDATE' || event === 'status_update') {
-    if (Array.isArray(tagNames)) {
-      let targetStatus: Status | null = null;
-      const lowerTags = tagNames.map((t: string) => t.toLowerCase());
+    const newStatus = await syncReportStatusFromDiscord(report);
+    if (newStatus) {
+      const notifTask = notifyWatchers(
+        report.id,
+        'status_changed',
+        `Status changed to ${newStatus} via Discord`,
+        null,
+      );
+      if (cf) cf.waitUntil(notifTask);
+      else await notifTask;
 
-      if (lowerTags.includes('fixed')) targetStatus = 'fixed';
-      else if (lowerTags.includes("won't fix") || lowerTags.includes('wont fix')) targetStatus = 'wont_fix';
-      else if (lowerTags.includes('duplicate')) targetStatus = 'duplicate';
-      else if (lowerTags.includes('in progress')) targetStatus = 'in_progress';
-      else if (lowerTags.includes('open')) targetStatus = 'open';
-
-      if (targetStatus && targetStatus !== report.status) {
-        await d.update(reports)
-          .set({
-            status: targetStatus,
-            statusChangedAt: sql`(unixepoch())`,
-            updatedAt: sql`(unixepoch())`,
-          })
-          .where(eq(reports.id, report.id));
-
-        const notifTask = notifyWatchers(
-          report.id,
-          'status_changed',
-          `Status changed to ${targetStatus} via Discord`,
-          null,
-        );
-        if (cf) cf.waitUntil(notifTask);
-        else await notifTask;
-
-        return json({ ok: true, newStatus: targetStatus });
-      }
+      return json({ ok: true, newStatus });
     }
+    return json({ ok: true, status: 'no_change' });
   }
 
   return json({ ok: true, status: 'no_action' });

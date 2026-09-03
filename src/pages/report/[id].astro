@@ -15,7 +15,7 @@ import { atLeast } from '../../lib/levels';
 import { isResponse, levelOf, logAction, requireStaff } from '../../lib/staff';
 import { announceFixed, statusColor } from '../../lib/webhook';
 import { notifyWatchers, sendDiscordDm } from '../../lib/notify';
-import { updateForumThread, updateForumStatus, deleteForumThread } from '../../lib/discord-forums';
+import { updateForumThread, updateForumStatus, deleteForumThread, syncReportStatusFromDiscord } from '../../lib/discord-forums';
 import { readSetting } from '../../lib/settings';
 import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } from '../../lib/format';
 import { prepareCommentBody } from '../../lib/richtext';
@@ -271,8 +271,16 @@ if (Astro.request.method === 'DELETE') {
   });
 }
 
-const [report] = await db().select().from(reports).where(eq(reports.id, id));
+let [report] = await db().select().from(reports).where(eq(reports.id, id));
 if (!report) return Astro.rewrite('/404');
+
+// Auto-sync status from Discord Forum thread tags if changed in Discord
+if (report.discordThreadId) {
+  const syncedStatus = await syncReportStatusFromDiscord(report);
+  if (syncedStatus) {
+    report.status = syncedStatus;
+  }
+}
 
 // Report body and steps-to-reproduce get the same Discord-markdown
 // rendering as comments — see richtext.ts. Title stays plain text.
