@@ -84,7 +84,7 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
   <header class="head">
     <h1>Your reports</h1>
     <p class="sub">
-      Signed in as <b>{user.username}</b>. Everything you've filed and everything
+      Signed in as <b>{user.username}</b> (<a href={`/user/${user.id}`} style="color: var(--signal-ink); text-decoration: underline;">view your public profile</a>). Everything you've filed and everything
       you've voted on, plus what has changed since.
     </p>
   </header>

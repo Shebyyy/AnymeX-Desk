@@ -629,12 +629,14 @@ Astro.response.headers.set(
               style={depth > 0 ? `margin-inline-start: calc(${depth} * var(--space-6));` : undefined}
             >              <div class="comment-header">
                 <div class="comment-author">
-                  {avatar ? (
-                    <img class="avatar" src={avatar} alt="" width="24" height="24" />
-                  ) : (
-                    <span class="avatar avatar-blank" aria-hidden="true" />
-                  )}
-                  <span class="comment-username">{c.username}</span>
+                  <a href={`/user/${c.userId}`} class="comment-author-link" title={`View ${c.username}'s profile`}>
+                    {avatar ? (
+                      <img class="avatar" src={avatar} alt="" width="24" height="24" />
+                    ) : (
+                      <span class="avatar avatar-blank" aria-hidden="true" />
+                    )}
+                    <span class="comment-username">{c.username}</span>
+                  </a>
                   <span class="comment-time">{relativeAge(c.createdAt)} ago</span>
                   {c.updatedAt !== c.createdAt && <span class="comment-edited">(edited)</span>}
                 </div>
@@ -1479,6 +1481,17 @@ Astro.response.headers.set(
     font-size: var(--text-sm);
   }
   .comment { padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-inset); scroll-margin-top: var(--space-6); }
+  .comment-author-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    text-decoration: none;
+    color: inherit;
+  }
+  .comment-author-link:hover .comment-username {
+    text-decoration: underline;
+    color: var(--signal-ink);
+  }
   .comment:target {
     border-color: var(--accent, #f5c542);
     animation: comment-highlight 2s ease-out;
