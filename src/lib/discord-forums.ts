@@ -747,7 +747,7 @@ export async function syncCommentToDiscord(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ archived: false }),
-    }).catch(() => {});
+    }).catch(() => { });
 
     // Resolve reply info if this is a reply to another comment
     let messageReference: { message_id: string } | undefined;
@@ -926,73 +926,43 @@ export async function syncExistingReports(
     .limit(limit);
 
   for (const report of unsynced) {
-    try {
-      const res = await createForumThread(report, origin, c);
-      if (res) {
-        success++;
-      } else {
-        failed++;
+    const res = await createForumThread(report, origin, c);
+    if (res) {
+      success++;
+
+      // Sync existing comments for this report if any
+      const existingComments = await d
+        .select()
+        .from(comments)
+        .where(eq(comments.reportId, report.id))
+        .orderBy(asc(comments.createdAt));
+
+      for (const comm of existingComments) {
+        if (!comm.discordMessageId) {
+          const [u] = await d.select().from(users).where(eq(users.discordId, comm.userId));
+          if (u) {
+            const commAtts = await d
+              .select()
+              .from(attachments)
+              .where(eq(attachments.commentId, comm.id));
+            const attUrls = commAtts.map((a) => `${origin}/uploads/${a.filePath}`);
+            await syncCommentToDiscord(
+              { id: report.id, discordThreadId: res.threadId },
+              comm,
+              u,
+              attUrls.length ? attUrls : undefined,
+              c,
+            );
+            await new Promise((r) => setTimeout(r, 200));
+          }
+        }
       }
-    } catch (err) {
-      console.error(`[ForumSync] Error syncing report #${report.id}:`, err);
+    } else {
       failed++;
     }
 
     // Rate-limit pause between thread creations (Discord forum limit is 30/min)
     await new Promise((r) => setTimeout(r, 800));
-  }
-
-  // Step 2: Sync ALL unsynced comments for ANY report that already has a discordThreadId
-  // (This handles reports whose threads were already created, like Report #3!)
-  const unsyncedComments = await d
-    .select({
-      comment: comments,
-      reportDiscordThreadId: reports.discordThreadId,
-      reportKind: reports.kind,
-      reportId: reports.id,
-      user: users,
-    })
-    .from(comments)
-    .innerJoin(reports, eq(reports.id, comments.reportId))
-    .innerJoin(users, eq(users.discordId, comments.userId))
-    .where(
-      and(
-        isNotNull(reports.discordThreadId),
-        isNull(comments.discordMessageId),
-      ),
-    )
-    .orderBy(asc(comments.createdAt))
-    .limit(100);
-
-  for (const item of unsyncedComments) {
-    try {
-      const commAtts = await d
-        .select()
-        .from(attachments)
-        .where(eq(attachments.commentId, item.comment.id));
-      const attUrls = commAtts.map((a) => `${origin}/uploads/${a.filePath}`);
-
-      const msgId = await syncCommentToDiscord(
-        {
-          id: item.reportId,
-          discordThreadId: item.reportDiscordThreadId,
-          kind: item.reportKind,
-        },
-        item.comment,
-        item.user,
-        attUrls.length ? attUrls : undefined,
-        c,
-      );
-
-      if (msgId) {
-        commentsSynced++;
-      } else {
-        console.warn(`[ForumSync] Could not post comment #${item.comment.id} to thread`);
-      }
-    } catch (err) {
-      console.error(`[ForumSync] Error syncing comment #${item.comment.id}:`, err);
-    }
-    await new Promise((r) => setTimeout(r, 300));
   }
 
   return { success, failed, commentsSynced, totalUnsynced: unsynced.length };
