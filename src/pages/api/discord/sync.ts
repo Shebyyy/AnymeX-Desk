@@ -3,7 +3,8 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '../../../lib/db/client';
 import { comments, reports, users, notifications, type Status } from '../../../lib/db/schema';
 import { readConfig } from '../../../lib/settings';
-import { notifyWatchers } from '../../../lib/notify';
+import { notifyWatchers, sendDiscordDm, truncateQuote } from '../../../lib/notify';
+import { BLURPLE } from '../../../lib/webhook';
 import { logAction } from '../../../lib/staff';
 
 export const prerender = false;
@@ -96,6 +97,22 @@ export const POST: APIRoute = async (ctx) => {
       });
     }
 
+    // Resolve replyToId if replying to a message
+    const replyDiscordMsgId = body.replyToMessageId || body.message_reference?.message_id;
+    let replyToId: number | null = null;
+    let parentCommentAuthorId: string | null = null;
+
+    if (replyDiscordMsgId) {
+      const [parent] = await d
+        .select({ id: comments.id, userId: comments.userId })
+        .from(comments)
+        .where(eq(comments.discordMessageId, replyDiscordMsgId));
+      if (parent) {
+        replyToId = parent.id;
+        parentCommentAuthorId = parent.userId;
+      }
+    }
+
     // Insert comment
     const [inserted] = await d.batch([
       d.insert(comments).values({
@@ -104,6 +121,7 @@ export const POST: APIRoute = async (ctx) => {
         body: content || '',
         discordMessageId: messageId,
         source: 'discord',
+        replyToId,
       }).returning(),
       d.update(reports)
         .set({ commentCount: sql`${reports.commentCount} + 1`, updatedAt: sql`(unixepoch())` })
@@ -111,6 +129,24 @@ export const POST: APIRoute = async (ctx) => {
     ]);
 
     const newComment = inserted[0][0];
+
+    // If this was a reply to someone, notify that specific user & send Discord DM!
+    if (parentCommentAuthorId && parentCommentAuthorId !== author.id) {
+      await d.insert(notifications).values({
+        userId: parentCommentAuthorId,
+        reportId: report.id,
+        kind: 'mentioned',
+        detail: `${author.username} replied to your comment from Discord`,
+      });
+      sendDiscordDm(parentCommentAuthorId, {
+        author: author.username,
+        title: 'New reply to your comment',
+        description: truncateQuote(content || ''),
+        url: `${ctx.url.origin}/report/${report.id}#comment-${newComment?.id}`,
+        color: BLURPLE,
+        footer: report.title,
+      }).catch(() => {});
+    }
 
     // Notify report watchers
     const notifTask = notifyWatchers(report.id, 'comment', `Discord reply by ${author.username}`, author.id);

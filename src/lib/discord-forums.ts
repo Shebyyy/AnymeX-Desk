@@ -3,6 +3,7 @@ import { db } from './db/client';
 import {
   reports,
   comments,
+  attachments,
   type Report,
   type Comment,
   type User,
@@ -326,6 +327,27 @@ export async function buildReportEmbed(report: Report, origin: string) {
     fields.push({ name: 'Steps to Reproduce', value: steps, inline: false });
   }
 
+  // Fetch report-level attachments (screenshots / recordings)
+  const d = db();
+  const reportAtts = await d
+    .select()
+    .from(attachments)
+    .where(and(eq(attachments.reportId, report.id), isNull(attachments.commentId)));
+
+  const firstImage = reportAtts.find((a) => a.fileType === 'image');
+  const otherFiles = reportAtts.filter((a) => a.id !== firstImage?.id);
+
+  if (otherFiles.length > 0) {
+    fields.push({
+      name: 'Attachments',
+      value: otherFiles
+        .slice(0, 5)
+        .map((f) => `📎 [${f.fileName}](${origin}/uploads/${f.filePath})`)
+        .join('\n'),
+      inline: false,
+    });
+  }
+
   return {
     title: `[#${report.id}] ${report.title}`.slice(0, 256),
     description: report.body
@@ -336,6 +358,7 @@ export async function buildReportEmbed(report: Report, origin: string) {
     url: `${origin}/report/${report.id}`,
     color,
     fields,
+    image: firstImage ? { url: `${origin}/uploads/${firstImage.filePath}` } : undefined,
     footer: { text: `AnymeX Tracker • ${isSuggestion ? 'Suggestion' : 'Report'} #${report.id}` },
     timestamp: new Date((report.createdAt || Math.floor(Date.now() / 1000)) * 1000).toISOString(),
   };
@@ -644,11 +667,62 @@ export async function deleteForumThread(
   }
 }
 
+/** Webhook cache to avoid repeated webhook lookups per channel */
+const webhookCache = new Map<string, { id: string; token: string }>();
+
+/**
+ * Get or create a webhook on the forum channel to send comments using user's avatar & name
+ */
+export async function getOrCreateChannelWebhook(
+  channelId: string,
+  botToken: string,
+): Promise<{ id: string; token: string } | null> {
+  const cached = webhookCache.get(channelId);
+  if (cached) return cached;
+
+  try {
+    const listRes = await fetch(`${DISCORD_API}/channels/${channelId}/webhooks`, {
+      headers: { Authorization: `Bot ${botToken}` },
+    });
+
+    if (listRes.ok) {
+      const hooks = (await listRes.json()) as Array<{ id: string; token?: string; name: string }>;
+      const existing = hooks.find((h) => h.token);
+      if (existing && existing.token) {
+        webhookCache.set(channelId, { id: existing.id, token: existing.token });
+        return { id: existing.id, token: existing.token };
+      }
+    }
+
+    // Create a new webhook for this channel
+    const createRes = await fetch(`${DISCORD_API}/channels/${channelId}/webhooks`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bot ${botToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'AnymeX Desk Bridge' }),
+    });
+
+    if (createRes.ok) {
+      const created = (await createRes.json()) as { id: string; token: string };
+      if (created.token) {
+        webhookCache.set(channelId, { id: created.id, token: created.token });
+        return { id: created.id, token: created.token };
+      }
+    }
+  } catch (err) {
+    console.warn('[ForumSync] Could not get or create webhook for channel', channelId, err);
+  }
+
+  return null;
+}
+
 /**
  * Forward a site comment to the Discord Forum Thread
  */
 export async function syncCommentToDiscord(
-  report: Pick<Report, 'id' | 'discordThreadId'>,
+  report: Pick<Report, 'id' | 'discordThreadId' | 'kind'>,
   comment: Pick<Comment, 'id' | 'body' | 'replyToId'>,
   author: User,
   attachmentUrls?: string[],
@@ -661,7 +735,7 @@ export async function syncCommentToDiscord(
   if (!botToken || !report.discordThreadId) return null;
 
   try {
-    const avatar = avatarUrl(author, 128);
+    const avatar = avatarUrl(author, 256);
     const content = comment.body || (attachmentUrls?.length ? '(Shared an attachment)' : '');
 
     // Unarchive thread if it was archived
@@ -674,7 +748,24 @@ export async function syncCommentToDiscord(
       body: JSON.stringify({ archived: false }),
     }).catch(() => {});
 
-    // Send message as an embed or formatted bot message
+    // Resolve reply info if this is a reply to another comment
+    let messageReference: { message_id: string } | undefined;
+    let replyPrefix = '';
+    if (comment.replyToId != null) {
+      const [parent] = await db()
+        .select({ discordMessageId: comments.discordMessageId, userId: comments.userId })
+        .from(comments)
+        .where(eq(comments.id, comment.replyToId));
+
+      if (parent?.discordMessageId) {
+        messageReference = { message_id: parent.discordMessageId };
+      }
+      if (parent?.userId) {
+        replyPrefix = `*Replying to <@${parent.userId}>:*\n`;
+      }
+    }
+
+    // Embeds for attachments
     const embeds: Record<string, unknown>[] = [];
     if (attachmentUrls && attachmentUrls.length > 0) {
       for (const url of attachmentUrls) {
@@ -682,18 +773,41 @@ export async function syncCommentToDiscord(
       }
     }
 
-    const res = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bot ${botToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        content: `**${author.username}** (via Tracker):\n${content}`,
-        embeds: embeds.length > 0 ? embeds : undefined,
-        allowed_mentions: { parse: ['users'] },
-      }),
-    });
+    // Attempt to send via Webhook so message uses the user's Discord Avatar & Username
+    const forumChannelId = report.kind ? getForumChannelId(report.kind, c) : null;
+    let hook = forumChannelId ? await getOrCreateChannelWebhook(forumChannelId, botToken) : null;
+
+    let res: Response | null = null;
+    if (hook) {
+      res = await fetch(`${DISCORD_API}/webhooks/${hook.id}/${hook.token}?thread_id=${report.discordThreadId}&wait=true`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: author.username.slice(0, 80),
+          avatar_url: avatar,
+          content: `${replyPrefix}${content}`,
+          embeds: embeds.length > 0 ? embeds : undefined,
+          allowed_mentions: { parse: ['users'], replied_user: true },
+        }),
+      });
+    }
+
+    // Fallback to bot message if webhook is not available or fails
+    if (!res || !res.ok) {
+      res = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bot ${botToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          content: `${replyPrefix}**${author.username}** (via Tracker):\n${content}`,
+          message_reference: messageReference,
+          embeds: embeds.length > 0 ? embeds : undefined,
+          allowed_mentions: { parse: ['users'], replied_user: true },
+        }),
+      });
+    }
 
     if (!res.ok) {
       console.error('[ForumSync] Failed to post comment to Discord thread:', res.status, await res.text());
@@ -806,10 +920,20 @@ export async function syncExistingReports(
 
       for (const comm of existingComments) {
         if (!comm.discordMessageId) {
-          const [commentUser] = await d.select().from(reports).where(eq(reports.id, comm.reportId));
           const [u] = await d.select().from(users).where(eq(users.discordId, comm.userId));
           if (u) {
-            await syncCommentToDiscord({ id: report.id, discordThreadId: res.threadId }, comm, u, undefined, c);
+            const commAtts = await d
+              .select()
+              .from(attachments)
+              .where(eq(attachments.commentId, comm.id));
+            const attUrls = commAtts.map((a) => `${origin}/uploads/${a.filePath}`);
+            await syncCommentToDiscord(
+              { id: report.id, discordThreadId: res.threadId },
+              comm,
+              u,
+              attUrls.length ? attUrls : undefined,
+              c,
+            );
             await new Promise((r) => setTimeout(r, 200));
           }
         }
@@ -823,5 +947,62 @@ export async function syncExistingReports(
   }
 
   return { success, failed, totalUnsynced: unsynced.length };
+}
+
+/**
+ * Forward a newly uploaded attachment to the Discord Forum Thread
+ */
+export async function syncAttachmentToDiscord(
+  reportId: number,
+  filePath: string,
+  fileName: string,
+  fileType: string,
+  origin: string,
+  uploaderUsername?: string,
+  cfg?: Config,
+): Promise<boolean> {
+  const c = cfg ?? (await readConfig());
+  if (c.discord_forum_sync_enabled !== '1') return false;
+  const botToken = c.discord_bot_token;
+  if (!botToken) return false;
+
+  const [report] = await db()
+    .select({ discordThreadId: reports.discordThreadId })
+    .from(reports)
+    .where(eq(reports.id, reportId));
+
+  if (!report?.discordThreadId) return false;
+
+  try {
+    const fileUrl = `${origin}/uploads/${filePath}`;
+    const byLine = uploaderUsername ? ` by **${uploaderUsername}**` : '';
+
+    const embed: Record<string, unknown> = {
+      title: `📎 New Attachment: ${fileName}`,
+      description: `Uploaded${byLine} on AnymeX Desk. [View Full Attachment](${fileUrl})`,
+      url: fileUrl,
+      color: BLURPLE,
+    };
+
+    if (fileType === 'image') {
+      embed.image = { url: fileUrl };
+    }
+
+    await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bot ${botToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        embeds: [embed],
+      }),
+    });
+
+    return true;
+  } catch (err) {
+    console.error('[ForumSync] Exception in syncAttachmentToDiscord:', err);
+    return false;
+  }
 }
 

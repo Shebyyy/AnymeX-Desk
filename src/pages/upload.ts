@@ -14,6 +14,7 @@ import {
   VIDEO_MIMES,
 } from '../lib/db/schema';
 import { isReportId } from '../lib/writes';
+import { syncAttachmentToDiscord } from '../lib/discord-forums';
 
 export const prerender = false;
 
@@ -132,5 +133,22 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   const [inserted] = await d.batch(batchOps);
+
+  // Sync attachment to Discord forum thread if present (async / non-blocking)
+  const syncTask = syncAttachmentToDiscord(
+    reportId,
+    filePath,
+    file.name,
+    fileType,
+    ctx.url.origin,
+    user.username,
+  );
+  const cf = (ctx.locals as any)?.runtime?.ctx;
+  if (cf?.waitUntil) {
+    cf.waitUntil(syncTask);
+  } else {
+    syncTask.catch(() => {});
+  }
+
   return json(inserted[0]);
 };
