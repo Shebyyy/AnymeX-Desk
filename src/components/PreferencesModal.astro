@@ -259,15 +259,21 @@
 
 <style>
   .prefs-dialog {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    margin: 0;
     padding: 0;
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-lg);
     background: var(--surface-raised);
     color: var(--text-primary);
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
     max-inline-size: 580px;
     inline-size: 92vw;
     max-block-size: 88vh;
+    z-index: 1000;
   }
   .prefs-dialog::backdrop {
     background: rgba(0, 0, 0, 0.65);
