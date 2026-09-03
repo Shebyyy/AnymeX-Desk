@@ -12,6 +12,8 @@ const tabs = [
   { href: '/', label: 'Bugs', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') !== 'suggestion' && new URL(Astro.url).searchParams.get('kind') !== 'extension' },
   { href: '/?kind=suggestion', label: 'Suggestions', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') === 'suggestion' },
   { href: '/?kind=extension', label: 'Extension Issues', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') === 'extension' },
+  { href: '/changelog', label: 'Changelog', match: (p: string) => p === '/changelog' },
+  { href: '/stats', label: 'Stats', match: (p: string) => p === '/stats' },
 ];
 
 const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
@@ -36,6 +38,23 @@ const DISCORD_MARK =
         ))
       }
     </nav>
+
+    <form class="search-box" method="get" action="/search" role="search">
+      <label class="sr-only" for="header-search">Search reports</label>
+      <svg class="search-box-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      <input
+        id="header-search"
+        class="search-box-input"
+        type="search"
+        name="q"
+        placeholder="Search…"
+        autocomplete="off"
+        spellcheck="false"
+        aria-label="Search reports"
+      />
+    </form>
 
     <div class="controls">
       <button id="theme-toggle" class="btn btn-ghost btn-icon theme-btn" type="button" aria-label="Switch theme">
@@ -196,5 +215,43 @@ const DISCORD_MARK =
 
   @media (max-width: 560px) {
     .mark-text span { display: none; }
+  }
+
+  /* Compact header search */
+  .search-box {
+    display: none;
+    position: relative;
+    flex: none;
+  }
+  @media (min-width: 800px) {
+    .search-box { display: flex; align-items: center; }
+  }
+  .search-box-icon {
+    position: absolute;
+    inset-inline-start: 8px;
+    color: var(--text-muted);
+    pointer-events: none;
+  }
+  .search-box-input {
+    block-size: 28px;
+    padding-inline: 28px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    background: var(--surface-inset);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    width: 9rem;
+    transition:
+      width var(--dur-base) var(--ease-standard),
+      border-color var(--dur-fast) var(--ease-standard),
+      background var(--dur-fast) var(--ease-standard);
+  }
+  .search-box-input::placeholder { color: var(--text-muted); }
+  .search-box-input:focus {
+    outline: 2px solid var(--signal);
+    outline-offset: -1px;
+    border-color: var(--signal);
+    background: var(--surface-raised);
+    width: 16rem;
   }
 </style>

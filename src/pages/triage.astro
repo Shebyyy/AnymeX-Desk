@@ -1,0 +1,247 @@
+---
+import Base from '../layouts/Base.astro';
+import { db } from '../lib/db/client';
+import { reports, users } from '../lib/db/schema';
+import { sql, eq } from 'drizzle-orm';
+import { isResponse, requireStaff, logAction } from '../lib/staff';
+import { STATUSES, STATUS_LABELS, KIND_LABELS, CATEGORY_LABELS, PLATFORM_LABELS } from '../lib/db/schema';
+import { notifyWatchers } from '../lib/notify';
+import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } from '../lib/format';
+
+export const prerender = false;
+
+/**
+ * /triage — Rapid inline status triage for mods.
+ *
+ * Shows the 30 newest reports that are still `open` (not yet confirmed or
+ * further). Mods can set status in one click without opening each report.
+ */
+
+const gate = await requireStaff(Astro, 'mod');
+if (isResponse(gate)) return gate;
+const { user } = gate;
+
+let done: string | null = null;
+let error: string | null = null;
+
+/* ── Inline status action ─────────────────────────────────────────────────── */
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const reportId = Number(form.get('report_id') ?? '');
+  const wanted = String(form.get('status') ?? '').trim();
+  const rawNote = String(form.get('note') ?? '').trim().slice(0, 500);
+  const statusNote = rawNote || null;
+
+  if (!Number.isSafeInteger(reportId) || reportId <= 0) {
+    error = 'Invalid report ID.';
+  } else if (!(STATUSES as readonly string[]).includes(wanted)) {
+    error = 'Invalid status.';
+  } else {
+    const status = wanted as (typeof STATUSES)[number];
+    const detail = statusNote ? `${status}: ${statusNote}` : status;
+    const reportUrl = `${Astro.url.origin}/report/${reportId}`;
+
+    const [updated] = await db()
+      .update(reports)
+      .set({ status, statusNote, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
+      .where(eq(reports.id, reportId))
+      .returning();
+
+    if (updated) {
+      const cf = Astro.locals.cfContext;
+      const tasks: Promise<unknown>[] = [
+        logAction(user, 'report.status', String(reportId), detail, reportUrl),
+        notifyWatchers(reportId, 'status_changed', detail, user.id),
+      ];
+      if (cf) for (const t of tasks) cf.waitUntil(t);
+      else await Promise.all(tasks);
+      done = `Report #${reportId} → ${STATUS_LABELS[status] ?? status}`;
+    } else {
+      error = `Report #${reportId} not found.`;
+    }
+  }
+}
+
+/* ── Load unreviewed reports ─────────────────────────────────────────────── */
+const queue = await db().all(sql`
+  SELECT r.id, r.kind, r.category, r.platform, r.title, r.status,
+         r.votes, r.comment_count AS commentCount, r.created_at AS createdAt,
+         u.username AS reporterName
+  FROM reports r
+  LEFT JOIN users u ON u.discord_id = r.reporter_id
+  WHERE r.status = 'open'
+  ORDER BY r.created_at DESC
+  LIMIT 30
+`) as {
+  id: number;
+  kind: string;
+  category: string;
+  platform: string;
+  title: string;
+  status: string;
+  votes: number;
+  commentCount: number;
+  createdAt: number;
+  reporterName: string | null;
+}[];
+---
+
+<Base title="Triage Queue" narrow>
+  <header class="head">
+    <h1>Triage Queue</h1>
+    <p class="sub">
+      The 30 newest <b>open</b> reports, unreviewed. Set status inline — changes
+      notify the reporter automatically.
+    </p>
+  </header>
+
+  {done && <p class="flash flash-ok" role="status">{done}</p>}
+  {error && <p class="flash flash-err" role="alert">{error}</p>}
+
+  {queue.length === 0 ? (
+    <div class="empty">
+      <p class="empty-title">Queue cleared!</p>
+      <p>No open reports awaiting review. Great work.</p>
+    </div>
+  ) : (
+    <ol class="queue">
+      {queue.map((r) => (
+        <li class="item" id={`triage-${r.id}`}>
+          <div class="item-meta">
+            <a class="item-title" href={`/report/${r.id}`} target="_blank">
+              #{r.id} {r.title}
+            </a>
+            <span class="item-tags">
+              <span class="tag">{kindLabel(r.kind)}</span>
+              <span class="tag">{categoryLabel(r.category)}</span>
+              <span class="tag">{platformLabel(r.platform)}</span>
+              {r.votes > 0 && <span class="votes">{r.votes}v</span>}
+              {r.commentCount > 0 && <span class="votes">{r.commentCount}c</span>}
+              <span class="age">{relativeAge(r.createdAt)} ago</span>
+              {r.reporterName && <span class="age">· {r.reporterName}</span>}
+            </span>
+          </div>
+
+          <form class="item-form" method="POST">
+            <input type="hidden" name="report_id" value={r.id} />
+            <input
+              class="note-input"
+              type="text"
+              name="note"
+              placeholder="Optional note…"
+              maxlength="500"
+              autocomplete="off"
+            />
+            <div class="btn-row">
+              {([
+                ['confirmed', 'Confirm', 'btn-confirm'],
+                ['in_progress', 'In Progress', 'btn-wip'],
+                ['wont_fix', "Won't Fix", 'btn-dead'],
+                ['duplicate', 'Duplicate', 'btn-dup'],
+              ] as const).map(([val, label, cls]) => (
+                <button class={`btn btn-sm ${cls}`} type="submit" name="status" value={val}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </form>
+        </li>
+      ))}
+    </ol>
+  )}
+</Base>
+
+<style>
+  .head {
+    padding-block-end: var(--space-4);
+    border-block-end: 1px solid var(--border-subtle);
+    margin-block-end: var(--space-4);
+  }
+  h1 { font-size: var(--text-xl); letter-spacing: var(--track-tight); }
+  .sub {
+    max-inline-size: 62ch;
+    margin-block-start: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+  }
+
+  .flash {
+    margin-block: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+  }
+  .flash-ok {
+    border-inline-start: 2px solid var(--signal);
+    background: var(--signal-fill);
+  }
+  .flash-err {
+    border-inline-start: 2px solid var(--dead);
+    background: var(--dead-fill);
+  }
+
+  .queue { display: flex; flex-direction: column; gap: var(--space-3); }
+
+  .item {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .item-meta { display: flex; flex-direction: column; gap: var(--space-1); }
+  .item-title {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semi);
+    color: var(--text-primary);
+  }
+  .item-title:hover { color: var(--signal-ink); text-decoration: underline; }
+
+  .item-tags {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .tag {
+    padding-inline: var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+  }
+  .votes, .age { font-size: var(--text-xs); color: var(--text-muted); }
+
+  .item-form { display: flex; flex-direction: column; gap: var(--space-2); }
+  .note-input {
+    block-size: var(--control-height);
+    padding-inline: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+  }
+  .note-input:focus {
+    outline: 2px solid var(--signal);
+    outline-offset: -1px;
+    border-color: var(--signal);
+  }
+
+  .btn-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .btn-sm { font-size: var(--text-xs); padding: 4px 10px; }
+  .btn-confirm { background: var(--live-fill); border-color: var(--live); color: var(--live); }
+  .btn-confirm:hover { background: var(--live); color: #fff; }
+  .btn-wip { background: var(--signal-fill); border-color: var(--signal); color: var(--signal-ink); }
+  .btn-wip:hover { background: var(--signal); color: var(--on-signal); }
+  .btn-dead { background: var(--dead-fill); border-color: var(--dead); color: var(--dead); }
+  .btn-dead:hover { background: var(--dead); color: #fff; }
+  .btn-dup { border-color: var(--border-strong); color: var(--text-secondary); }
+  .btn-dup:hover { background: var(--surface-hover); }
+
+  .empty { margin-block-start: var(--space-8); text-align: center; }
+  .empty-title { font-size: var(--text-lg); margin-block-end: var(--space-2); }
+</style>

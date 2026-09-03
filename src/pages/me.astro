@@ -5,7 +5,10 @@ import { currentUser } from '../lib/auth';
 import { safeReturnTo } from '../lib/redirect';
 import { myBacked, myReports, myUpdates, markRead } from '../lib/notify';
 import { relativeAge, statusLabel, kindLabel, categoryLabel } from '../lib/format';
-import { STATUSES } from '../lib/db/schema';
+import { STATUSES, KINDS, KIND_LABELS, PLATFORMS, PLATFORM_LABELS, CATEGORY_LABELS,
+  BUG_CATEGORIES, SUGGESTION_CATEGORIES, EXTENSION_SOURCES, subscriptions } from '../lib/db/schema';
+import { db } from '../lib/db/client';
+import { eq, and } from 'drizzle-orm';
 
 export const prerender = false;
 
@@ -26,6 +29,24 @@ let done: string | null = null;
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
+  const intent = String(form.get('intent') ?? '');
+
+  if (intent === 'subscribe') {
+    const kind     = String(form.get('kind') ?? '').trim() || null;
+    const category = String(form.get('category') ?? '').trim() || null;
+    const platform = String(form.get('platform') ?? '').trim() || null;
+    await db().insert(subscriptions).values({ userId: user.id, kind, category, platform });
+    return Astro.redirect('/me?subscribed=1', 303);
+  }
+
+  if (intent === 'unsubscribe') {
+    const subId = Number(form.get('subId') ?? '');
+    if (Number.isSafeInteger(subId) && subId > 0) {
+      await db().delete(subscriptions).where(and(eq(subscriptions.id, subId), eq(subscriptions.userId, user.id)));
+    }
+    return Astro.redirect('/me?unsubscribed=1', 303);
+  }
+
   const ids = String(form.get('ids') ?? '')
     .split(',')
     .map(Number)
@@ -41,6 +62,8 @@ const [updates, filed, backed] = await Promise.all([
 ]);
 
 if (Astro.url.searchParams.has('read')) done = 'Marked as read.';
+if (Astro.url.searchParams.has('subscribed')) done = 'Subscription saved.';
+if (Astro.url.searchParams.has('unsubscribed')) done = 'Subscription removed.';
 
 const unread = updates.filter((u) => u.readAt === null);
 
@@ -49,7 +72,10 @@ const WHAT_HAPPENED = {
   comment: 'got a comment on',
   duplicate: 'was merged into',
   mentioned: 'was mentioned in',
+  subscription_match: 'matched subscription on',
 } as const;
+
+const mySubs = await db().select().from(subscriptions).where(eq(subscriptions.userId, user.id));
 
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 ---
@@ -63,7 +89,7 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
     </p>
   </header>
 
-  {done && <p class="flash" role="status">done</p>}
+  {done && <p class="flash" role="status">{done}</p>}
 
   <section class="block">
     <div class="block-head">
@@ -154,6 +180,67 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
         </ol>
       )
     }
+  </section>
+
+  {/* ── Subscriptions ──────────────────────────────────────────────────── */}
+  <section class="block">
+    <div class="block-head">
+      <h2>Subscriptions</h2>
+    </div>
+    <p class="sub-desc">Get an in-app notification when a new report matches your filter.</p>
+
+    {mySubs.length > 0 && (
+      <ul class="sub-list">
+        {mySubs.map((s) => (
+          <li class="sub-item">
+            <span class="sub-tags">
+              {s.kind    && <span class="tag">{KIND_LABELS[s.kind] ?? s.kind}</span>}
+              {s.category && <span class="tag">{CATEGORY_LABELS[s.category] ?? s.category}</span>}
+              {s.platform && <span class="tag">{PLATFORM_LABELS[s.platform] ?? s.platform}</span>}
+              {!s.kind && !s.category && !s.platform && <span class="tag tag-all">All reports</span>}
+            </span>
+            <form method="POST" class="sub-remove">
+              <input type="hidden" name="intent" value="unsubscribe" />
+              <input type="hidden" name="subId" value={s.id} />
+              <button class="btn btn-ghost btn-sm" type="submit" aria-label="Remove subscription">Remove</button>
+            </form>
+          </li>
+        ))}
+      </ul>
+    )}
+
+    <details class="sub-add-details">
+      <summary class="sub-add-summary">+ Add subscription</summary>
+      <form method="POST" class="sub-add-form">
+        <input type="hidden" name="intent" value="subscribe" />
+        <div class="sub-add-row">
+          <div class="field">
+            <label class="label" for="sub-kind">Type</label>
+            <select id="sub-kind" name="kind" class="select">
+              <option value="">Any type</option>
+              {KINDS.map((k) => <option value={k}>{KIND_LABELS[k]}</option>)}
+            </select>
+          </div>
+          <div class="field">
+            <label class="label" for="sub-platform">Platform</label>
+            <select id="sub-platform" name="platform" class="select">
+              <option value="">Any platform</option>
+              {PLATFORMS.map((p) => <option value={p}>{PLATFORM_LABELS[p]}</option>)}
+            </select>
+          </div>
+          <div class="field">
+            <label class="label" for="sub-category">Category</label>
+            <select id="sub-category" name="category" class="select">
+              <option value="">Any category</option>
+              {[...BUG_CATEGORIES, ...SUGGESTION_CATEGORIES, ...EXTENSION_SOURCES].map((c) => (
+                <option value={c}>{CATEGORY_LABELS[c] ?? c}</option>
+              ))}
+            </select>
+          </div>
+          <button class="btn btn-primary sub-add-btn" type="submit">Subscribe</button>
+        </div>
+      </form>
+    </details>
   </section>
 </Base>
 
@@ -259,4 +346,66 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
     .u-title { max-inline-size: 100%; white-space: normal; }
     .u-meta { flex-basis: 100%; }
   }
+
+  /* ── Subscriptions ── */
+  .sub-desc {
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    margin-block-end: var(--space-3);
+  }
+  .sub-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-block-end: var(--space-3);
+  }
+  .sub-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+  }
+  .sub-tags {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .tag {
+    padding-inline: var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+  }
+  .tag-all { border-color: var(--signal); color: var(--signal-ink); }
+  .sub-remove { flex: none; }
+
+  .sub-add-details {
+    margin-block-start: var(--space-3);
+  }
+  .sub-add-summary {
+    cursor: pointer;
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    user-select: none;
+    list-style: none;
+  }
+  .sub-add-summary::-webkit-details-marker { display: none; }
+  .sub-add-summary:hover { color: var(--text-primary); }
+
+  .sub-add-form { margin-block-start: var(--space-3); }
+  .sub-add-row {
+    display: flex;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+  .sub-add-row .field { flex: 1; min-inline-size: 8rem; }
+  .sub-add-btn { flex: none; }
+  .btn-sm { font-size: var(--text-xs); padding: 4px 10px; }
 </style>

@@ -1,11 +1,12 @@
 ---
 import Base from '../../layouts/Base.astro';
 import VoteButton from '../../components/VoteButton.astro';
-import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../../lib/db/client';
-import {
-  OPEN_STATUSES, STATUSES, reports, votes, attachments, comments, users,
+import { OPEN_STATUSES, STATUSES, reports, votes, attachments, comments, users,
   KIND_LABELS, CATEGORY_LABELS, PLATFORM_LABELS,
+  BUG_CATEGORIES, SUGGESTION_CATEGORIES, EXTENSION_SOURCES, PLATFORMS,
+  reportEdits, labels, reportLabels, commentReactions,
 } from '../../lib/db/schema';
 import { avatarUrl, currentUser, dbUser } from '../../lib/auth';
 import { reporterMeta } from '../../lib/reporter';
@@ -23,8 +24,77 @@ export const prerender = false;
 const id = Number(Astro.params.id);
 if (!Number.isInteger(id)) return Astro.rewrite('/404');
 
-/* Moderator actions. */
+/* Actions (POST). */
 if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = String(form.get('intent') ?? '');
+
+  if (intent === 'label_add' || intent === 'label_remove') {
+    const gate = await requireStaff(Astro, 'mod');
+    if (isResponse(gate)) return gate;
+    const labelId = Number(form.get('label_id'));
+    if (Number.isSafeInteger(labelId) && labelId > 0) {
+      if (intent === 'label_add') {
+        await db().insert(reportLabels).values({ reportId: id, labelId }).onConflictDoNothing();
+        await logAction(gate.user, 'report.label_add', String(id), `label ${labelId}`);
+      } else {
+        await db().delete(reportLabels).where(and(eq(reportLabels.reportId, id), eq(reportLabels.labelId, labelId)));
+        await logAction(gate.user, 'report.label_remove', String(id), `label ${labelId}`);
+      }
+    }
+    return Astro.redirect(`/report/${id}`, 303);
+  }
+
+  if (intent === 'edit') {
+    // Must be the reporter (or a mod) and report must be open.
+    const actingUser = await import('../../lib/auth').then((m) => m.currentUser(Astro));
+    if (!actingUser) return Astro.redirect(`/auth/discord?next=/report/${id}`, 302);
+
+    const [target] = await db().select().from(reports).where(eq(reports.id, id));
+    if (!target) return Astro.rewrite('/404');
+
+    const isReporter = target.reporterId === actingUser.id;
+    const isMod = await import('../../lib/staff').then((m) => m.levelOf(actingUser.id)).then((l) =>
+      import('../../lib/levels').then((m) => m.atLeast(l, 'mod'))
+    );
+
+    if (!isReporter && !isMod) {
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    const newBody     = String(form.get('body') ?? '').trim().slice(0, 5000) || null;
+    const newSteps    = String(form.get('stepsToReproduce') ?? '').trim().slice(0, 5000) || null;
+    const newCategory = String(form.get('category') ?? '').trim();
+    const newPlatform = String(form.get('platform') ?? '').trim();
+
+    // Build changed-field edit-history rows.
+    const editRows: { reportId: number; editorId: string; field: string; oldValue: string | null; newValue: string | null }[] = [];
+    if (newBody !== target.body)             editRows.push({ reportId: id, editorId: actingUser.id, field: 'body',     oldValue: target.body,             newValue: newBody });
+    if (newSteps !== target.stepsToReproduce) editRows.push({ reportId: id, editorId: actingUser.id, field: 'steps',    oldValue: target.stepsToReproduce, newValue: newSteps });
+    if (newCategory && newCategory !== target.category) editRows.push({ reportId: id, editorId: actingUser.id, field: 'category', oldValue: target.category,         newValue: newCategory });
+    if (newPlatform && (PLATFORMS as readonly string[]).includes(newPlatform) && newPlatform !== target.platform) {
+      editRows.push({ reportId: id, editorId: actingUser.id, field: 'platform', oldValue: target.platform, newValue: newPlatform });
+    }
+
+    if (editRows.length > 0) {
+      const updateSet: Record<string, unknown> = { updatedAt: sql`(unixepoch())`, editedAt: sql`(unixepoch())` };
+      if (newBody !== target.body) updateSet.body = newBody;
+      if (newSteps !== target.stepsToReproduce) updateSet.stepsToReproduce = newSteps;
+      if (editRows.some((r) => r.field === 'category') && newCategory) updateSet.category = newCategory;
+      if (editRows.some((r) => r.field === 'platform') && newPlatform) updateSet.platform = newPlatform;
+
+      await db().update(reports).set(updateSet as never).where(eq(reports.id, id));
+      if (editRows.length > 0) {
+        await db().insert(reportEdits).values(editRows);
+      }
+      await import('../../lib/staff').then((m) =>
+        m.logAction(actingUser, 'report.edit', String(id), `${editRows.map((r) => r.field).join(', ')}`, `${Astro.url.origin}/report/${id}`)
+      );
+    }
+    return Astro.redirect(`/report/${id}?saved=edit`, 303);
+  }
+
+  /* Moderator status / duplicate actions — require staff. */
   const gate = await requireStaff(Astro, 'mod');
   if (isResponse(gate)) return gate;
 
@@ -142,7 +212,7 @@ if (!report) return Astro.rewrite('/404');
 const bodyRich = report.body ? prepareCommentBody(report.body) : null;
 const stepsRich = report.stepsToReproduce ? prepareCommentBody(report.stepsToReproduce) : null;
 
-const [user, reporter, reportAttachments, reportComments, commentAttachments] = await Promise.all([
+const [user, reporter, reportAttachments, reportComments, commentAttachments, currentLabels, allLabels] = await Promise.all([
   currentUser(Astro),
   dbUser(report.reporterId),
   db()
@@ -177,7 +247,43 @@ const [user, reporter, reportAttachments, reportComments, commentAttachments] = 
     })
     .from(attachments)
     .where(eq(attachments.reportId, id)),
+  db()
+    .select({ id: labels.id, name: labels.name, color: labels.color })
+    .from(reportLabels)
+    .innerJoin(labels, eq(reportLabels.labelId, labels.id))
+    .where(eq(reportLabels.reportId, id)),
+  db().select().from(labels).orderBy(labels.name),
 ]);
+
+// Query reactions for all comments in one batch.
+const commentIds = reportComments.map((c) => c.id);
+const rawReactions = commentIds.length > 0
+  ? await db()
+      .select({
+        commentId: commentReactions.commentId,
+        emoji: commentReactions.emoji,
+        discordId: commentReactions.discordId,
+      })
+      .from(commentReactions)
+      .where(inArray(commentReactions.commentId, commentIds))
+  : [];
+
+// Group reactions: commentId -> list of { emoji, count, mine }
+const reactionsByComment = new Map<number, { emoji: string; count: number; mine: boolean }[]>();
+for (const cid of commentIds) {
+  const cReactions = rawReactions.filter((r) => r.commentId === cid);
+  const grouped = new Map<string, { count: number; mine: boolean }>();
+  for (const r of cReactions) {
+    const entry = grouped.get(r.emoji) ?? { count: 0, mine: false };
+    entry.count++;
+    if (user && r.discordId === user.id) entry.mine = true;
+    grouped.set(r.emoji, entry);
+  }
+  reactionsByComment.set(
+    cid,
+    [...grouped.entries()].map(([emoji, v]) => ({ emoji, count: v.count, mine: v.mine })),
+  );
+}
 
 // Group comment attachments by comment ID.
 const attByComment = new Map<number, typeof commentAttachments>();
@@ -250,6 +356,18 @@ const saved = Astro.url.searchParams.get('saved');
 
 const isLive = (OPEN_STATUSES as readonly string[]).includes(report.status);
 
+/** Reporter (on open report) or mod at any time. */
+const canEdit = user != null && (
+  (report.reporterId === user.id && isLive) || canModerate
+);
+
+const categories =
+  report.kind === 'suggestion'
+    ? SUGGESTION_CATEGORIES
+    : report.kind === 'extension'
+      ? EXTENSION_SOURCES
+      : BUG_CATEGORIES;
+
 let dupTarget = null;
 if (report.duplicateOf) {
   const [target] = await db().select({ id: reports.id, title: reports.title }).from(reports).where(eq(reports.id, report.duplicateOf));
@@ -270,7 +388,9 @@ Astro.response.headers.set(
           ? dupTarget
             ? `Marked as a duplicate of #${report.duplicateOf}: ${dupTarget.title}`
             : 'Marked as a duplicate.'
-          : 'Status updated.'}
+          : saved === 'edit'
+            ? 'Report updated.'
+            : 'Status updated.'}
       </p>
     )
   }
@@ -293,6 +413,11 @@ Astro.response.headers.set(
           <span class="tag">{kindLabel(report.kind)}</span>
           <span class="tag">{categoryLabel(report.category)}</span>
           <span class="tag">{platformLabel(report.platform)}</span>
+          {currentLabels.map((l) => (
+            <span class="tag label-badge" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color}; font-weight: 500;`}>
+              {l.name}
+            </span>
+          ))}
           {report.appVersion && <span class="ver">v{report.appVersion}</span>}
           <span class="by"> · filed by </span>
           <span class="filed-by">
@@ -515,6 +640,45 @@ Astro.response.headers.set(
                   ))}
                 </div>
               )}
+
+              {/* Comment Reactions */}
+              <div class="comment-reactions" data-comment-id={c.id}>
+                {(reactionsByComment.get(c.id) ?? []).map((rx) => (
+                  <button
+                    type="button"
+                    class:list={['reaction-chip', { 'reaction-active': rx.mine }]}
+                    data-reaction-btn
+                    data-comment-id={c.id}
+                    data-emoji={rx.emoji}
+                    title={rx.mine ? `Remove ${rx.emoji}` : `React with ${rx.emoji}`}
+                  >
+                    <span class="rx-emoji">{rx.emoji}</span>
+                    <span class="rx-count">{rx.count}</span>
+                  </button>
+                ))}
+                {user && (
+                  <details class="reaction-picker">
+                    <summary class="reaction-picker-btn" title="Add reaction">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+                      <span>+</span>
+                    </summary>
+                    <div class="reaction-picker-menu">
+                      {(['👍', '✅', '🤔', '❌', '🎉'] as const).map((emoji) => (
+                        <button
+                          type="button"
+                          class="reaction-emoji-btn"
+                          data-reaction-btn
+                          data-comment-id={c.id}
+                          data-emoji={emoji}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+
               <div class="comment-actions">
                 {user && (
                   <button
@@ -582,33 +746,128 @@ Astro.response.headers.set(
       )}
     </section>
 
+    {/* ── Edit report (reporter on live report, or mod always) ─────────── */}
+    {canEdit && (
+      <details class="edit-section">
+        <summary class="edit-summary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          Edit report
+        </summary>
+        <form method="POST" class="edit-form">
+          <input type="hidden" name="intent" value="edit" />
+
+          <div class="field">
+            <label class="label" for="edit-body">Description</label>
+            <textarea
+              id="edit-body"
+              name="body"
+              class="textarea"
+              rows="5"
+              maxlength="5000"
+            >{report.body ?? ''}</textarea>
+          </div>
+
+          {report.kind === 'bug' && (
+            <div class="field">
+              <label class="label" for="edit-steps">Steps to reproduce</label>
+              <textarea
+                id="edit-steps"
+                name="stepsToReproduce"
+                class="textarea"
+                rows="4"
+                maxlength="5000"
+              >{report.stepsToReproduce ?? ''}</textarea>
+            </div>
+          )}
+
+          <div class="field-row">
+            <div class="field">
+              <label class="label" for="edit-category">Category</label>
+              <select id="edit-category" name="category" class="select">
+                {categories.map((c) => (
+                  <option value={c} selected={c === report.category}>{CATEGORY_LABELS[c] ?? c}</option>
+                ))}
+              </select>
+            </div>
+            <div class="field">
+              <label class="label" for="edit-platform">Platform</label>
+              <select id="edit-platform" name="platform" class="select">
+                {(['android','ios','windows','macos','linux','all'] as const).map((p) => (
+                  <option value={p} selected={p === report.platform}>{PLATFORM_LABELS[p]}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div class="edit-form-foot">
+            <p class="mod-hint">Changes are logged in the audit trail.</p>
+            <button class="btn btn-primary" type="submit">Save changes</button>
+          </div>
+        </form>
+      </details>
+    )}
+
     {/* ── Moderator controls ──────────────────────────────────────────── */}
     {
       canModerate && (
-        <form method="POST" class="mod">
-          <p class="mod-label">Move this report</p>
-          <div class="field">
-            <label class="label" for="note">Reason</label>
-            <textarea id="note" name="note" class="textarea" rows="2" maxlength="500" placeholder="Optional — shown on the report and in notifications"></textarea>
+        <section class="mod">
+          <form method="POST">
+            <p class="mod-label">Move this report</p>
+            <div class="field">
+              <label class="label" for="note">Reason</label>
+              <textarea id="note" name="note" class="textarea" rows="2" maxlength="500" placeholder="Optional — shown on the report and in notifications"></textarea>
+            </div>
+            <div class="mod-row">
+              {STATUSES.filter((st) => st !== report.status).map((st) => (
+                <button class="btn" type="submit" name="status" value={st}>
+                  {statusLabel(st)}
+                </button>
+              ))}
+            </div>
+            <p class="mod-hint">Marking it fixed announces it to Discord if a webhook is set, once.</p>
+          </form>
+
+          <div class="mod-extra">
+            <p class="mod-label">Labels / tags</p>
+            <div class="mod-labels-current">
+              {currentLabels.length === 0 ? (
+                <span class="mod-hint">No labels applied yet.</span>
+              ) : (
+                currentLabels.map((l) => (
+                  <form method="POST" class="label-chip-form">
+                    <input type="hidden" name="intent" value="label_remove" />
+                    <input type="hidden" name="label_id" value={l.id} />
+                    <span class="tag label-badge" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color};`}>
+                      {l.name}
+                      <button class="label-remove-btn" type="submit" title={`Remove ${l.name}`}>×</button>
+                    </span>
+                  </form>
+                ))
+              )}
+            </div>
+            {allLabels.filter((al) => !currentLabels.some((cl) => cl.id === al.id)).length > 0 && (
+              <form method="POST" class="mod-row" style="margin-block-start: var(--space-2);">
+                <input type="hidden" name="intent" value="label_add" />
+                <select name="label_id" class="select" required>
+                  <option value="" disabled selected>Select label to add…</option>
+                  {allLabels
+                    .filter((al) => !currentLabels.some((cl) => cl.id === al.id))
+                    .map((l) => <option value={l.id}>{l.name}</option>)}
+                </select>
+                <button class="btn" type="submit">Add label</button>
+              </form>
+            )}
           </div>
-          <div class="mod-row">
-            {STATUSES.filter((st) => st !== report.status).map((st) => (
-              <button class="btn" type="submit" name="status" value={st}>
-                {statusLabel(st)}
-              </button>
-            ))}
-          </div>
-          <p class="mod-hint">Marking it fixed announces it to Discord if a webhook is set, once.</p>
 
           {report.status !== 'duplicate' && (
-            <div class="mod-extra">
+            <form method="POST" class="mod-extra">
               <p class="mod-label">Mark as duplicate</p>
               <div class="mod-row">
                 <input class="input num" name="duplicate_of" type="number" inputmode="numeric" placeholder="Report #" min="1" />
                 <button class="btn" type="submit">Mark duplicate</button>
               </div>
               <p class="mod-hint">Enter the report id this is a duplicate of. The reporter and voters will be notified.</p>
-            </div>
+            </form>
           )}
 
           <div class="mod-extra mod-danger">
@@ -616,7 +875,7 @@ Astro.response.headers.set(
             <p class="mod-hint">Permanently delete this report and all its votes, comments, and attachments. This cannot be undone.</p>
             <button class="btn btn-danger" type="button" id="delete-btn">Delete report</button>
           </div>
-        </form>
+        </section>
       )
     }
   </article>
@@ -926,6 +1185,32 @@ Astro.response.headers.set(
       alert('Network error');
       deleteBtn.disabled = false;
       deleteBtn.textContent = 'Delete report';
+    }
+  });
+  // ── Comment reaction toggle ─────────────────────────────────────
+  document.addEventListener('click', async (e) => {
+    const btn = (e.target as Element).closest('[data-reaction-btn]') as HTMLButtonElement | null;
+    if (!btn) return;
+    const commentId = btn.dataset.commentId;
+    const emoji = btn.dataset.emoji;
+    if (!commentId || !emoji) return;
+
+    btn.disabled = true;
+    try {
+      const res = await fetch('/react', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ commentId: Number(commentId), emoji }),
+      });
+      if (res.ok) {
+        window.location.reload();
+      } else if (res.status === 401) {
+        window.location.href = `/auth/discord?next=${encodeURIComponent(window.location.pathname)}`;
+      } else {
+        btn.disabled = false;
+      }
+    } catch {
+      btn.disabled = false;
     }
   });
 </script>
@@ -1280,5 +1565,161 @@ Astro.response.headers.set(
   .btn-danger:hover {
     background: var(--dead-fill);
     color: var(--text-primary);
+  }
+
+  /* ── Edit report ── */
+  .edit-section {
+    margin-block-start: var(--space-4);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+  }
+  .edit-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-secondary);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+  .edit-summary::-webkit-details-marker { display: none; }
+  .edit-summary:hover { color: var(--text-primary); }
+  .edit-section[open] .edit-summary {
+    border-block-end: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+  }
+  .edit-form {
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+  }
+  .edit-form-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  @media (max-width: 560px) {
+    .field-row { grid-template-columns: 1fr; }
+  }
+
+  /* ── Labels & Tags ── */
+  .label-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    border-radius: var(--radius-sm);
+  }
+  .label-chip-form { display: inline-flex; }
+  .label-remove-btn {
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: var(--text-sm);
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+  }
+  .label-remove-btn:hover { opacity: 0.7; }
+  .mod-labels-current {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-block: var(--space-2);
+    align-items: center;
+  }
+
+  /* ── Comment Reactions ── */
+  .comment-reactions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+    margin-block-start: var(--space-2);
+  }
+  .reaction-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    background: var(--surface-inset);
+    cursor: pointer;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    transition: all var(--dur-fast) var(--ease-standard);
+  }
+  .reaction-chip:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-hover);
+  }
+  .reaction-active {
+    border-color: var(--signal);
+    background: var(--signal-fill);
+    color: var(--signal-ink);
+  }
+  .rx-count { font-family: var(--font-data); font-size: 0.9em; }
+
+  .reaction-picker {
+    position: relative;
+    display: inline-block;
+  }
+  .reaction-picker-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 6px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    background: var(--surface-inset);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+  .reaction-picker-btn::-webkit-details-marker { display: none; }
+  .reaction-picker-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--border-default);
+  }
+  .reaction-picker-menu {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    margin-bottom: 4px;
+    display: flex;
+    gap: 4px;
+    padding: 4px 6px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-full);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: var(--z-dropdown);
+  }
+  .reaction-emoji-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 4px;
+    font-size: 1rem;
+    border-radius: var(--radius-sm);
+    transition: transform var(--dur-fast) var(--ease-standard);
+  }
+  .reaction-emoji-btn:hover {
+    transform: scale(1.25);
+    background: var(--surface-hover);
   }
 </style>

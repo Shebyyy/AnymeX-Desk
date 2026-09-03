@@ -12,7 +12,10 @@ import {
   normalizeTitle,
   reports,
   OPEN_STATUSES,
+  subscriptions,
+  notifications,
 } from '../lib/db/schema';
+import { or, isNull, eq, and } from 'drizzle-orm';
 import { canWriteNow, currentUser } from '../lib/auth';
 import { ensureVote } from '../lib/vote';
 import { FILING_COOLDOWN_MESSAGE, overFilingLimit, findDuplicate } from '../lib/writes';
@@ -159,6 +162,31 @@ if (Astro.request.method === 'POST') {
 
     if (created) {
       await ensureVote(created.id, user.id);
+
+      // Fan out notifications to matching subscribers (excluding the reporter).
+      async function notifySubscribers(): Promise<void> {
+        const d = db();
+        const subs = await d.select().from(subscriptions).where(
+          and(
+            or(isNull(subscriptions.kind),     eq(subscriptions.kind,     created.kind)),
+            or(isNull(subscriptions.category), eq(subscriptions.category, created.category)),
+            or(isNull(subscriptions.platform), eq(subscriptions.platform, created.platform)),
+          )
+        );
+        const targets = subs
+          .map((s) => s.userId)
+          .filter((id, i, a) => id !== user.id && a.indexOf(id) === i); // dedup + exclude reporter
+        if (targets.length === 0) return;
+        await d.insert(notifications).values(
+          targets.map((userId) => ({
+            userId,
+            reportId: created.id,
+            kind: 'subscription_match' as const,
+            detail: `New ${created.kind}: ${created.title}`,
+          })),
+        );
+      }
+
       const after: Promise<unknown>[] = [
         announceFiled(created, Astro.url.origin),
         logAction(
@@ -168,6 +196,7 @@ if (Astro.request.method === 'POST') {
           `${created.kind}: ${created.title}`,
           `${Astro.url.origin}/report/${created.id}`,
         ),
+        notifySubscribers(),
       ];
       const cf = Astro.locals.cfContext;
       if (cf) for (const task of after) cf.waitUntil(task);

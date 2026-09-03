@@ -211,6 +211,7 @@ export const reports = sqliteTable(
 
     createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
     updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+    editedAt: integer('edited_at'),
     statusChangedAt: integer('status_changed_at'),
 
     /** When this report was announced to Discord as high-demand. */
@@ -342,7 +343,7 @@ export const notifications = sqliteTable(
       .notNull()
       .references(() => reports.id, { onDelete: 'cascade' }),
     kind: text('kind', {
-      enum: ['status_changed', 'comment', 'duplicate', 'mentioned'],
+      enum: ['status_changed', 'comment', 'duplicate', 'mentioned', 'subscription_match'],
     }).notNull(),
     detail: text('detail'),
     createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
@@ -380,6 +381,101 @@ export const audit = sqliteTable(
   (t) => [index('audit_recent').on(t.createdAt)],
 );
 
+/**
+ * Audit trail for every edit made to a report's content fields.
+ * One row per field changed, so diffs are granular.
+ */
+export const reportEdits = sqliteTable(
+  'report_edits',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    reportId: integer('report_id')
+      .notNull()
+      .references(() => reports.id, { onDelete: 'cascade' }),
+    editorId: text('editor_id').notNull(),
+    /** Which field was changed: title | body | steps | category | platform */
+    field: text('field').notNull(),
+    oldValue: text('old_value'),
+    newValue: text('new_value'),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => [
+    index('report_edits_by_report').on(t.reportId),
+    index('report_edits_by_editor').on(t.editorId),
+  ],
+);
+
+/**
+ * Staff-managed labels / tags for reports.
+ */
+export const labels = sqliteTable('labels', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull().unique(),
+  /** CSS hex color, e.g. #ef4444 */
+  color: text('color').notNull().default('#6b7280'),
+  createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+});
+
+/** Many-to-many join between reports and labels. */
+export const reportLabels = sqliteTable(
+  'report_labels',
+  {
+    reportId: integer('report_id')
+      .notNull()
+      .references(() => reports.id, { onDelete: 'cascade' }),
+    labelId: integer('label_id')
+      .notNull()
+      .references(() => labels.id, { onDelete: 'cascade' }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.reportId, t.labelId] }),
+    index('report_labels_by_label').on(t.labelId),
+    index('report_labels_by_report').on(t.reportId),
+  ],
+);
+
+/**
+ * User subscriptions to a saved filter.
+ * A null dimension means "match any value" for that dimension.
+ */
+export const subscriptions = sqliteTable(
+  'subscriptions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.discordId, { onDelete: 'cascade' }),
+    /** null = all kinds */
+    kind: text('kind'),
+    /** null = all categories */
+    category: text('category'),
+    /** null = all platforms */
+    platform: text('platform'),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => [index('subscriptions_by_user').on(t.userId)],
+);
+
+/**
+ * Emoji reactions on comments.
+ */
+export const commentReactions = sqliteTable(
+  'comment_reactions',
+  {
+    commentId: integer('comment_id')
+      .notNull()
+      .references(() => comments.id, { onDelete: 'cascade' }),
+    discordId: text('discord_id')
+      .notNull()
+      .references(() => users.discordId, { onDelete: 'cascade' }),
+    emoji: text('emoji').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.commentId, t.discordId, t.emoji] }),
+    index('reactions_by_comment').on(t.commentId),
+  ],
+);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -393,6 +489,11 @@ export type Comment = typeof comments.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type Setting = typeof settings.$inferSelect;
 export type AuditEntry = typeof audit.$inferSelect;
+export type ReportEdit = typeof reportEdits.$inferSelect;
+export type Label = typeof labels.$inferSelect;
+export type ReportLabel = typeof reportLabels.$inferSelect;
+export type Subscription = typeof subscriptions.$inferSelect;
+export type CommentReaction = typeof commentReactions.$inferSelect;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers

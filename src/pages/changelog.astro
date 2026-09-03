@@ -1,0 +1,175 @@
+---
+import Base from '../layouts/Base.astro';
+import { db } from '../lib/db/client';
+import { reports } from '../lib/db/schema';
+import { sql } from 'drizzle-orm';
+import { relativeAge, kindLabel, categoryLabel } from '../lib/format';
+
+export const prerender = false;
+
+/**
+ * /changelog — Auto-generated list of recently fixed/implemented reports.
+ * Grouped by ISO week, newest first. Cached at edge for 2 minutes.
+ */
+
+const rows = await db().all(sql`
+  SELECT id, title, kind, category, platform, votes,
+         status_changed_at AS statusChangedAt
+  FROM reports
+  WHERE status = 'fixed'
+    AND status_changed_at IS NOT NULL
+    AND status_changed_at >= unixepoch() - 7776000
+  ORDER BY status_changed_at DESC
+  LIMIT 200
+`) as {
+  id: number;
+  title: string;
+  kind: string;
+  category: string;
+  platform: string;
+  votes: number;
+  statusChangedAt: number;
+}[];
+
+/** Group rows by ISO week label, e.g. "Week of 1 September 2026". */
+function weekLabel(ts: number): string {
+  const d = new Date(ts * 1000);
+  // Monday of that week.
+  const day = d.getUTCDay();
+  const diff = (day === 0 ? -6 : 1 - day);
+  const monday = new Date(d);
+  monday.setUTCDate(d.getUTCDate() + diff);
+  return 'Week of ' + monday.toLocaleDateString('en', {
+    day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
+  });
+}
+
+type ChangeRow = typeof rows[number];
+const grouped = new Map<string, ChangeRow[]>();
+for (const r of rows) {
+  const label = weekLabel(r.statusChangedAt);
+  const existing = grouped.get(label) ?? [];
+  existing.push(r);
+  grouped.set(label, existing);
+}
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, stale-while-revalidate=600');
+---
+
+<Base title="Changelog" description="A log of bugs fixed and features shipped in AnymeX, generated from the tracker.">
+  <header class="head">
+    <h1>Changelog</h1>
+    <p class="sub">
+      Bugs fixed and features implemented in AnymeX over the last 90 days,
+      sourced automatically from the tracker.
+    </p>
+  </header>
+
+  {rows.length === 0 ? (
+    <div class="empty">
+      <p class="empty-title">Nothing fixed yet</p>
+      <p>Once reports are marked as fixed or implemented, they'll appear here grouped by week.</p>
+      <a class="btn btn-primary" href="/">Browse open reports</a>
+    </div>
+  ) : (
+    <div class="weeks">
+      {[...grouped.entries()].map(([weekLabel, weekRows]) => (
+        <section class="week">
+          <h2 class="week-label">{weekLabel}</h2>
+          <ol class="week-rows">
+            {weekRows.map((r) => (
+              <li class="change-row">
+                <a class="change-link" href={`/report/${r.id}`}>
+                  <span class="change-title">{r.title}</span>
+                  <span class="change-meta">
+                    <span class:list={['change-kind', `kind-${r.kind}`]}>
+                      {r.kind === 'suggestion' ? '✦ Feature' : r.kind === 'extension' ? '⚡ Extension fix' : '✓ Bug fix'}
+                    </span>
+                    <span class="change-cat">{categoryLabel(r.category)}</span>
+                    <span class="change-votes">{r.votes} votes</span>
+                    <span class="change-age">{relativeAge(r.statusChangedAt)} ago</span>
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ))}
+    </div>
+  )}
+</Base>
+
+<style>
+  .head {
+    padding-block-end: var(--space-4);
+    border-block-end: 1px solid var(--border-subtle);
+    margin-block-end: var(--space-8);
+  }
+  h1 { font-size: var(--text-xl); letter-spacing: var(--track-tight); }
+  .sub {
+    max-inline-size: 60ch;
+    margin-block-start: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+  }
+
+  .weeks { display: flex; flex-direction: column; gap: var(--space-8); }
+
+  .week-label {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semi);
+    letter-spacing: var(--track-wide);
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding-block-end: var(--space-2);
+    border-block-end: 1px solid var(--border-subtle);
+    margin-block-end: var(--space-2);
+  }
+
+  .week-rows { display: flex; flex-direction: column; gap: 2px; }
+
+  .change-row { list-style: none; }
+  .change-link {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-inline-start: 2px solid var(--signal);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    transition: border-color var(--dur-fast) var(--ease-standard);
+  }
+  .change-link:hover { border-color: var(--border-strong); }
+  .change-link:hover .change-title { color: var(--signal-ink); }
+
+  .change-title {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-primary);
+  }
+  .change-meta {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .change-kind {
+    font-weight: var(--weight-medium);
+    white-space: nowrap;
+  }
+  .kind-bug      { color: var(--live); }
+  .kind-suggestion { color: var(--signal-ink); }
+  .kind-extension  { color: var(--discord); }
+  .change-cat    { color: var(--text-tertiary); }
+  .change-votes, .change-age { color: var(--text-muted); }
+
+  @media (max-width: 640px) {
+    .change-meta { flex-basis: 100%; }
+    .change-age  { display: none; }
+  }
+</style>

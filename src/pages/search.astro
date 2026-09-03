@@ -1,0 +1,205 @@
+---
+import Base from '../layouts/Base.astro';
+import ReportRow from '../components/ReportRow.astro';
+import { currentUser } from '../lib/auth';
+import { db } from '../lib/db/client';
+import { reports } from '../lib/db/schema';
+import { sql, inArray } from 'drizzle-orm';
+import { myVotes } from '../lib/queries';
+import { OPEN_STATUSES, STATUSES } from '../lib/db/schema';
+
+export const prerender = false;
+
+const q = (Astro.url.searchParams.get('q') ?? '').trim();
+const user = await currentUser(Astro);
+
+type Row = typeof reports.$inferSelect;
+let rows: Row[] = [];
+let error: string | null = null;
+let usedFallback = false;
+
+if (q.length >= 2) {
+  try {
+    // Try FTS5 first. D1 supports it but the virtual table must exist from migration.
+    const ftsRows = await db().run(sql`
+      SELECT r.id, r.kind, r.category, r.platform, r.app_version AS appVersion,
+             r.title, r.status, r.duplicate_of AS duplicateOf, r.votes,
+             r.attachment_count AS attachmentCount, r.comment_count AS commentCount,
+             r.status_changed_at AS statusChangedAt, r.created_at AS createdAt
+      FROM fts_reports f
+      JOIN reports r ON r.id = f.rowid
+      WHERE fts_reports MATCH ${q + '*'}
+        AND r.status IN ('open','confirmed','in_progress','fixed','wont_fix','duplicate')
+      ORDER BY f.rank
+      LIMIT 60
+    `);
+    rows = (ftsRows.results ?? []) as Row[];
+  } catch {
+    // FTS5 not available (local dev without migration): fall back to LIKE.
+    usedFallback = true;
+    const likeRows = await db().run(sql`
+      SELECT id, kind, category, platform, app_version AS appVersion,
+             title, status, duplicate_of AS duplicateOf, votes,
+             attachment_count AS attachmentCount, comment_count AS commentCount,
+             status_changed_at AS statusChangedAt, created_at AS createdAt
+      FROM reports
+      WHERE lower(title) LIKE ${'%' + q.toLowerCase() + '%'}
+        OR lower(body) LIKE ${'%' + q.toLowerCase() + '%'}
+      ORDER BY votes DESC, created_at DESC
+      LIMIT 60
+    `);
+    rows = (likeRows.results ?? []) as Row[];
+  }
+}
+
+const mine = user && rows.length
+  ? await myVotes(user.id, rows.map((r) => r.id))
+  : new Set<number>();
+
+Astro.response.headers.set('Cache-Control', user ? 'private, no-store' : 'public, max-age=0, s-maxage=30, stale-while-revalidate=120');
+---
+
+<Base title={q ? `Search: ${q}` : 'Search'} description="Search AnymeX bug reports and suggestions.">
+  <header class="head">
+    <h1>Search</h1>
+    <p class="sub">Search across all bug reports, suggestions, and extension issues.</p>
+  </header>
+
+  <form class="search-form" method="get" role="search">
+    <label class="sr-only" for="q">Search reports</label>
+    <div class="search-wrap">
+      <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      <input
+        id="q"
+        class="search-input"
+        type="search"
+        name="q"
+        value={q}
+        placeholder="Search reports…"
+        autofocus
+        autocomplete="off"
+        spellcheck="false"
+        minlength="2"
+      />
+      <button class="btn btn-primary" type="submit">Search</button>
+    </div>
+  </form>
+
+  {usedFallback && (
+    <p class="fallback-note">
+      Full-text index not available — using basic search. Run migration <code>0004_add_fts.sql</code> to enable ranked FTS5 search.
+    </p>
+  )}
+
+  {q.length >= 2 ? (
+    rows.length === 0 ? (
+      <div class="empty">
+        <p class="empty-title">No results for "{q}"</p>
+        <p>Try different keywords or check the spelling. The search covers report titles and descriptions.</p>
+        <a class="btn btn-primary" href="/new">File a new report</a>
+      </div>
+    ) : (
+      <section class="results">
+        <p class="results-count">{rows.length} result{rows.length !== 1 ? 's' : ''} for <b>"{q}"</b></p>
+        <ol class="rows">
+          {rows.map((r) => (
+            <ReportRow report={r} mine={mine.has(r.id)} />
+          ))}
+        </ol>
+      </section>
+    )
+  ) : q.length > 0 ? (
+    <p class="hint">Type at least 2 characters to search.</p>
+  ) : (
+    <div class="empty">
+      <p class="empty-title">Find any report</p>
+      <p>Search across titles and descriptions for bugs, suggestions, and extension issues.</p>
+    </div>
+  )}
+</Base>
+
+<style>
+  .head {
+    padding-block-end: var(--space-4);
+    border-block-end: 1px solid var(--border-subtle);
+  }
+  h1 {
+    font-size: var(--text-xl);
+    letter-spacing: var(--track-tight);
+  }
+  .sub {
+    margin-block-start: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+  }
+
+  .search-form {
+    margin-block: var(--space-6);
+  }
+  .search-wrap {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    position: relative;
+  }
+  .search-icon {
+    position: absolute;
+    inset-inline-start: var(--space-3);
+    color: var(--text-muted);
+    pointer-events: none;
+    flex: none;
+  }
+  .search-input {
+    flex: 1;
+    padding-inline-start: calc(var(--space-3) + 16px + var(--space-2));
+    block-size: var(--control-height-lg);
+    font-size: var(--text-base);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    transition: border-color var(--dur-fast) var(--ease-standard);
+  }
+  .search-input:focus {
+    outline: 2px solid var(--signal);
+    outline-offset: -1px;
+    border-color: var(--signal);
+  }
+  .search-input::placeholder { color: var(--text-muted); }
+
+  .results-count {
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    margin-block-end: var(--space-2);
+  }
+  .results-count b { color: var(--text-primary); }
+
+  .hint {
+    margin-block-start: var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+  }
+
+  .fallback-note {
+    margin-block-start: var(--space-4);
+    padding: var(--space-3);
+    border: 1px solid var(--border-default);
+    border-inline-start: 2px solid var(--signal);
+    border-radius: var(--radius-md);
+    background: var(--signal-fill);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+  .fallback-note code {
+    font-family: var(--font-data);
+    font-size: 0.9em;
+  }
+
+  @media (max-width: 560px) {
+    .search-wrap { flex-wrap: wrap; }
+    .search-input { min-inline-size: 0; }
+    .btn { flex: 1; }
+  }
+</style>

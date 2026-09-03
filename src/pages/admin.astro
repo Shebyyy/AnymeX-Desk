@@ -2,7 +2,7 @@
 import Base from '../layouts/Base.astro';
 import { desc, eq, isNotNull, or } from 'drizzle-orm';
 import { db } from '../lib/db/client';
-import { audit, STAFF_LEVELS, users, type StaffLevel } from '../lib/db/schema';
+import { audit, labels, STAFF_LEVELS, users, type StaffLevel } from '../lib/db/schema';
 import { snowflakeCreatedAt } from '../lib/auth';
 import { LEVEL_LABELS, combine } from '../lib/levels';
 import { idList, readConfig, writeSettings } from '../lib/settings';
@@ -137,10 +137,29 @@ if (Astro.request.method === 'POST') {
         ? `Granted ${LEVEL_LABELS[newLevel]} to ${target}.`
         : `Removed the manual grant from ${target}.`;
     }
+  } else if (intent === 'label_create') {
+    const name = String(form.get('name') ?? '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 32);
+    const color = String(form.get('color') ?? '#6b7280').trim().slice(0, 16);
+    if (!name) {
+      error = 'Label name is required.';
+    } else {
+      await db().insert(labels).values({ name, color }).onConflictDoNothing();
+      await logAction(user, 'label.create', name, color);
+      done = `Label "${name}" created.`;
+    }
+  } else if (intent === 'label_delete') {
+    const labelId = Number(form.get('label_id'));
+    if (Number.isSafeInteger(labelId) && labelId > 0) {
+      const [deleted] = await db().delete(labels).where(eq(labels.id, labelId)).returning();
+      if (deleted) {
+        await logAction(user, 'label.delete', deleted.name);
+        done = `Label "${deleted.name}" deleted.`;
+      }
+    }
   }
 }
 
-const [cfg, staff, blocked, log] = await Promise.all([
+const [cfg, staff, blocked, log, allLabels] = await Promise.all([
   readConfig(),
   db()
     .select({
@@ -158,6 +177,7 @@ const [cfg, staff, blocked, log] = await Promise.all([
     .from(users)
     .where(eq(users.banned, true)),
   db().select().from(audit).orderBy(desc(audit.createdAt)).limit(15),
+  db().select().from(labels).orderBy(labels.name),
 ]);
 const webhookSet = !!cfg.webhook_url;
 const webhookTail = webhookSet ? cfg.webhook_url.slice(-6) : '';
@@ -400,6 +420,50 @@ const botTokenSet = !!cfg.discord_bot_token;
       </div>
       <div class="add-actions">
         <button class="btn danger" type="submit">Block</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Report labels</h2>
+    <p class="panel-lede">Tags used by moderators on reports (e.g. regression, upstream, needs-repro).</p>
+    {
+      allLabels.length === 0 ? (
+        <p class="empty-line">No labels created yet.</p>
+      ) : (
+        <ul class="staff-list">
+          {allLabels.map((l) => (
+            <li class="staff-row">
+              <div class="staff-name">
+                <span class="label-chip" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color};`}>
+                  {l.name}
+                </span>
+                <span class="staff-tag num">{l.color}</span>
+              </div>
+              <form method="POST" class="staff-actions">
+                <input type="hidden" name="intent" value="label_delete" />
+                <input type="hidden" name="label_id" value={l.id} />
+                <button class="btn btn-ghost" type="submit">Delete</button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+    <form method="POST" class="add">
+      <input type="hidden" name="intent" value="label_create" />
+      <div class="field-row">
+        <div class="field">
+          <label class="label" for="label_name">New label name</label>
+          <input class="input" id="label_name" name="name" placeholder="e.g. regression" maxlength="32" required />
+        </div>
+        <div class="field">
+          <label class="label" for="label_color">Color (hex)</label>
+          <input class="input" id="label_color" name="color" type="color" value="#6b7280" />
+        </div>
+      </div>
+      <div class="add-actions">
+        <button class="btn" type="submit">Create label</button>
       </div>
     </form>
   </section>

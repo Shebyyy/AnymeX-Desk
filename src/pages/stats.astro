@@ -1,0 +1,396 @@
+---
+import Base from '../layouts/Base.astro';
+import { db } from '../lib/db/client';
+import { reports } from '../lib/db/schema';
+import { sql, and, inArray } from 'drizzle-orm';
+import { KINDS, STATUSES, OPEN_STATUSES, PLATFORMS, PLATFORM_LABELS, KIND_LABELS } from '../lib/db/schema';
+import { relativeAge } from '../lib/format';
+
+export const prerender = false;
+
+/**
+ * /stats — Public stats dashboard.
+ * Single round-trip aggregate query, edge-cached for 5 minutes.
+ */
+
+// One query for everything — avoids multiple round trips to D1.
+const [summary] = await db().all(sql`
+  SELECT
+    count(*) AS total,
+    sum(case when status IN ('open','confirmed','in_progress') then 1 else 0 end) AS open_count,
+    sum(case when status = 'fixed' then 1 else 0 end) AS fixed_count,
+    sum(case when status = 'wont_fix' or status = 'duplicate' then 1 else 0 end) AS other_count,
+    sum(case when kind = 'bug' then 1 else 0 end) AS bugs,
+    sum(case when kind = 'suggestion' then 1 else 0 end) AS suggestions,
+    sum(case when kind = 'extension' then 1 else 0 end) AS extensions,
+    sum(case when status_changed_at >= unixepoch() - 2592000 and status = 'fixed' then 1 else 0 end) AS fixed_this_month,
+    sum(case when created_at >= unixepoch() - 2592000 then 1 else 0 end) AS new_this_month,
+    sum(votes) AS total_votes
+  FROM reports
+`) as unknown as {
+  total: number;
+  open_count: number;
+  fixed_count: number;
+  other_count: number;
+  bugs: number;
+  suggestions: number;
+  extensions: number;
+  fixed_this_month: number;
+  new_this_month: number;
+  total_votes: number;
+}[];
+
+// Platform breakdown for open bugs.
+const platformRows = await db().all(sql`
+  SELECT platform, count(*) AS n
+  FROM reports
+  WHERE status IN ('open','confirmed','in_progress')
+  GROUP BY platform
+  ORDER BY n DESC
+`) as { platform: string; n: number }[];
+
+// Top-voted open bug.
+const [topBug] = await db().all(sql`
+  SELECT id, title, votes, category FROM reports
+  WHERE kind = 'bug' AND status IN ('open','confirmed','in_progress')
+  ORDER BY votes DESC LIMIT 1
+`) as { id: number; title: string; votes: number; category: string }[];
+
+// Top-voted open suggestion.
+const [topSuggestion] = await db().all(sql`
+  SELECT id, title, votes, category FROM reports
+  WHERE kind = 'suggestion' AND status IN ('open','confirmed','in_progress')
+  ORDER BY votes DESC LIMIT 1
+`) as { id: number; title: string; votes: number; category: string }[];
+
+// Most active reporters (by reports filed, not banned).
+const topReporters = await db().all(sql`
+  SELECT u.username, count(*) AS n
+  FROM reports r
+  JOIN users u ON u.discord_id = r.reporter_id
+  WHERE u.banned = 0
+  GROUP BY r.reporter_id
+  ORDER BY n DESC
+  LIMIT 5
+`) as { username: string; n: number }[];
+
+// Recent fixes (last 5).
+const recentFixes = await db().all(sql`
+  SELECT id, title, kind, votes, status_changed_at AS statusChangedAt
+  FROM reports
+  WHERE status = 'fixed' AND status_changed_at IS NOT NULL
+  ORDER BY status_changed_at DESC
+  LIMIT 5
+`) as { id: number; title: string; kind: string; votes: number; statusChangedAt: number }[];
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=300, stale-while-revalidate=600');
+---
+
+<Base title="Stats" description="Live statistics for the AnymeX bug and suggestion tracker.">
+  <header class="head">
+    <h1>Tracker Stats</h1>
+    <p class="sub">Live snapshot of the AnymeX Desk community tracker.</p>
+  </header>
+
+  {/* ─── Top-level numbers ───────────────────────────────────────────────── */}
+  <section class="grid-4 stat-row">
+    <div class="stat-card accent">
+      <span class="stat-num">{summary?.total ?? 0}</span>
+      <span class="stat-label">Total reports</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-num live">{summary?.open_count ?? 0}</span>
+      <span class="stat-label">Open</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-num fixed">{summary?.fixed_count ?? 0}</span>
+      <span class="stat-label">Fixed / Implemented</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-num">{summary?.total_votes ?? 0}</span>
+      <span class="stat-label">Total votes cast</span>
+    </div>
+  </section>
+
+  {/* ─── This month ──────────────────────────────────────────────────────── */}
+  <section class="section">
+    <h2>This month</h2>
+    <div class="grid-2">
+      <div class="stat-card">
+        <span class="stat-num">{summary?.new_this_month ?? 0}</span>
+        <span class="stat-label">Reports filed</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-num fixed">{summary?.fixed_this_month ?? 0}</span>
+        <span class="stat-label">Bugs fixed / features shipped</span>
+      </div>
+    </div>
+  </section>
+
+  {/* ─── Breakdown by kind ───────────────────────────────────────────────── */}
+  <section class="section">
+    <h2>By type</h2>
+    <div class="grid-3">
+      <div class="stat-card">
+        <span class="stat-num">{summary?.bugs ?? 0}</span>
+        <span class="stat-label">Bug reports</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-num">{summary?.suggestions ?? 0}</span>
+        <span class="stat-label">Suggestions</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-num">{summary?.extensions ?? 0}</span>
+        <span class="stat-label">Extension issues</span>
+      </div>
+    </div>
+  </section>
+
+  {/* ─── Platform breakdown ──────────────────────────────────────────────── */}
+  <section class="section">
+    <h2>Platform breakdown <span class="section-note">(open reports)</span></h2>
+    <div class="platform-list">
+      {platformRows.map((p) => {
+        const pct = summary?.open_count ? Math.round((p.n / summary.open_count) * 100) : 0;
+        return (
+          <div class="platform-row">
+            <span class="platform-name">{PLATFORM_LABELS[p.platform] ?? p.platform}</span>
+            <div class="platform-bar-wrap">
+              <div class="platform-bar" style={`width: ${pct}%`} />
+            </div>
+            <span class="platform-num">{p.n}</span>
+            <span class="platform-pct">{pct}%</span>
+          </div>
+        );
+      })}
+    </div>
+  </section>
+
+  {/* ─── Top voted reports ───────────────────────────────────────────────── */}
+  <section class="section">
+    <h2>Most-wanted</h2>
+    <div class="grid-2 top-grid">
+      {topBug && (
+        <a class="top-card" href={`/report/${topBug.id}`}>
+          <span class="top-card-kind">Top bug</span>
+          <span class="top-card-votes">{topBug.votes} votes</span>
+          <span class="top-card-title">{topBug.title}</span>
+        </a>
+      )}
+      {topSuggestion && (
+        <a class="top-card top-card--suggest" href={`/report/${topSuggestion.id}`}>
+          <span class="top-card-kind">Top suggestion</span>
+          <span class="top-card-votes">{topSuggestion.votes} votes</span>
+          <span class="top-card-title">{topSuggestion.title}</span>
+        </a>
+      )}
+    </div>
+  </section>
+
+  {/* ─── Most active reporters ───────────────────────────────────────────── */}
+  {topReporters.length > 0 && (
+    <section class="section">
+      <h2>Most active reporters</h2>
+      <ol class="reporter-list">
+        {topReporters.map((r, i) => (
+          <li class="reporter-row">
+            <span class="reporter-rank">#{i + 1}</span>
+            <span class="reporter-name">{r.username}</span>
+            <span class="reporter-n">{r.n} report{r.n !== 1 ? 's' : ''}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )}
+
+  {/* ─── Recent fixes ────────────────────────────────────────────────────── */}
+  {recentFixes.length > 0 && (
+    <section class="section">
+      <h2>Recently fixed</h2>
+      <ol class="fix-list">
+        {recentFixes.map((r) => (
+          <li class="fix-row">
+            <a href={`/report/${r.id}`} class="fix-title">{r.title}</a>
+            <span class="fix-meta">
+              <span class="fix-votes">{r.votes} votes</span>
+              <span class="fix-age">· {relativeAge(r.statusChangedAt)} ago</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      <a class="btn" href="/?state=fixed">See all fixed reports →</a>
+    </section>
+  )}
+</Base>
+
+<style>
+  .head {
+    padding-block-end: var(--space-4);
+    border-block-end: 1px solid var(--border-subtle);
+    margin-block-end: var(--space-6);
+  }
+  h1 { font-size: var(--text-xl); letter-spacing: var(--track-tight); }
+  .sub {
+    margin-block-start: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+  }
+
+  .section { margin-block-start: var(--space-8); }
+  h2 {
+    font-size: var(--text-lg);
+    letter-spacing: var(--track-tight);
+    margin-block-end: var(--space-3);
+  }
+  .section-note {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-normal);
+    color: var(--text-muted);
+  }
+
+  /* Grid layouts */
+  .grid-4, .grid-3, .grid-2 {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .grid-4 { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .grid-2 { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+
+  /* Stat cards */
+  .stat-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+  }
+  .stat-card.accent {
+    border-color: var(--signal);
+    background: var(--signal-fill);
+  }
+  .stat-num {
+    font-family: var(--font-data);
+    font-size: var(--text-3xl);
+    font-weight: var(--weight-semi);
+    letter-spacing: var(--track-tighter);
+    line-height: var(--leading-none);
+    color: var(--text-primary);
+  }
+  .stat-num.live  { color: var(--live); }
+  .stat-num.fixed { color: var(--signal-ink); }
+  .stat-label {
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    margin-block-start: var(--space-1);
+  }
+
+  /* Platform bar chart */
+  .platform-list { display: flex; flex-direction: column; gap: var(--space-2); }
+  .platform-row {
+    display: grid;
+    grid-template-columns: 9rem 1fr 3rem 3rem;
+    align-items: center;
+    gap: var(--space-3);
+    font-size: var(--text-sm);
+  }
+  .platform-name { color: var(--text-secondary); }
+  .platform-bar-wrap {
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--surface-inset);
+    overflow: hidden;
+  }
+  .platform-bar {
+    height: 100%;
+    border-radius: var(--radius-full);
+    background: var(--signal);
+    min-width: 2px;
+    transition: width var(--dur-slow) var(--ease-out);
+  }
+  .platform-num { font-family: var(--font-data); text-align: right; }
+  .platform-pct { color: var(--text-muted); text-align: right; }
+
+  /* Top cards */
+  .top-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-4);
+    border: 1px solid var(--border-default);
+    border-inline-start: 3px solid var(--dead);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    transition: border-color var(--dur-fast) var(--ease-standard);
+  }
+  .top-card:hover { border-color: var(--dead); }
+  .top-card--suggest { border-inline-start-color: var(--signal); }
+  .top-card--suggest:hover { border-color: var(--signal); }
+  .top-card-kind {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: var(--track-wide);
+    color: var(--text-muted);
+  }
+  .top-card-votes {
+    font-family: var(--font-data);
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-semi);
+    color: var(--text-primary);
+  }
+  .top-card-title {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    margin-block-start: var(--space-1);
+  }
+
+  /* Reporter list */
+  .reporter-list { display: flex; flex-direction: column; gap: 2px; }
+  .reporter-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    font-size: var(--text-sm);
+  }
+  .reporter-rank {
+    font-family: var(--font-data);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    min-inline-size: 2rem;
+  }
+  .reporter-name { font-weight: var(--weight-medium); flex: 1; }
+  .reporter-n { color: var(--text-tertiary); }
+
+  /* Fix list */
+  .fix-list { display: flex; flex-direction: column; gap: 2px; margin-block-end: var(--space-4); }
+  .fix-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+  }
+  .fix-title {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-primary);
+  }
+  .fix-title:hover { color: var(--signal-ink); }
+  .fix-meta { display: flex; gap: var(--space-2); font-size: var(--text-xs); color: var(--text-muted); }
+  .fix-votes { color: var(--text-tertiary); }
+
+  @media (max-width: 640px) {
+    .platform-row { grid-template-columns: 7rem 1fr 2.5rem; }
+    .platform-pct { display: none; }
+  }
+</style>
