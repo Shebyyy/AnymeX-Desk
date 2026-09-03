@@ -171,4 +171,130 @@
       --text-muted:      light-dark(oklch(0.46 0.008 85), oklch(0.70 0.006 85));
     }
   }
+
+  /* ==========================================================================
+     User Personalization & Preferences Token Overrides
+     ========================================================================== */
+
+  /* --- UI Scales --- */
+  :root[data-scale="compact"] {
+    --text-xs: 0.70rem;
+    --text-sm: 0.75rem;
+    --text-base: 0.8125rem;
+    --text-md: 0.875rem;
+    --text-lg: 1.0rem;
+    --text-xl: 1.125rem;
+    --row-height: 30px;
+    --control-height: 26px;
+    --space-3: 8px;
+    --space-4: 12px;
+    --space-5: 16px;
+    --space-6: 20px;
+  }
+  :root[data-scale="comfortable"] {
+    --text-xs: 0.8125rem;
+    --text-sm: 0.875rem;
+    --text-base: 0.9375rem;
+    --text-md: 1.0rem;
+    --text-lg: 1.20rem;
+    --text-xl: 1.35rem;
+    --row-height: 38px;
+    --control-height: 34px;
+    --space-3: 14px;
+    --space-4: 18px;
+    --space-5: 24px;
+  }
+  :root[data-scale="large"] {
+    --text-xs: 0.875rem;
+    --text-sm: 0.9375rem;
+    --text-base: 1.0625rem;
+    --text-md: 1.125rem;
+    --text-lg: 1.30rem;
+    --text-xl: 1.50rem;
+    --row-height: 42px;
+    --control-height: 38px;
+    --space-3: 16px;
+    --space-4: 22px;
+    --space-5: 28px;
+  }
+
+  /* --- OLED True Black Theme --- */
+  :root[data-theme="oled"] {
+    color-scheme: dark;
+    --surface-canvas:  #000000;
+    --surface-raised:  #08080a;
+    --surface-overlay: #101014;
+    --surface-modal:   #121317;
+    --surface-inset:   #000000;
+    --surface-hover:   rgba(255, 255, 255, 0.05);
+    --surface-active:  rgba(255, 255, 255, 0.08);
+    --border-subtle:   rgba(255, 255, 255, 0.08);
+    --border-default:  rgba(255, 255, 255, 0.14);
+    --border-strong:   rgba(255, 255, 255, 0.22);
+  }
+
+  /* --- Accent Colors --- */
+  :root[data-accent="purple"] {
+    --signal: #a855f7;
+    --signal-dim: #9333ea;
+    --signal-ink: #c084fc;
+    --signal-fill: rgba(168, 85, 247, 0.14);
+    --signal-fill-hi: rgba(168, 85, 247, 0.26);
+    --on-signal: #ffffff;
+  }
+  :root[data-accent="blue"] {
+    --signal: #3b82f6;
+    --signal-dim: #2563eb;
+    --signal-ink: #60a5fa;
+    --signal-fill: rgba(59, 130, 246, 0.14);
+    --signal-fill-hi: rgba(59, 130, 246, 0.26);
+    --on-signal: #ffffff;
+  }
+  :root[data-accent="emerald"] {
+    --signal: #10b981;
+    --signal-dim: #059669;
+    --signal-ink: #34d399;
+    --signal-fill: rgba(16, 185, 129, 0.14);
+    --signal-fill-hi: rgba(16, 185, 129, 0.26);
+    --on-signal: #ffffff;
+  }
+  :root[data-accent="pink"] {
+    --signal: #ec4899;
+    --signal-dim: #db2777;
+    --signal-ink: #f472b6;
+    --signal-fill: rgba(236, 72, 153, 0.14);
+    --signal-fill-hi: rgba(236, 72, 153, 0.26);
+    --on-signal: #ffffff;
+  }
+  :root[data-accent="crimson"] {
+    --signal: #ef4444;
+    --signal-dim: #dc2626;
+    --signal-ink: #f87171;
+    --signal-fill: rgba(239, 68, 68, 0.14);
+    --signal-fill-hi: rgba(239, 68, 68, 0.26);
+    --on-signal: #ffffff;
+  }
+
+  /* --- Accessibility: Motion & Contrast --- */
+  :root[data-reduce-motion="true"] *,
+  :root[data-reduce-motion="true"] *::before,
+  :root[data-reduce-motion="true"] *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  :root[data-high-contrast="true"] {
+    --text-secondary: light-dark(#111111, #eeeeee);
+    --text-tertiary:  light-dark(#2c2d30, #dddddd);
+    --text-muted:     light-dark(#404040, #cccccc);
+    --border-subtle:  light-dark(rgba(0,0,0,0.22), rgba(255,255,255,0.22));
+    --border-default: light-dark(rgba(0,0,0,0.35), rgba(255,255,255,0.35));
+  }
+
+  /* --- Code wrap --- */
+  :root[data-code-wrap="true"] pre,
+  :root[data-code-wrap="true"] code {
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+  }
 }

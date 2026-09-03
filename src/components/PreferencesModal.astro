@@ -1,0 +1,462 @@
+---
+/**
+ * PreferencesModal.astro
+ * User display and appearance customization modal.
+ */
+---
+
+<dialog id="prefs-modal" class="prefs-dialog" aria-labelledby="prefs-modal-title">
+  <div class="prefs-window">
+    <header class="prefs-head">
+      <div class="prefs-head-title">
+        <h2 id="prefs-modal-title">Display Preferences</h2>
+        <p class="prefs-head-sub">Personalize your AnymeX Desk experience. Saved locally in your browser.</p>
+      </div>
+      <button type="button" class="prefs-close" id="prefs-close-btn" aria-label="Close preferences">×</button>
+    </header>
+
+    <div class="prefs-body">
+      {/* ── Theme Mode ── */}
+      <section class="prefs-section">
+        <h3 class="prefs-section-title">Theme</h3>
+        <div class="theme-cards">
+          <label class="theme-card">
+            <input type="radio" name="pref-theme" value="midnight" class="sr-only" />
+            <span class="theme-preview theme-preview-midnight">
+              <span class="theme-mock-head"></span>
+              <span class="theme-mock-body"></span>
+            </span>
+            <span class="theme-name">Midnight Dark</span>
+          </label>
+
+          <label class="theme-card">
+            <input type="radio" name="pref-theme" value="oled" class="sr-only" />
+            <span class="theme-preview theme-preview-oled">
+              <span class="theme-mock-head"></span>
+              <span class="theme-mock-body"></span>
+            </span>
+            <span class="theme-name">OLED True Black</span>
+          </label>
+
+          <label class="theme-card">
+            <input type="radio" name="pref-theme" value="light" class="sr-only" />
+            <span class="theme-preview theme-preview-light">
+              <span class="theme-mock-head"></span>
+              <span class="theme-mock-body"></span>
+            </span>
+            <span class="theme-name">Clean Light</span>
+          </label>
+
+          <label class="theme-card">
+            <input type="radio" name="pref-theme" value="system" class="sr-only" />
+            <span class="theme-preview theme-preview-system">
+              <span class="theme-mock-head"></span>
+              <span class="theme-mock-body"></span>
+            </span>
+            <span class="theme-name">System Auto</span>
+          </label>
+        </div>
+      </section>
+
+      {/* ── Accent Color ── */}
+      <section class="prefs-section">
+        <h3 class="prefs-section-title">Accent Color</h3>
+        <div class="accent-swatches">
+          {[
+            { id: 'gold', name: 'AnymeX Gold', hex: '#f5c542' },
+            { id: 'purple', name: 'Neon Violet', hex: '#a855f7' },
+            { id: 'blue', name: 'Cyber Blue', hex: '#3b82f6' },
+            { id: 'emerald', name: 'Emerald Mint', hex: '#10b981' },
+            { id: 'pink', name: 'Sakura Pink', hex: '#ec4899' },
+            { id: 'crimson', name: 'Crimson Fire', hex: '#ef4444' },
+          ].map((c) => (
+            <label class="accent-label" title={c.name}>
+              <input type="radio" name="pref-accent" value={c.id} class="sr-only" />
+              <span class="accent-swatch" style={`--swatch-hex: ${c.hex};`}>
+                <svg class="accent-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span class="accent-name">{c.name}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* ── UI Scale & Font Density ── */}
+      <section class="prefs-section">
+        <h3 class="prefs-section-title">UI Scale &amp; Density</h3>
+        <div class="scale-segment">
+          {[
+            { id: 'compact', label: 'Compact', sub: '88% size' },
+            { id: 'default', label: 'Default', sub: '100% size' },
+            { id: 'comfortable', label: 'Comfortable', sub: '112% size' },
+            { id: 'large', label: 'Large', sub: '125% size' },
+          ].map((s) => (
+            <label class="scale-option">
+              <input type="radio" name="pref-scale" value={s.id} class="sr-only" />
+              <span class="scale-pill">
+                <span class="scale-main">{s.label}</span>
+                <span class="scale-sub">{s.sub}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* ── Board Defaults ── */}
+      <section class="prefs-section">
+        <h3 class="prefs-section-title">Board Defaults</h3>
+        <div class="prefs-row">
+          <div class="field">
+            <label class="label" for="pref-platform">Default Platform Filter</label>
+            <select id="pref-platform" class="select compact">
+              <option value="">All Platforms</option>
+              <option value="android">Android</option>
+              <option value="windows">Windows</option>
+              <option value="ios">iOS</option>
+              <option value="macos">macOS</option>
+              <option value="linux">Linux</option>
+            </select>
+            <p class="field-hint">Auto-applied when opening the homepage.</p>
+          </div>
+
+          <div class="field">
+            <label class="label" for="pref-sort">Default Sort Order</label>
+            <select id="pref-sort" class="select compact">
+              <option value="demand">Highest Demand (Most votes)</option>
+              <option value="recent">Recently Active</option>
+              <option value="stalled">Stalled (Needs attention)</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Accessibility & Display ── */}
+      <section class="prefs-section">
+        <h3 class="prefs-section-title">Accessibility &amp; Display</h3>
+        <div class="prefs-toggles">
+          <label class="toggle-row">
+            <input type="checkbox" id="pref-reduce-motion" class="toggle-checkbox" />
+            <div class="toggle-text">
+              <span class="toggle-label">Reduce Motion</span>
+              <span class="toggle-sub">Disables transforms, card lift, and micro-animations.</span>
+            </div>
+          </label>
+
+          <label class="toggle-row">
+            <input type="checkbox" id="pref-high-contrast" class="toggle-checkbox" />
+            <div class="toggle-text">
+              <span class="toggle-label">High Contrast Text</span>
+              <span class="toggle-sub">Boosts muted text and border brightness for clarity.</span>
+            </div>
+          </label>
+
+          <label class="toggle-row">
+            <input type="checkbox" id="pref-code-wrap" class="toggle-checkbox" />
+            <div class="toggle-text">
+              <span class="toggle-label">Wrap Code &amp; Crash Logs</span>
+              <span class="toggle-sub">Wraps long stack traces onto new lines instead of horizontal scrolling.</span>
+            </div>
+          </label>
+        </div>
+      </section>
+    </div>
+
+    <footer class="prefs-foot">
+      <button type="button" class="btn btn-ghost" id="prefs-reset-btn">Reset to defaults</button>
+      <button type="button" class="btn btn-primary" id="prefs-done-btn">Done</button>
+    </footer>
+  </div>
+</dialog>
+
+<script>
+  import { getPreferences, savePreferences, resetPreferences } from '../scripts/preferences';
+
+  const dialog = document.getElementById('prefs-modal') as HTMLDialogElement | null;
+  const closeBtn = document.getElementById('prefs-close-btn');
+  const doneBtn = document.getElementById('prefs-done-btn');
+  const resetBtn = document.getElementById('prefs-reset-btn');
+
+  // Inputs
+  const themeInputs = document.querySelectorAll('input[name="pref-theme"]') as NodeListOf<HTMLInputElement>;
+  const accentInputs = document.querySelectorAll('input[name="pref-accent"]') as NodeListOf<HTMLInputElement>;
+  const scaleInputs = document.querySelectorAll('input[name="pref-scale"]') as NodeListOf<HTMLInputElement>;
+  const platformSelect = document.getElementById('pref-platform') as HTMLSelectElement | null;
+  const sortSelect = document.getElementById('pref-sort') as HTMLSelectElement | null;
+  const reduceMotionCheck = document.getElementById('pref-reduce-motion') as HTMLInputElement | null;
+  const highContrastCheck = document.getElementById('pref-high-contrast') as HTMLInputElement | null;
+  const codeWrapCheck = document.getElementById('pref-code-wrap') as HTMLInputElement | null;
+
+  function syncInputsWithStorage() {
+    const p = getPreferences();
+
+    themeInputs.forEach((r) => { r.checked = r.value === p.theme; });
+    accentInputs.forEach((r) => { r.checked = r.value === p.accent; });
+    scaleInputs.forEach((r) => { r.checked = r.value === p.scale; });
+
+    if (platformSelect) platformSelect.value = p.defaultPlatform;
+    if (sortSelect) sortSelect.value = p.defaultSort;
+    if (reduceMotionCheck) reduceMotionCheck.checked = p.reduceMotion;
+    if (highContrastCheck) highContrastCheck.checked = p.highContrast;
+    if (codeWrapCheck) codeWrapCheck.checked = p.codeWrap;
+  }
+
+  // Open modal triggers across the page
+  document.addEventListener('click', (e) => {
+    const trigger = (e.target as Element).closest('[data-open-prefs]');
+    if (trigger && dialog) {
+      syncInputsWithStorage();
+      dialog.showModal();
+    }
+  });
+
+  // Close handlers
+  closeBtn?.addEventListener('click', () => dialog?.close());
+  doneBtn?.addEventListener('click', () => dialog?.close());
+  dialog?.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+
+  // Real-time live update bindings
+  themeInputs.forEach((r) => {
+    r.addEventListener('change', () => { if (r.checked) savePreferences({ theme: r.value as any }); });
+  });
+
+  accentInputs.forEach((r) => {
+    r.addEventListener('change', () => { if (r.checked) savePreferences({ accent: r.value as any }); });
+  });
+
+  scaleInputs.forEach((r) => {
+    r.addEventListener('change', () => { if (r.checked) savePreferences({ scale: r.value as any }); });
+  });
+
+  platformSelect?.addEventListener('change', () => {
+    savePreferences({ defaultPlatform: platformSelect.value as any });
+  });
+
+  sortSelect?.addEventListener('change', () => {
+    savePreferences({ defaultSort: sortSelect.value as any });
+  });
+
+  reduceMotionCheck?.addEventListener('change', () => {
+    savePreferences({ reduceMotion: reduceMotionCheck.checked });
+  });
+
+  highContrastCheck?.addEventListener('change', () => {
+    savePreferences({ highContrast: highContrastCheck.checked });
+  });
+
+  codeWrapCheck?.addEventListener('change', () => {
+    savePreferences({ codeWrap: codeWrapCheck.checked });
+  });
+
+  resetBtn?.addEventListener('click', () => {
+    if (confirm('Reset all display preferences to standard AnymeX defaults?')) {
+      resetPreferences();
+      syncInputsWithStorage();
+    }
+  });
+</script>
+
+<style>
+  .prefs-dialog {
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+    max-inline-size: 580px;
+    inline-size: 92vw;
+    max-block-size: 88vh;
+  }
+  .prefs-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+  }
+
+  .prefs-window {
+    display: flex;
+    flex-direction: column;
+    max-block-size: 88vh;
+  }
+
+  .prefs-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: var(--space-4) var(--space-5);
+    border-block-end: 1px solid var(--border-subtle);
+  }
+  .prefs-head-title h2 { font-size: var(--text-lg); margin: 0; }
+  .prefs-head-sub { font-size: var(--text-xs); color: var(--text-tertiary); margin-block-start: 2px; }
+  .prefs-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.5rem;
+    cursor: pointer;
+    line-height: 1;
+    padding: var(--space-1);
+  }
+  .prefs-close:hover { color: var(--text-primary); }
+
+  .prefs-body {
+    padding: var(--space-5);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
+  .prefs-section { display: flex; flex-direction: column; gap: var(--space-2); }
+  .prefs-section-title {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semi);
+    text-transform: uppercase;
+    letter-spacing: var(--track-wider);
+    color: var(--text-muted);
+  }
+
+  /* ── Themes ── */
+  .theme-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-2);
+  }
+  .theme-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+  }
+  .theme-preview {
+    width: 100%;
+    height: 54px;
+    border-radius: var(--radius-md);
+    border: 2px solid var(--border-subtle);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    transition: all var(--dur-fast) var(--ease-standard);
+  }
+  .theme-card input:checked + .theme-preview {
+    border-color: var(--signal);
+    box-shadow: 0 0 0 2px var(--signal-dim);
+  }
+  .theme-name { font-size: var(--text-xs); color: var(--text-secondary); text-align: center; }
+  .theme-card input:checked ~ .theme-name { color: var(--text-primary); font-weight: var(--weight-semi); }
+
+  .theme-preview-midnight { background: #1c1d21; }
+  .theme-preview-midnight .theme-mock-head { height: 8px; background: #2a2c33; border-radius: 2px; }
+  .theme-preview-midnight .theme-mock-body { flex: 1; background: #23252b; border-radius: 2px; }
+
+  .theme-preview-oled { background: #000000; }
+  .theme-preview-oled .theme-mock-head { height: 8px; background: #151515; border-radius: 2px; }
+  .theme-preview-oled .theme-mock-body { flex: 1; background: #0c0c0c; border-radius: 2px; border: 1px solid #222; }
+
+  .theme-preview-light { background: #f4f4f6; }
+  .theme-preview-light .theme-mock-head { height: 8px; background: #dedee4; border-radius: 2px; }
+  .theme-preview-light .theme-mock-body { flex: 1; background: #ffffff; border-radius: 2px; }
+
+  .theme-preview-system { background: linear-gradient(135deg, #1c1d21 50%, #f4f4f6 50%); }
+  .theme-preview-system .theme-mock-head { height: 8px; background: #a8a8b2; border-radius: 2px; }
+  .theme-preview-system .theme-mock-body { flex: 1; background: #585860; border-radius: 2px; }
+
+  /* ── Accent Swatches ── */
+  .accent-swatches {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .accent-label {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+  }
+  .accent-swatch {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-full);
+    background: var(--swatch-hex);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid transparent;
+    transition: transform var(--dur-fast) var(--ease-standard);
+  }
+  .accent-label:hover .accent-swatch { transform: scale(1.1); }
+  .accent-check { color: #ffffff; display: none; }
+  .accent-label input:checked + .accent-swatch {
+    border-color: #ffffff;
+    box-shadow: 0 0 0 2px var(--swatch-hex);
+  }
+  .accent-label input:checked + .accent-swatch .accent-check { display: block; }
+  .accent-name { font-size: 10px; color: var(--text-muted); }
+
+  /* ── Scale Segment ── */
+  .scale-segment {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    background: var(--surface-inset);
+    padding: 4px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+  }
+  .scale-option { cursor: pointer; }
+  .scale-pill {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    transition: background var(--dur-fast);
+  }
+  .scale-main { font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-secondary); }
+  .scale-sub { font-size: 9px; color: var(--text-muted); }
+  .scale-option input:checked + .scale-pill {
+    background: var(--surface-raised);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .scale-option input:checked + .scale-pill .scale-main {
+    color: var(--signal-ink);
+    font-weight: var(--weight-semi);
+  }
+
+  /* ── Toggles ── */
+  .prefs-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+  .prefs-toggles { display: flex; flex-direction: column; gap: var(--space-3); }
+  .toggle-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    cursor: pointer;
+  }
+  .toggle-checkbox { width: 16px; height: 16px; margin-block-start: 2px; cursor: pointer; }
+  .toggle-text { display: flex; flex-direction: column; gap: 2px; }
+  .toggle-label { font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--text-primary); }
+  .toggle-sub { font-size: var(--text-xs); color: var(--text-muted); }
+
+  .prefs-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-5);
+    border-block-start: 1px solid var(--border-subtle);
+    background: var(--surface-inset);
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+
+  @media (max-width: 600px) {
+    .theme-cards { grid-template-columns: 1fr 1fr; }
+    .scale-segment { grid-template-columns: 1fr 1fr; }
+    .prefs-row { grid-template-columns: 1fr; }
+  }
+</style>

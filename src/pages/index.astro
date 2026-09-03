@@ -177,6 +177,25 @@ Astro.response.headers.set(
       </nav>
     )
   }
+
+  {/* Auto-apply user's default platform or sort if visiting root cleanly */}
+  <script is:inline>
+    (function() {
+      if (window.location.search === '' && window.location.pathname === '/') {
+        try {
+          var raw = localStorage.getItem('anymex_desk_prefs');
+          if (!raw) return;
+          var p = JSON.parse(raw);
+          var params = new URLSearchParams();
+          if (p.defaultPlatform) params.set('platform', p.defaultPlatform);
+          if (p.defaultSort && p.defaultSort !== 'demand') params.set('sort', p.defaultSort);
+          if (params.toString()) {
+            window.location.replace('/?' + params.toString());
+          }
+        } catch (e) {}
+      }
+    })();
+  </script>
 </Base>
 
 <style>

@@ -3,6 +3,7 @@ import { Font } from 'astro:assets';
 import '../styles/tokens.css';
 import '../styles/base.css';
 import Header from '../components/Header.astro';
+import PreferencesModal from '../components/PreferencesModal.astro';
 
 interface Props {
   title: string;
@@ -30,13 +31,33 @@ const ogImage = reportIdMatch
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title} · AnymeX Desk</title>
     <meta name="description" content={description} />
-    <meta name="color-scheme" content="dark light" />
-    <link rel="icon" href="/favicon.gif" type="image/gif" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 
+    {/* Synchronous zero-FOUC preference initialization */}
+    <script is:inline>
+      (function() {
+        try {
+          var raw = localStorage.getItem('anymex_desk_prefs');
+          if (!raw) return;
+          var p = JSON.parse(raw);
+          var doc = document.documentElement;
+          if (p.scale && p.scale !== 'default') doc.setAttribute('data-scale', p.scale);
+          if (p.theme && p.theme !== 'midnight' && p.theme !== 'system') doc.setAttribute('data-theme', p.theme);
+          if (p.accent && p.accent !== 'gold') doc.setAttribute('data-accent', p.accent);
+          if (p.reduceMotion) doc.setAttribute('data-reduce-motion', 'true');
+          if (p.highContrast) doc.setAttribute('data-high-contrast', 'true');
+          if (p.codeWrap) doc.setAttribute('data-code-wrap', 'true');
+        } catch (e) {}
+      })();
+    </script>
+
+    <meta property="og:site_name" content="AnymeX Desk" />
     <meta property="og:title" content={`${title} · AnymeX Desk`} />
     <meta property="og:description" content={description} />
-    {ogImage && <meta property="og:image" content={ogImage} />}
     <meta property="og:type" content="website" />
+    <meta property="og:url" content={Astro.url.href} />
+    {ogImage && <meta property="og:image" content={ogImage} />}
+
     <meta name="twitter:card" content={ogImage ? "summary_large_image" : "summary"} />
     <meta name="twitter:title" content={`${title} · AnymeX Desk`} />
     <meta name="twitter:description" content={description} />
@@ -65,6 +86,8 @@ const ogImage = reportIdMatch
         <a href="https://github.com/RyanYuuki/AnymeX">AnymeX</a>.
       </p>
     </footer>
+
+    <PreferencesModal />
 
     <style>
       main {
