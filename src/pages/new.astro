@@ -20,6 +20,7 @@ import { canWriteNow, currentUser } from '../lib/auth';
 import { ensureVote } from '../lib/vote';
 import { FILING_COOLDOWN_MESSAGE, overFilingLimit, findDuplicate } from '../lib/writes';
 import { announceFiled } from '../lib/webhook';
+import { createForumThread } from '../lib/discord-forums';
 import { logAction } from '../lib/staff';
 import { db } from '../lib/db/client';
 import { sql } from 'drizzle-orm';
@@ -149,16 +150,7 @@ if (Astro.request.method === 'POST') {
         extensionRepo: kind === 'extension' ? (extensionRepo || null) : null,
         reporterId: user.id,
       })
-      .returning({
-        id: reports.id,
-        kind: reports.kind,
-        title: reports.title,
-        body: reports.body,
-        category: reports.category,
-        platform: reports.platform,
-        appVersion: reports.appVersion,
-        reporterId: reports.reporterId,
-      });
+      .returning();
 
     if (created) {
       await ensureVote(created.id, user.id);
@@ -189,6 +181,7 @@ if (Astro.request.method === 'POST') {
 
       const after: Promise<unknown>[] = [
         announceFiled(created, Astro.url.origin),
+        createForumThread(created, Astro.url.origin),
         logAction(
           user,
           'report.file',
@@ -381,7 +374,11 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           required
           minlength="5"
           value={shown.title}
-          placeholder="Briefly describe the issue or suggestion"
+          placeholder={shown.kind === 'suggestion'
+            ? 'What feature or improvement would you like to see?'
+            : shown.kind === 'extension'
+              ? 'e.g. Extension fails to load chapter list'
+              : 'Briefly describe what went wrong'}
         />
         <div id="similar-reports" class="similar-box" style="display: none;">
           <p class="similar-heading">
@@ -391,20 +388,24 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           <ul id="similar-list" class="similar-list"></ul>
         </div>
       </div>
-      <div class="field">
-        <label class="label" for="appVersion">App version</label>
-        <input
-          class="input"
-          id="appVersion"
-          name="appVersion"
-          type="text"
-          maxlength="32"
-          inputmode="numeric"
-          value={shown.appVersion}
-          placeholder="e.g. 3.1.7+39"
-        />
-        <p class="field-hint">Found in AnymeX → Settings → About. Optional but very helpful.</p>
-      </div>
+
+      {shown.kind !== 'suggestion' && (
+        <div class="field">
+          <label class="label" for="appVersion">App version</label>
+          <input
+            class="input"
+            id="appVersion"
+            name="appVersion"
+            type="text"
+            maxlength="32"
+            inputmode="numeric"
+            value={shown.appVersion}
+            placeholder="e.g. 3.1.7+39"
+          />
+          <p class="field-hint">Found in AnymeX → Settings → About. Optional but very helpful.</p>
+        </div>
+      )}
+
       {shown.kind === 'extension' && (
         <div class="field">
           <label class="label" for="extensionNames">Extension name(s)</label>
@@ -421,7 +422,9 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       )}
 
       <div class="field">
-        <label class="label" for="body">{shown.kind === 'extension' ? 'Issue description' : 'Description'}</label>
+        <label class="label" for="body">
+          {shown.kind === 'suggestion' ? 'Suggestion details' : shown.kind === 'extension' ? 'Issue description' : 'Description'}
+        </label>
         <textarea
           class="textarea"
           id="body"
@@ -429,9 +432,11 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           rows="4"
           maxlength="5000"
           required={shown.kind === 'extension'}
-          placeholder={shown.kind === 'extension'
-            ? 'Describe what is wrong with the extension.'
-            : 'What happened? What did you expect to happen?'}
+          placeholder={shown.kind === 'suggestion'
+            ? 'Describe your idea, how it should work, and why it would be helpful.'
+            : shown.kind === 'extension'
+              ? 'Describe what is wrong with the extension.'
+              : 'What happened? What did you expect to happen?'}
         >{shown.body}</textarea>
         <p class="field-hint">Supports Discord Markdown: <code>**bold**</code>, <code>*italic*</code>, <code>__underline__</code>, <code>~~strike~~</code>, <code>`code`</code>, <code>&gt; quote</code>, <code>||spoiler||</code>, <code>-# subtext</code></p>
       </div>
@@ -523,6 +528,18 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     const fileList = document.getElementById('file-list');
     const submitBtn = document.getElementById('submit-btn') as HTMLButtonElement;
     const selectedFiles: File[] = [];
+
+    // ── Dynamic Kind Switcher ──────────────────────────────────────────
+    const kindRadios = document.querySelectorAll<HTMLInputElement>('input[name="kind"]');
+    kindRadios.forEach((radio) => {
+      radio.addEventListener('change', () => {
+        if (radio.checked) {
+          const url = new URL(window.location.href);
+          url.searchParams.set('kind', radio.value);
+          window.location.href = url.toString();
+        }
+      });
+    });
 
     // ── Live Similar Reports Debounce ──────────────────────────────────
     const titleInput = document.getElementById('title') as HTMLInputElement | null;

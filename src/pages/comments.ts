@@ -10,6 +10,11 @@ import { isReportId } from '../lib/writes';
 import { sendDiscordDm, truncateQuote } from '../lib/notify';
 import { resolveMentions } from '../lib/mentions';
 import { BLURPLE } from '../lib/webhook';
+import {
+  syncCommentToDiscord,
+  editCommentInDiscord,
+  deleteCommentFromDiscord,
+} from '../lib/discord-forums';
 
 export const prerender = false;
 
@@ -103,7 +108,7 @@ export const POST: APIRoute = async (ctx) => {
 
   /* Verify the report exists. */
   const [report] = await db()
-    .select({ id: reports.id, reporterId: reports.reporterId, title: reports.title })
+    .select({ id: reports.id, reporterId: reports.reporterId, title: reports.title, discordThreadId: reports.discordThreadId })
     .from(reports)
     .where(eq(reports.id, reportId));
   if (!report) return json({ error: 'report not found' }, 404);
@@ -263,6 +268,18 @@ export const POST: APIRoute = async (ctx) => {
   );
   dmTasks.push(log);
 
+  if (report.discordThreadId) {
+    const attUrl = attachment ? `${ctx.url.origin}/uploads/${attachment.filePath}` : undefined;
+    dmTasks.push(
+      syncCommentToDiscord(
+        report,
+        comment,
+        user,
+        attUrl ? [attUrl] : undefined,
+      ),
+    );
+  }
+
   if (cf) for (const task of dmTasks) cf.waitUntil(task);
   else await Promise.all(dmTasks);
 
@@ -305,7 +322,7 @@ export const PUT: APIRoute = async (ctx) => {
 
   /* Load the comment to check ownership + get the report for mention DMs. */
   const [comment] = await db()
-    .select({ id: comments.id, userId: comments.userId, reportId: comments.reportId })
+    .select({ id: comments.id, userId: comments.userId, reportId: comments.reportId, discordMessageId: comments.discordMessageId })
     .from(comments)
     .where(eq(comments.id, commentId));
   if (!comment) return json({ error: 'comment not found' }, 404);
@@ -314,7 +331,7 @@ export const PUT: APIRoute = async (ctx) => {
   if (comment.userId !== user.id) return json({ error: 'forbidden' }, 403);
 
   const [report] = await db()
-    .select({ id: reports.id, title: reports.title })
+    .select({ id: reports.id, title: reports.title, discordThreadId: reports.discordThreadId })
     .from(reports)
     .where(eq(reports.id, comment.reportId));
 
@@ -357,6 +374,12 @@ export const PUT: APIRoute = async (ctx) => {
   const log = logAction(user, 'comment.edit', `report #${comment.reportId}`, body.slice(0, 200), commentUrl);
   dmTasks.push(log);
 
+  if (comment.discordMessageId && report?.discordThreadId) {
+    dmTasks.push(
+      editCommentInDiscord(report.discordThreadId, comment.discordMessageId, body, user.username),
+    );
+  }
+
   const cf = ctx.locals.cfContext;
   if (cf) for (const task of dmTasks) cf.waitUntil(task);
   else await Promise.all(dmTasks);
@@ -383,10 +406,15 @@ export const DELETE: APIRoute = async (ctx) => {
 
   /* Load the comment to check ownership. */
   const [comment] = await db()
-    .select({ id: comments.id, userId: comments.userId, reportId: comments.reportId })
+    .select({ id: comments.id, userId: comments.userId, reportId: comments.reportId, discordMessageId: comments.discordMessageId })
     .from(comments)
     .where(eq(comments.id, commentId));
   if (!comment) return json({ error: 'comment not found' }, 404);
+
+  const [report] = await db()
+    .select({ discordThreadId: reports.discordThreadId })
+    .from(reports)
+    .where(eq(reports.id, comment.reportId));
 
   /* Author or staff (mod+) can delete. */
   const isAuthor = comment.userId === user.id;
@@ -410,9 +438,14 @@ export const DELETE: APIRoute = async (ctx) => {
     isAuthor ? 'own comment' : 'by staff',
     `${ctx.url.origin}/report/${comment.reportId}`,
   );
+  const tasks: Promise<unknown>[] = [log];
+  if (comment.discordMessageId && report?.discordThreadId) {
+    tasks.push(deleteCommentFromDiscord(report.discordThreadId, comment.discordMessageId));
+  }
+
   const cf = ctx.locals.cfContext;
-  if (cf) cf.waitUntil(log);
-  else await log;
+  if (cf) for (const t of tasks) cf.waitUntil(t);
+  else await Promise.all(tasks);
 
   return new Response(null, { status: 204 });
 };

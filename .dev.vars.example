@@ -6,3 +6,9 @@
 # plain var in wrangler.jsonc, since it is public and must survive deploys.
 DISCORD_CLIENT_SECRET= # discord.com/developers/applications → OAuth2 → Reset Secret. Shown once.
 OWNER_DISCORD_ID= # Your Discord user id: Settings → Advanced → Developer Mode, then right-click your name → Copy User ID. Grants the /admin dashboard, and is the only authority /admin itself cannot change.
+DISCORD_BOT_TOKEN= # Optional in dev.vars if saved in /admin; needed for Discord Forum sync & DMs.
+CONTRIBUTOR_GUILD_ID=1545003117018357850
+DISCORD_FORUM_BUGS_ID=1545003724961751096
+DISCORD_FORUM_SUGGESTIONS_ID=1545003626823417906
+DISCORD_FORUM_EXTENSIONS_ID=1545003859380805702
+

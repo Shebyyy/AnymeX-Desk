@@ -8,6 +8,7 @@ import { LEVEL_LABELS, combine } from '../lib/levels';
 import { idList, readConfig, writeSettings } from '../lib/settings';
 import { isOwner, isResponse, logAction, requireStaff, setManualLevel } from '../lib/staff';
 import { testWebhook } from '../lib/webhook';
+import { ensureForumTags } from '../lib/discord-forums';
 import { relativeAge } from '../lib/format';
 
 export const prerender = false;
@@ -85,6 +86,45 @@ if (Astro.request.method === 'POST') {
     await writeSettings(patch, user.id);
     await logAction(user, 'settings.dm', null, `enabled=${dmEnabled}, token=${botToken ? 'changed' : 'unchanged'}`);
     done = 'DM notification settings saved.';
+  } else if (intent === 'contributor-forums') {
+    const syncEnabled = form.get('discord_forum_sync_enabled') === '1' ? '1' : '0';
+    const guildId = String(form.get('contributor_guild_id') ?? '').trim();
+    const bugsId = String(form.get('discord_forum_bugs_id') ?? '').trim();
+    const suggestionsId = String(form.get('discord_forum_suggestions_id') ?? '').trim();
+    const extensionsId = String(form.get('discord_forum_extensions_id') ?? '').trim();
+    const syncSecret = String(form.get('discord_sync_secret') ?? '').trim();
+
+    const patch: Record<string, string> = {
+      discord_forum_sync_enabled: syncEnabled,
+      contributor_guild_id: guildId,
+      discord_forum_bugs_id: bugsId,
+      discord_forum_suggestions_id: suggestionsId,
+      discord_forum_extensions_id: extensionsId,
+      discord_sync_secret: syncSecret,
+    };
+    await writeSettings(patch, user.id);
+    await logAction(user, 'settings.forums', null, `enabled=${syncEnabled}, guild=${guildId}`);
+    done = 'Contributor forum settings saved.';
+  } else if (intent === 'setup-forum-tags') {
+    const cfg = await readConfig();
+    if (!cfg.discord_bot_token) {
+      error = 'Please enter and save your Bot Token in the DM notifications section above first.';
+    } else {
+      let count = 0;
+      if (cfg.discord_forum_bugs_id) {
+        await ensureForumTags(cfg.discord_forum_bugs_id, cfg.discord_bot_token, 'bug');
+        count++;
+      }
+      if (cfg.discord_forum_suggestions_id) {
+        await ensureForumTags(cfg.discord_forum_suggestions_id, cfg.discord_bot_token, 'suggestion');
+        count++;
+      }
+      if (cfg.discord_forum_extensions_id) {
+        await ensureForumTags(cfg.discord_forum_extensions_id, cfg.discord_bot_token, 'extension');
+        count++;
+      }
+      done = `Successfully verified and auto-created forum tags across ${count} channel(s)!`;
+    }
   } else if (intent === 'block') {
     const target = String(form.get('discord_id') ?? '').trim();
     const blocked = form.get('blocked') === '1';
@@ -361,6 +401,50 @@ const botTokenSet = !!cfg.discord_bot_token;
       <div class="wide actions">
         <button class="btn btn-primary" type="submit">Save DM settings</button>
       </div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Contributor Discord Server & Forums</h2>
+    <p class="panel-sub">
+      Automatically creates threads in your Contributor Discord Forum channels when bugs, suggestions, or extension issues are filed. Syncs comments, edits, deletions, and forum tags bidirectionally.
+    </p>
+    <form method="POST" class="rows-2">
+      <input type="hidden" name="intent" value="contributor-forums" />
+      <div class="field wide">
+        <label class="check">
+          <input type="checkbox" name="discord_forum_sync_enabled" value="1" checked={cfg.discord_forum_sync_enabled === '1'} />
+          <span>Enable Contributor Forum synchronization</span>
+        </label>
+      </div>
+      <div class="field">
+        <label class="label" for="contributor_guild_id">Contributor Server (Guild) ID</label>
+        <input class="input" id="contributor_guild_id" name="contributor_guild_id" value={cfg.contributor_guild_id} placeholder="1545003117018357850" />
+      </div>
+      <div class="field">
+        <label class="label" for="discord_sync_secret">Inbound Sync Secret</label>
+        <input class="input" id="discord_sync_secret" name="discord_sync_secret" type="password" value={cfg.discord_sync_secret} placeholder="Optional shared token for inbound webhook" />
+      </div>
+      <div class="field">
+        <label class="label" for="discord_forum_bugs_id">Bugs Forum Channel ID</label>
+        <input class="input" id="discord_forum_bugs_id" name="discord_forum_bugs_id" value={cfg.discord_forum_bugs_id} placeholder="1545003724961751096" />
+      </div>
+      <div class="field">
+        <label class="label" for="discord_forum_suggestions_id">Suggestions Forum Channel ID</label>
+        <input class="input" id="discord_forum_suggestions_id" name="discord_forum_suggestions_id" value={cfg.discord_forum_suggestions_id} placeholder="1545003626823417906" />
+      </div>
+      <div class="field wide">
+        <label class="label" for="discord_forum_extensions_id">Extension Issues Forum Channel ID</label>
+        <input class="input" id="discord_forum_extensions_id" name="discord_forum_extensions_id" value={cfg.discord_forum_extensions_id} placeholder="1545003859380805702" />
+      </div>
+      <div class="wide actions">
+        <button class="btn btn-primary" type="submit">Save Forum Settings</button>
+      </div>
+    </form>
+    <form method="POST" class="test" style="margin-top: 16px;">
+      <input type="hidden" name="intent" value="setup-forum-tags" />
+      <button class="btn" type="submit">⚡ Auto-Generate / Verify Forum Tags on Discord</button>
+      <p class="field-hint" style="margin-top: 6px;">Creates Open, In Progress, Fixed, Duplicate, Won't Fix, and Platform/Source tags in all 3 channels automatically.</p>
     </form>
   </section>
 

@@ -23,6 +23,12 @@ export const SETTING_KEYS = [
   'max_images_per_report',
   'discord_dm_enabled',
   'discord_bot_token',
+  'contributor_guild_id',
+  'discord_forum_bugs_id',
+  'discord_forum_suggestions_id',
+  'discord_forum_extensions_id',
+  'discord_forum_sync_enabled',
+  'discord_sync_secret',
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -39,7 +45,13 @@ const DEFAULTS: Record<SettingKey, () => string> = {
   max_video_size: () => '52428800',
   max_images_per_report: () => '5',
   discord_dm_enabled: () => '1',
-  discord_bot_token: () => '',
+  discord_bot_token: () => String((env as Record<string, unknown>).DISCORD_BOT_TOKEN ?? ''),
+  contributor_guild_id: () => String((env as Record<string, unknown>).CONTRIBUTOR_GUILD_ID ?? '1545003117018357850'),
+  discord_forum_bugs_id: () => String((env as Record<string, unknown>).DISCORD_FORUM_BUGS_ID ?? '1545003724961751096'),
+  discord_forum_suggestions_id: () => String((env as Record<string, unknown>).DISCORD_FORUM_SUGGESTIONS_ID ?? '1545003626823417906'),
+  discord_forum_extensions_id: () => String((env as Record<string, unknown>).DISCORD_FORUM_EXTENSIONS_ID ?? '1545003859380805702'),
+  discord_forum_sync_enabled: () => '1',
+  discord_sync_secret: () => String((env as Record<string, unknown>).DISCORD_SYNC_SECRET ?? ''),
 };
 
 export type Config = Record<SettingKey, string>;

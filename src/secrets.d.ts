@@ -10,6 +10,8 @@ interface Env {
   OWNER_DISCORD_ID?: string;
   /** Optional seed for the webhook that /admin then owns. */
   DISCORD_WEBHOOK_URL?: string;
+  DISCORD_BOT_TOKEN?: string;
+  DISCORD_SYNC_SECRET?: string;
 }
 
 declare namespace Cloudflare {
@@ -17,5 +19,7 @@ declare namespace Cloudflare {
     DISCORD_CLIENT_SECRET: string;
     OWNER_DISCORD_ID?: string;
     DISCORD_WEBHOOK_URL?: string;
+    DISCORD_BOT_TOKEN?: string;
+    DISCORD_SYNC_SECRET?: string;
   }
 }

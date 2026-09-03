@@ -15,6 +15,8 @@ import { atLeast } from '../../lib/levels';
 import { isResponse, levelOf, logAction, requireStaff } from '../../lib/staff';
 import { announceFixed, statusColor } from '../../lib/webhook';
 import { notifyWatchers, sendDiscordDm } from '../../lib/notify';
+import { updateForumThread, updateForumStatus, deleteForumThread } from '../../lib/discord-forums';
+import { readSetting } from '../../lib/settings';
 import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } from '../../lib/format';
 import { prepareCommentBody } from '../../lib/richtext';
 import { fetchLinkPreviews } from '../../lib/link-preview';
@@ -99,13 +101,21 @@ if (Astro.request.method === 'POST') {
       if (editRows.some((r) => r.field === 'category') && newCategory) updateSet.category = newCategory;
       if (editRows.some((r) => r.field === 'platform') && newPlatform) updateSet.platform = newPlatform;
 
-      await db().update(reports).set(updateSet as never).where(eq(reports.id, id));
+      const [updated] = await db().update(reports).set(updateSet as never).where(eq(reports.id, id)).returning();
       if (editRows.length > 0) {
         await db().insert(reportEdits).values(editRows);
       }
-      await import('../../lib/staff').then((m) =>
-        m.logAction(actingUser, 'report.edit', String(id), `${editRows.map((r) => r.field).join(', ')}`, `${Astro.url.origin}/report/${id}`)
-      );
+      const editTasks: Promise<unknown>[] = [
+        import('../../lib/staff').then((m) =>
+          m.logAction(actingUser, 'report.edit', String(id), `${editRows.map((r) => r.field).join(', ')}`, `${Astro.url.origin}/report/${id}`)
+        ),
+      ];
+      if (updated) {
+        editTasks.push(updateForumThread(updated, Astro.url.origin));
+      }
+      const cf = Astro.locals.cfContext;
+      if (cf) for (const t of editTasks) cf.waitUntil(t);
+      else await Promise.all(editTasks);
     }
     return Astro.redirect(`/report/${id}?saved=edit`, 303);
   }
@@ -132,6 +142,7 @@ if (Astro.request.method === 'POST') {
 
       const after: Promise<unknown>[] = [
         notifyWatchers(id, 'status_changed', detail, gate.user.id),
+        updateForumStatus(updated, status, statusNote, gate.user.username),
       ];
 
       if (updated.reporterId && updated.reporterId !== gate.user.id) {
@@ -201,7 +212,13 @@ if (Astro.request.method === 'POST') {
 
         await logAction(gate.user, 'report.duplicate', String(id), `merged into ${dupId}`, `${Astro.url.origin}/report/${id}`);
         const detail = `duplicate: merged into #${dupId}`;
-        await notifyWatchers(id, 'duplicate', detail, gate.user.id);
+        const dupTasks: Promise<unknown>[] = [
+          notifyWatchers(id, 'duplicate', detail, gate.user.id),
+          updateForumStatus(updated, 'duplicate', `Duplicate of #${dupId}`, gate.user.username),
+        ];
+        const cf = Astro.locals.cfContext;
+        if (cf) for (const t of dupTasks) cf.waitUntil(t);
+        else await Promise.all(dupTasks);
       }
       return Astro.redirect(`/report/${id}?saved=duplicate`, 303);
     }
@@ -211,7 +228,7 @@ if (Astro.request.method === 'POST') {
 }
 
 /* Delete report (mod+ only). Cascades to votes, comments, attachments, notifications in DB.
-   Also cleans up file blobs from KV. */
+   Also cleans up file blobs from KV and locks/archives the Discord forum thread. */
 if (Astro.request.method === 'DELETE') {
   const gate = await requireStaff(Astro, 'mod');
   if (isResponse(gate)) return gate;
@@ -226,19 +243,22 @@ if (Astro.request.method === 'DELETE') {
   const [deleted] = await db()
     .delete(reports)
     .where(eq(reports.id, id))
-    .returning({ id: reports.id, title: reports.title });
+    .returning({ id: reports.id, title: reports.title, discordThreadId: reports.discordThreadId });
 
   if (deleted) {
     await logAction(gate.user, 'report.delete', String(id), deleted.title);
 
-    // Clean up KV files in background.
+    const cleanup: Promise<unknown>[] = [];
+    if (deleted.discordThreadId) {
+      cleanup.push(deleteForumThread(deleted.discordThreadId, deleted.title));
+    }
     const kv = env.SESSION as KVNamespace | undefined;
     if (kv && atts.length > 0) {
-      const cleanup = atts.map((a) => kv.delete(`upload:${a.filePath}`));
-      const cf = Astro.locals.cfContext;
-      if (cf) for (const task of cleanup) cf.waitUntil(task);
-      else await Promise.all(cleanup);
+      for (const a of atts) cleanup.push(kv.delete(`upload:${a.filePath}`));
     }
+    const cf = Astro.locals.cfContext;
+    if (cf) for (const task of cleanup) cf.waitUntil(task);
+    else await Promise.all(cleanup);
 
     return new Response(JSON.stringify({ deleted: true }), {
       status: 200,
@@ -421,6 +441,8 @@ if (report.duplicateOf) {
   dupTarget = target ?? null;
 }
 
+const contributorGuildId = (await readSetting('contributor_guild_id')) || '1545003117018357850';
+
 Astro.response.headers.set(
   'Cache-Control',
   user ? 'private, no-store' : 'public, max-age=0, s-maxage=30, stale-while-revalidate=120',
@@ -491,7 +513,19 @@ Astro.response.headers.set(
     <dl class="facts">
       <div>
         <dt class="label">Status</dt>
-        <dd class="status" data-status={report.status}>{statusLabel(report.status)}</dd>
+        <dd class="status" data-status={report.status}>
+          {report.kind === 'suggestion'
+            ? report.status === 'fixed'
+              ? 'Completed'
+              : report.status === 'open'
+                ? 'Under Review'
+                : report.status === 'confirmed'
+                  ? 'Planned'
+                  : report.status === 'wont_fix'
+                    ? 'Declined'
+                    : statusLabel(report.status)
+            : statusLabel(report.status)}
+        </dd>
       </div>
       {report.statusNote && (
         <div class="wide"><dt class="label">Note</dt><dd>{report.statusNote}</dd></div>
@@ -501,11 +535,29 @@ Astro.response.headers.set(
       {report.appVersion && (
         <div><dt class="label">App version</dt><dd class="num">v{report.appVersion}</dd></div>
       )}
-      <div><dt class="label">Reported</dt><dd>{relativeAge(report.createdAt)} ago</dd></div>
+      <div><dt class="label">{report.kind === 'suggestion' ? 'Suggested' : 'Reported'}</dt><dd>{relativeAge(report.createdAt)} ago</dd></div>
       {report.duplicateOf && dupTarget && (
         <div class="wide">
           <dt class="label">Duplicate of</dt>
           <dd><a href={`/report/${report.duplicateOf}`}>#{report.duplicateOf}: {dupTarget.title}</a></dd>
+        </div>
+      )}
+      {report.discordThreadId && (
+        <div class="wide">
+          <dt class="label">Discord Thread</dt>
+          <dd>
+            <a
+              href={`https://discord.com/channels/${contributorGuildId}/${report.discordThreadId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="discord-thread-link"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="vertical-align: -2px; margin-right: 5px;">
+                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994.021-.041.001-.09-.041-.106a13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+              </svg>
+              Open Contributor Discord Thread ↗
+            </a>
+          </dd>
         </div>
       )}
     </dl>
@@ -1304,6 +1356,26 @@ Astro.response.headers.set(
 </script>
 
 <style>
+  .discord-thread-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    background: color-mix(in srgb, var(--discord, #5865f2) 15%, transparent);
+    color: var(--discord, #5865f2);
+    border: 1px solid color-mix(in srgb, var(--discord, #5865f2) 35%, transparent);
+    border-radius: var(--radius-sm, 6px);
+    font-size: var(--text-xs);
+    font-weight: 500;
+    text-decoration: none;
+    transition: all 0.15s ease;
+  }
+  .discord-thread-link:hover {
+    background: var(--discord, #5865f2);
+    color: #fff;
+    border-color: transparent;
+  }
+
   .flash {
     padding: var(--space-3);
     margin-block-end: var(--space-6);

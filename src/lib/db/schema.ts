@@ -231,6 +231,10 @@ export const reports = sqliteTable(
       enum: ['under_review', 'planned', 'in_progress', 'shipped'],
     }),
     milestone: text('milestone'),
+
+    /** Discord Contributor Forum sync fields */
+    discordThreadId: text('discord_thread_id'),
+    discordStarterMessageId: text('discord_starter_message_id'),
   },
   (t) => [
     /**
@@ -256,6 +260,7 @@ export const reports = sqliteTable(
     index('reports_by_category').on(t.category),
     index('reports_by_platform').on(t.platform),
     index('reports_by_age').on(t.status, t.createdAt),
+    index('reports_by_discord_thread').on(t.discordThreadId),
   ],
 );
 
@@ -332,6 +337,9 @@ export const comments = sqliteTable(
     body: text('body').notNull(),
     /** If set, this comment is a reply to another comment on the same report. */
     replyToId: integer('reply_to_id'),
+    /** Discord sync: message snowflake and origin */
+    discordMessageId: text('discord_message_id'),
+    source: text('source', { enum: ['web', 'discord'] }).notNull().default('web'),
     createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
     updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
   },
@@ -339,6 +347,7 @@ export const comments = sqliteTable(
     index('comments_by_report').on(t.reportId, t.createdAt),
     index('comments_by_user').on(t.userId),
     index('comments_by_reply').on(t.replyToId),
+    index('comments_by_discord_message').on(t.discordMessageId),
   ],
 );
 
