@@ -151,6 +151,35 @@ async function setupChannel(channelId: string, channelName: string, desiredTags:
       console.log(`   - ${t.emoji_name ?? '🏷️'} ${t.name} (ID: ${t.id})`);
     }
   }
+
+  // Verify and ensure Forum Webhook exists (needed for user profile & avatar sync)
+  try {
+    const hookRes = await fetch(`${DISCORD_API}/channels/${channelId}/webhooks`, {
+      headers: { Authorization: `Bot ${botToken}` },
+    });
+    if (hookRes.ok) {
+      const hooks = (await hookRes.json()) as Array<{ id: string; token?: string; name: string }>;
+      const existing = hooks.find((h) => h.token);
+      if (existing) {
+        console.log(`✅ Webhook ready on #${channelName} (ID: ${existing.id})`);
+      } else {
+        const createHook = await fetch(`${DISCORD_API}/channels/${channelId}/webhooks`, {
+          method: 'POST',
+          headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'AnymeX Desk Bridge' }),
+        });
+        if (createHook.ok) {
+          console.log(`✅ Created new Webhook for #${channelName}!`);
+        } else {
+          console.warn(`⚠️ Could not create webhook for #${channelName} (${createHook.status}). Please check bot permissions.`);
+        }
+      }
+    } else {
+      console.warn(`⚠️ Cannot list webhooks for #${channelName} (${hookRes.status}). Check if Bot has 'Manage Webhooks' permission in Discord!`);
+    }
+  } catch (err) {
+    console.warn(`⚠️ Error checking webhook on #${channelName}:`, err);
+  }
 }
 
 async function main() {

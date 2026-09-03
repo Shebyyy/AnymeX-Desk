@@ -720,6 +720,29 @@ export async function getOrCreateChannelWebhook(
 }
 
 /**
+ * Resolves a valid Discord CDN avatar URL for either a session user or DB user row
+ */
+export function resolveDiscordAvatarUrl(
+  author: { id?: string; discordId?: string; avatarHash?: string | null },
+  size = 256,
+): string {
+  const snowflake = author.discordId || author.id;
+  if (snowflake && author.avatarHash) {
+    const ext = author.avatarHash.startsWith('a_') ? 'gif' : 'png';
+    return `https://cdn.discordapp.com/avatars/${snowflake}/${author.avatarHash}.${ext}?size=${size}`;
+  }
+  if (snowflake) {
+    try {
+      const idx = (BigInt(snowflake) >> 22n) % 6n;
+      return `https://cdn.discordapp.com/embed/avatars/${idx}.png`;
+    } catch {
+      return 'https://cdn.discordapp.com/embed/avatars/0.png';
+    }
+  }
+  return 'https://cdn.discordapp.com/embed/avatars/0.png';
+}
+
+/**
  * Forward a site comment to the Discord Forum Thread
  */
 export async function syncCommentToDiscord(
@@ -736,7 +759,7 @@ export async function syncCommentToDiscord(
   if (!botToken || !report.discordThreadId) return null;
 
   try {
-    const avatar = avatarUrl(author, 256);
+    const avatar = resolveDiscordAvatarUrl(author as any, 256);
     const content = comment.body || (attachmentUrls?.length ? '(Shared an attachment)' : '');
 
     // Unarchive thread if it was archived
@@ -751,7 +774,7 @@ export async function syncCommentToDiscord(
 
     // Resolve reply info if this is a reply to another comment
     let messageReference: { message_id: string } | undefined;
-    let replyPrefix = '';
+    let parentUserId: string | null = null;
     if (comment.replyToId != null) {
       const [parent] = await db()
         .select({ discordMessageId: comments.discordMessageId, userId: comments.userId })
@@ -762,7 +785,7 @@ export async function syncCommentToDiscord(
         messageReference = { message_id: parent.discordMessageId };
       }
       if (parent?.userId) {
-        replyPrefix = `*Replying to <@${parent.userId}>:*\n`;
+        parentUserId = parent.userId;
       }
     }
 
@@ -775,26 +798,55 @@ export async function syncCommentToDiscord(
     }
 
     // Attempt to send via Webhook so message uses the user's Discord Avatar & Username
-    const forumChannelId = report.kind ? getForumChannelId(report.kind, c) : null;
+    let forumChannelId = report.kind ? getForumChannelId(report.kind, c) : null;
+    if (!forumChannelId) {
+      try {
+        const tRes = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {
+          headers: { Authorization: `Bot ${botToken}` },
+        });
+        if (tRes.ok) {
+          const tData = (await tRes.json()) as { parent_id?: string };
+          if (tData.parent_id) forumChannelId = tData.parent_id;
+        }
+      } catch {}
+    }
+
     let hook = forumChannelId ? await getOrCreateChannelWebhook(forumChannelId, botToken) : null;
 
     let res: Response | null = null;
     if (hook) {
+      const webhookContent = parentUserId ? `<@${parentUserId}> ${content}` : content;
       res = await fetch(`${DISCORD_API}/webhooks/${hook.id}/${hook.token}?thread_id=${report.discordThreadId}&wait=true`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: author.username.slice(0, 80),
           avatar_url: avatar,
-          content: `${replyPrefix}${content}`,
+          content: webhookContent,
           embeds: embeds.length > 0 ? embeds : undefined,
           allowed_mentions: { parse: ['users'], replied_user: true },
         }),
       });
+
+      if (!res.ok) {
+        console.warn(`[ForumSync] Webhook execution failed (${res.status}):`, await res.text());
+      }
     }
 
-    // Fallback to bot message if webhook is not available or fails
+    // Fallback to bot message with native Discord reply bar if webhook is not available or fails
     if (!res || !res.ok) {
+      const fallbackEmbeds: Record<string, unknown>[] = [
+        {
+          author: {
+            name: author.username,
+            icon_url: avatar,
+          },
+          description: content,
+          color: BLURPLE,
+        },
+        ...embeds,
+      ];
+
       res = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
         method: 'POST',
         headers: {
@@ -802,9 +854,8 @@ export async function syncCommentToDiscord(
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          content: `${replyPrefix}**${author.username}** (via Tracker):\n${content}`,
           message_reference: messageReference,
-          embeds: embeds.length > 0 ? embeds : undefined,
+          embeds: fallbackEmbeds,
           allowed_mentions: { parse: ['users'], replied_user: true },
         }),
       });
@@ -818,8 +869,7 @@ export async function syncCommentToDiscord(
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            content: `${replyPrefix}**${author.username}** (via Tracker):\n${content}`,
-            embeds: embeds.length > 0 ? embeds : undefined,
+            embeds: fallbackEmbeds,
             allowed_mentions: { parse: ['users'], replied_user: true },
           }),
         });

@@ -108,7 +108,7 @@ export const POST: APIRoute = async (ctx) => {
 
   /* Verify the report exists. */
   const [report] = await db()
-    .select({ id: reports.id, reporterId: reports.reporterId, title: reports.title, discordThreadId: reports.discordThreadId })
+    .select({ id: reports.id, kind: reports.kind, reporterId: reports.reporterId, title: reports.title, discordThreadId: reports.discordThreadId })
     .from(reports)
     .where(eq(reports.id, reportId));
   if (!report) return json({ error: 'report not found' }, 404);
