@@ -1,7 +1,13 @@
 import type { APIRoute } from 'astro';
+<<<<<<< HEAD
 import { db } from '../lib/db/client';
 import { sql } from 'drizzle-orm';
 import { KIND_LABELS, PLATFORM_LABELS, CATEGORY_LABELS } from '../lib/db/schema';
+=======
+import { db } from '../../lib/db/client';
+import { sql } from 'drizzle-orm';
+import { KIND_LABELS, PLATFORM_LABELS, CATEGORY_LABELS } from '../../lib/db/schema';
+>>>>>>> 4dc5424238a4b24e4ce6d958264d6f91e5fa79fb
 
 export const prerender = false;
 
