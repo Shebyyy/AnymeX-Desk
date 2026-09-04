@@ -351,57 +351,91 @@ export async function mergeUserAccounts(
   const d = db();
   if (!fromUserId || !toUserId || fromUserId === toUserId) return;
 
-  // 1. Move reports
-  await d.update(reports).set({ reporterId: toUserId }).where(eq(reports.reporterId, fromUserId));
-
-  // 2. Move comments
-  await d.update(comments).set({ userId: toUserId }).where(eq(comments.userId, fromUserId));
-
-  // 3. Move notifications
-  await d.update(notifications).set({ userId: toUserId }).where(eq(notifications.userId, fromUserId));
-
-  // 4. Move subscriptions
-  await d.update(subscriptions).set({ userId: toUserId }).where(eq(subscriptions.userId, fromUserId));
-
-  // 5. Move votes (de-duplicate against existing toUserId votes)
-  await d.run(sql`
-    DELETE FROM votes
-    WHERE discord_id = ${fromUserId}
-      AND report_id IN (SELECT report_id FROM votes WHERE discord_id = ${toUserId})
-  `);
-  await d.run(sql`
-    UPDATE votes SET discord_id = ${toUserId} WHERE discord_id = ${fromUserId}
-  `);
-
-  // 6. Move reactions (de-duplicate against existing toUserId reactions)
-  await d.run(sql`
-    DELETE FROM comment_reactions
-    WHERE discord_id = ${fromUserId}
-      AND (comment_id, emoji) IN (
-        SELECT comment_id, emoji FROM comment_reactions WHERE discord_id = ${toUserId}
-      )
-  `);
-  await d.run(sql`
-    UPDATE comment_reactions SET discord_id = ${toUserId} WHERE discord_id = ${fromUserId}
-  `);
-
-  // 7. Update toUserId with Telegram details if provided
-  if (telegramData?.telegramId) {
-    await d
-      .update(users)
-      .set({
-        telegramId: telegramData.telegramId,
-        telegramUsername: telegramData.telegramUsername || null,
-        telegramPhotoUrl: telegramData.telegramPhotoUrl || null,
-        notifyTelegram: true,
-        discordLinked: true,
-        discordUserId: toUserId.startsWith('tg:') ? null : toUserId,
-        lastLogin: sql`(unixepoch())`,
-      })
-      .where(eq(users.discordId, toUserId));
+  try {
+    // 1. Move reports
+    await d.update(reports).set({ reporterId: toUserId }).where(eq(reports.reporterId, fromUserId));
+  } catch (e) {
+    console.warn('[merge] moving reports:', e);
   }
 
-  // 8. Safely remove fromUserId now that everything is migrated
-  await d.delete(users).where(eq(users.discordId, fromUserId));
+  try {
+    // 2. Move comments
+    await d.update(comments).set({ userId: toUserId }).where(eq(comments.userId, fromUserId));
+  } catch (e) {
+    console.warn('[merge] moving comments:', e);
+  }
+
+  try {
+    // 3. Move notifications
+    await d.update(notifications).set({ userId: toUserId }).where(eq(notifications.userId, fromUserId));
+  } catch (e) {
+    console.warn('[merge] moving notifications:', e);
+  }
+
+  try {
+    // 4. Move subscriptions
+    await d.update(subscriptions).set({ userId: toUserId }).where(eq(subscriptions.userId, fromUserId));
+  } catch (e) {
+    console.warn('[merge] moving subscriptions:', e);
+  }
+
+  try {
+    // 5. Move votes (de-duplicate against existing toUserId votes)
+    await d.run(sql`
+      DELETE FROM votes
+      WHERE discord_id = ${fromUserId}
+        AND report_id IN (SELECT report_id FROM votes WHERE discord_id = ${toUserId})
+    `);
+    await d.run(sql`
+      UPDATE votes SET discord_id = ${toUserId} WHERE discord_id = ${fromUserId}
+    `);
+  } catch (e) {
+    console.warn('[merge] moving votes:', e);
+  }
+
+  try {
+    // 6. Move reactions (de-duplicate against existing toUserId reactions)
+    await d.run(sql`
+      DELETE FROM comment_reactions
+      WHERE discord_id = ${fromUserId}
+        AND (comment_id, emoji) IN (
+          SELECT comment_id, emoji FROM comment_reactions WHERE discord_id = ${toUserId}
+        )
+    `);
+    await d.run(sql`
+      UPDATE comment_reactions SET discord_id = ${toUserId} WHERE discord_id = ${fromUserId}
+    `);
+  } catch (e) {
+    console.warn('[merge] moving reactions:', e);
+  }
+
+  try {
+    // 7. Clear telegram credentials from fromUserId so they don't collide
+    await d
+      .update(users)
+      .set({ telegramId: null, telegramUsername: null, telegramPhotoUrl: null })
+      .where(eq(users.discordId, fromUserId));
+
+    // 8. Update toUserId with Telegram details if provided
+    if (telegramData?.telegramId) {
+      await d
+        .update(users)
+        .set({
+          telegramId: telegramData.telegramId,
+          telegramUsername: telegramData.telegramUsername || null,
+          telegramPhotoUrl: telegramData.telegramPhotoUrl || null,
+          notifyTelegram: true,
+          discordLinked: true,
+          discordUserId: toUserId.startsWith('tg:') ? null : toUserId,
+          lastLogin: sql`(unixepoch())`,
+        })
+        .where(eq(users.discordId, toUserId));
+    }
+
+    // 9. Safely remove fromUserId now that everything is migrated
+    await d.delete(users).where(eq(users.discordId, fromUserId));
+  } catch (e) {
+    console.warn('[merge] finalizing user records:', e);
+  }
 }
 

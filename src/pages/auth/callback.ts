@@ -48,12 +48,8 @@ export const GET: APIRoute = async (ctx) => {
 
       if (conflict && conflict.discordId !== loggedInUser.id) {
         // Can we merge?
-        // If current session is a Telegram-native user ('tg:...'), and the target Discord account
-        // has no other Telegram account attached (or shares the same telegramId):
-        if (
-          loggedInUser.id.startsWith('tg:') &&
-          (!conflict.telegramId || conflict.telegramId === loggedInUser.telegramId)
-        ) {
+        // If current session is a Telegram-native user ('tg:...'), merge it into the Discord account:
+        if (loggedInUser.id.startsWith('tg:')) {
           const [tgUserRow] = await db()
             .select()
             .from(users)

@@ -67,8 +67,8 @@ export const GET: APIRoute = async (ctx) => {
 
       if (conflict && conflict.discordId !== loggedInUser.id) {
         // Can we merge?
-        // If conflict is a temporary tg:... placeholder without Discord linked:
-        if (conflict.discordId.startsWith('tg:') && !conflict.discordLinked) {
+        // If conflict is a temporary tg:... placeholder created by Telegram login:
+        if (conflict.discordId.startsWith('tg:')) {
           await mergeUserAccounts(conflict.discordId, loggedInUser.id, {
             telegramId,
             telegramUsername: rawParams.username || null,
@@ -90,7 +90,17 @@ export const GET: APIRoute = async (ctx) => {
           return ctx.redirect('/me?telegram=linked', 302);
         }
 
-        return ctx.redirect('/me?telegram=already_linked_to_other_account', 302);
+        // If it was linked to an old account, the user just verified ownership of this Telegram account via HMAC.
+        // Detach it from the old account so it can link to the active account.
+        await d
+          .update(users)
+          .set({
+            telegramId: null,
+            telegramUsername: null,
+            telegramPhotoUrl: null,
+            notifyTelegram: false,
+          })
+          .where(eq(users.discordId, conflict.discordId));
       }
 
       await d
