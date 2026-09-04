@@ -148,7 +148,7 @@ export const POST: APIRoute = async (ctx) => {
     }
 
     // Insert comment
-    const [[insertedRows]] = await d.batch([
+    const [insertedRows] = await d.batch([
       d.insert(comments).values({
         reportId: report.id,
         userId: author.id,
@@ -164,8 +164,8 @@ export const POST: APIRoute = async (ctx) => {
 
     const newComment = insertedRows[0];
 
-    // Store Discord attachments — save CDN URL in KV for the proxy route
-    const incomingAttachments: Array<{ url: string; filename: string; content_type?: string }> =
+    // Store Discord attachments — cache to KV so links do not break after CDN URL expiry
+    const incomingAttachments: Array<{ url: string; filename: string; content_type?: string; size?: number }> =
       body.attachments || [];
     const kv = env.SESSION as KVNamespace | undefined;
 
@@ -176,29 +176,52 @@ export const POST: APIRoute = async (ctx) => {
       if (mime.startsWith('image/')) fileType = 'image';
       else if (mime.startsWith('video/')) fileType = 'video';
 
-      // Use direct Discord CDN URL for filePath so it loads everywhere immediately
-      const filePath = att.url;
+      let filePath = att.url;
+      let fileSize = Number(att.size) || 0;
+
+      // Try caching attachment to KV so it doesn't expire when Discord's CDN URL expires
+      if (kv) {
+        try {
+          const resp = await fetch(att.url, { signal: AbortSignal.timeout(8000) });
+          if (resp.ok) {
+            const buf = await resp.arrayBuffer();
+            if (buf.byteLength > 0 && buf.byteLength < 25 * 1024 * 1024) {
+              const uuid = crypto.randomUUID();
+              const safeName = att.filename || 'attachment';
+              const kvPath = `uploads/${uuid}/${safeName}`;
+              await kv.put(`upload:${kvPath}`, buf, {
+                metadata: { mimeType: mime, fileName: safeName },
+                expirationTtl: 60 * 60 * 24 * 365,
+              });
+              filePath = kvPath;
+              fileSize = buf.byteLength;
+            }
+          }
+        } catch (e) {
+          console.warn('[Sync] Could not cache Discord attachment to KV, falling back to CDN URL:', e);
+        }
+      }
 
       try {
         await d.insert(attachments).values({
           reportId: report.id,
           commentId: newComment?.id ?? null,
-          fileName: att.filename,
+          fileName: att.filename || 'attachment',
           filePath,
           fileType,
           mimeType: mime,
-          fileSize: 0,
+          fileSize,
           discordCdnUrl: att.url,
         });
       } catch {
         await d.insert(attachments).values({
           reportId: report.id,
           commentId: newComment?.id ?? null,
-          fileName: att.filename,
+          fileName: att.filename || 'attachment',
           filePath,
           fileType,
           mimeType: mime,
-          fileSize: 0,
+          fileSize,
         });
       }
     }

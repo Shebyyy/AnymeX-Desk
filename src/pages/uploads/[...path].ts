@@ -12,7 +12,11 @@ export const prerender = false;
  * that came from Discord and were never uploaded to KV.
  */
 export const GET: APIRoute = async (ctx) => {
-  const filePath = `uploads/${ctx.params.path}`;
+  let subpath = ctx.params.path || '';
+  while (subpath.startsWith('uploads/')) {
+    subpath = subpath.slice('uploads/'.length);
+  }
+  const filePath = `uploads/${subpath}`;
   const kvKey = `upload:${filePath}`;
 
   const kv = env.SESSION as KVNamespace | undefined;

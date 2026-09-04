@@ -271,10 +271,15 @@ export const POST: APIRoute = async (ctx) => {
   dmTasks.push(log);
 
   if (report.discordThreadId) {
-    // Collect all mentioned Discord IDs so they arrive as <@id> pings in Discord
-    const allMentionedIds = body ? (await resolveMentions(body, user.id)).map((m) => m.id) : [];
-    const attUrl = attachment ? `${ctx.url.origin}/uploads/${attachment.filePath}` : undefined;
-    const attFiles = fileBuffer && file ? [{ name: file.name, buffer: fileBuffer, mimeType: file.type }] : undefined;
+    // Collect all mentioned Discord users so they arrive as natural in-place <@id> pings in Discord
+    const allMentions = body ? await resolveMentions(body, user.id) : [];
+    const attUrl = attachment
+      ? `${ctx.url.origin}/${attachment.filePath.replace(/^\/+/, '')}`
+      : undefined;
+    const attFiles =
+      fileBuffer && file
+        ? [{ name: file.name, buffer: fileBuffer, mimeType: file.type }]
+        : undefined;
     dmTasks.push(
       syncCommentToDiscord(
         report,
@@ -282,7 +287,7 @@ export const POST: APIRoute = async (ctx) => {
         user,
         attUrl ? [attUrl] : undefined,
         undefined,
-        allMentionedIds.length > 0 ? allMentionedIds : undefined,
+        allMentions.length > 0 ? allMentions : undefined,
         attFiles,
       ),
     );

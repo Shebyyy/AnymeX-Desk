@@ -142,6 +142,9 @@ export const POST: APIRoute = async (ctx) => {
     fileType,
     ctx.url.origin,
     user.username,
+    undefined,
+    arrayBuffer,
+    file.type,
   );
   const cf = (ctx.locals as any)?.runtime?.ctx;
   if (cf?.waitUntil) {

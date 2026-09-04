@@ -1409,12 +1409,13 @@ Astro.response.headers.set(
           let attsHtml = '';
           if (c.attachments && c.attachments.length > 0) {
             attsHtml = `<div class="comment-attachments">` + c.attachments.map((att: any) => {
+              const srcUrl = att.filePath ? (att.filePath.startsWith('http') ? att.filePath : '/' + att.filePath.replace(/^\/+/, '')) : (att.url || '');
               if (att.fileType === 'image') {
-                return `<div class="comment-att" data-type="image"><a href="${att.url}" target="_blank" rel="noopener"><img src="${att.url}" alt="${att.fileName}" class="comment-att-img" loading="lazy" /></a></div>`;
+                return `<div class="comment-att" data-type="image"><a href="${srcUrl}" target="_blank" rel="noopener"><img src="${srcUrl}" alt="${att.fileName}" class="comment-att-img" loading="lazy" /></a></div>`;
               } else if (att.fileType === 'video') {
-                return `<div class="comment-att" data-type="video"><video controls preload="metadata" class="comment-att-video"><source src="${att.url}" type="${att.mimeType || 'video/mp4'}" /></video></div>`;
+                return `<div class="comment-att" data-type="video"><video controls preload="metadata" class="comment-att-video"><source src="${srcUrl}" type="${att.mimeType || 'video/mp4'}" /></video></div>`;
               } else {
-                return `<div class="comment-att" data-type="file"><a href="${att.url}" class="comment-att-file" download="${att.fileName}"><span>${att.fileName}</span></a></div>`;
+                return `<div class="comment-att" data-type="file"><a href="${srcUrl}" class="comment-att-file" download="${att.fileName}"><span>${att.fileName}</span></a></div>`;
               }
             }).join('') + `</div>`;
           }

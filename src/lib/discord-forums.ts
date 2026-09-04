@@ -345,11 +345,20 @@ export async function buildReportEmbed(report: Report, origin: string) {
       name: 'Attachments',
       value: otherFiles
         .slice(0, 5)
-        .map((f) => `📎 [${f.fileName}](${origin}/uploads/${f.filePath})`)
+        .map(
+          (f) =>
+            `📎 [${f.fileName}](${f.filePath.startsWith('http') ? f.filePath : `${origin}/${f.filePath.replace(/^\/+/, '')}`})`,
+        )
         .join('\n'),
       inline: false,
     });
   }
+
+  const imageUrl = firstImage
+    ? firstImage.filePath.startsWith('http')
+      ? firstImage.filePath
+      : `${origin}/${firstImage.filePath.replace(/^\/+/, '')}`
+    : undefined;
 
   return {
     title: `[#${report.id}] ${report.title}`.slice(0, 256),
@@ -361,7 +370,7 @@ export async function buildReportEmbed(report: Report, origin: string) {
     url: `${origin}/report/${report.id}`,
     color,
     fields,
-    image: firstImage ? { url: `${origin}/uploads/${firstImage.filePath}` } : undefined,
+    image: imageUrl ? { url: imageUrl } : undefined,
     footer: { text: `AnymeX Tracker • ${isSuggestion ? 'Suggestion' : 'Report'} #${report.id}` },
     timestamp: new Date((report.createdAt || Math.floor(Date.now() / 1000)) * 1000).toISOString(),
   };
@@ -746,13 +755,18 @@ export function resolveDiscordAvatarUrl(
 /**
  * Forward a site comment to the Discord Forum Thread
  */
+export type MentionTarget = string | { id: string; username: string };
+
+/**
+ * Forward a site comment to the Discord Forum Thread
+ */
 export async function syncCommentToDiscord(
   report: Pick<Report, 'id' | 'discordThreadId' | 'kind'>,
   comment: Pick<Comment, 'id' | 'body' | 'replyToId'>,
   author: User,
   attachmentUrls?: string[],
   cfg?: Config,
-  mentionedUserIds?: string[],
+  mentions?: MentionTarget[],
   attachmentFiles?: Array<{ name: string; buffer: ArrayBuffer; mimeType?: string }>,
 ): Promise<string | null> {
   const c = cfg ?? (await readConfig());
@@ -764,19 +778,30 @@ export async function syncCommentToDiscord(
   try {
     const avatar = resolveDiscordAvatarUrl(author as any, 256);
 
-    // Build content: prepend <@mention> pings, then body text, then attachment URLs
+    let bodyText = comment.body || '';
+
+    // Replace @username in-place with <@id> so Discord displays the ping naturally in the sentence
+    // without repeating it as a separate ping prefix.
+    const mentionedIds: string[] = [];
+    if (mentions && mentions.length > 0) {
+      for (const m of mentions) {
+        if (typeof m === 'string') {
+          mentionedIds.push(m);
+        } else if (m && m.id) {
+          mentionedIds.push(m.id);
+          if (m.username) {
+            const escaped = m.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const re = new RegExp(`@${escaped}(?![a-zA-Z0-9_])`, 'gi');
+            bodyText = bodyText.replace(re, `<@${m.id}>`);
+          }
+        }
+      }
+    }
+
+    // Only prepend IDs that were not replaced in-place inside the body text
+    const unplacedPings = mentionedIds.filter((id) => !bodyText.includes(`<@${id}>`));
     const mentionPrefix =
-      mentionedUserIds && mentionedUserIds.length > 0
-        ? mentionedUserIds.map((id) => `<@${id}>`).join(' ') + ' '
-        : '';
-    const bodyText = comment.body || '';
-    const hasNativeFiles = attachmentFiles && attachmentFiles.length > 0;
-    const attachmentLines =
-      !hasNativeFiles && attachmentUrls && attachmentUrls.length > 0
-        ? '\n' + attachmentUrls.join('\n')
-        : '';
-    const content = (mentionPrefix + bodyText + attachmentLines).trim() ||
-      (hasNativeFiles ? '' : '(attachment)');
+      unplacedPings.length > 0 ? unplacedPings.map((id) => `<@${id}>`).join(' ') + ' ' : '';
 
     // Unarchive thread if it was archived
     await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {
@@ -808,15 +833,27 @@ export async function syncCommentToDiscord(
       }
     }
 
-    // If we're replying to a Discord-origin comment and haven't mentioned the
-    // author yet via mentionedUserIds, prepend a ping so they're notified
-    let finalContent = content;
+    let finalContent = (mentionPrefix + bodyText).trim();
+
+    // If there is no messageReference (parent comment was site-only) and author wasn't already pinged, prepend ping
     if (
+      !messageReference &&
       parentUserDiscordId &&
-      !mentionedUserIds?.includes(parentUserDiscordId) &&
+      !mentionedIds.includes(parentUserDiscordId) &&
       !bodyText.includes(parentUserDiscordId)
     ) {
-      finalContent = `<@${parentUserDiscordId}> ${content}`;
+      finalContent = `<@${parentUserDiscordId}> ${finalContent}`.trim();
+    }
+
+    // Append URL links for attachments if any
+    const cleanUrls = (attachmentUrls || []).map((u) => u.trim()).filter(Boolean);
+    if (cleanUrls.length > 0) {
+      finalContent = (finalContent ? `${finalContent}\n` : '') + cleanUrls.join('\n');
+    }
+
+    const hasNativeFiles = attachmentFiles && attachmentFiles.length > 0;
+    if (!finalContent && !hasNativeFiles) {
+      finalContent = '(attachment)';
     }
 
     // Attempt to send via Webhook so message uses the user's Discord Avatar & Username
@@ -839,24 +876,55 @@ export async function syncCommentToDiscord(
 
     let res: Response | null = null;
     if (hook) {
-      res = await fetch(
-        `${DISCORD_API}/webhooks/${hook.id}/${hook.token}?thread_id=${report.discordThreadId}&wait=true`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+      if (hasNativeFiles) {
+        const form = new FormData();
+        form.append(
+          'payload_json',
+          JSON.stringify({
             username: author.username.slice(0, 80),
             avatar_url: avatar,
             content: finalContent.slice(0, 2000),
-            // message_reference gives the Discord reply bar on webhook messages too
             message_reference: messageReference,
             allowed_mentions: {
               parse: ['users'],
               replied_user: true,
             },
           }),
-        },
-      );
+        );
+        for (let i = 0; i < attachmentFiles.length; i++) {
+          const f = attachmentFiles[i];
+          form.append(
+            `files[${i}]`,
+            new Blob([f.buffer], { type: f.mimeType || 'application/octet-stream' }),
+            f.name,
+          );
+        }
+        res = await fetch(
+          `${DISCORD_API}/webhooks/${hook.id}/${hook.token}?thread_id=${report.discordThreadId}&wait=true`,
+          {
+            method: 'POST',
+            body: form,
+          },
+        );
+      } else {
+        res = await fetch(
+          `${DISCORD_API}/webhooks/${hook.id}/${hook.token}?thread_id=${report.discordThreadId}&wait=true`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              username: author.username.slice(0, 80),
+              avatar_url: avatar,
+              content: finalContent.slice(0, 2000),
+              message_reference: messageReference,
+              allowed_mentions: {
+                parse: ['users'],
+                replied_user: true,
+              },
+            }),
+          },
+        );
+      }
 
       if (!res.ok) {
         console.warn(
@@ -871,21 +939,30 @@ export async function syncCommentToDiscord(
     if (!res || !res.ok) {
       const fallbackContent = `**${author.username}** (via Desk):\n${finalContent}`.slice(0, 2000);
 
-      res = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bot ${botToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          content: fallbackContent,
-          message_reference: messageReference,
-          allowed_mentions: { parse: ['users'], replied_user: true },
-        }),
-      });
-
-      // If Discord rejected due to invalid message_reference, retry without it
-      if (!res.ok && messageReference) {
+      if (hasNativeFiles) {
+        const form = new FormData();
+        form.append(
+          'payload_json',
+          JSON.stringify({
+            content: fallbackContent,
+            message_reference: messageReference,
+            allowed_mentions: { parse: ['users'], replied_user: true },
+          }),
+        );
+        for (let i = 0; i < attachmentFiles.length; i++) {
+          const f = attachmentFiles[i];
+          form.append(
+            `files[${i}]`,
+            new Blob([f.buffer], { type: f.mimeType || 'application/octet-stream' }),
+            f.name,
+          );
+        }
+        res = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
+          method: 'POST',
+          headers: { Authorization: `Bot ${botToken}` },
+          body: form,
+        });
+      } else {
         res = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
           method: 'POST',
           headers: {
@@ -894,9 +971,49 @@ export async function syncCommentToDiscord(
           },
           body: JSON.stringify({
             content: fallbackContent,
+            message_reference: messageReference,
             allowed_mentions: { parse: ['users'], replied_user: true },
           }),
         });
+      }
+
+      // If Discord rejected due to invalid message_reference, retry without it
+      if (!res.ok && messageReference) {
+        if (hasNativeFiles) {
+          const form = new FormData();
+          form.append(
+            'payload_json',
+            JSON.stringify({
+              content: fallbackContent,
+              allowed_mentions: { parse: ['users'], replied_user: true },
+            }),
+          );
+          for (let i = 0; i < attachmentFiles.length; i++) {
+            const f = attachmentFiles[i];
+            form.append(
+              `files[${i}]`,
+              new Blob([f.buffer], { type: f.mimeType || 'application/octet-stream' }),
+              f.name,
+            );
+          }
+          res = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
+            method: 'POST',
+            headers: { Authorization: `Bot ${botToken}` },
+            body: form,
+          });
+        } else {
+          res = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bot ${botToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              content: fallbackContent,
+              allowed_mentions: { parse: ['users'], replied_user: true },
+            }),
+          });
+        }
       }
     }
 
@@ -1049,7 +1166,11 @@ export async function syncExistingReports(
         .select()
         .from(attachments)
         .where(eq(attachments.commentId, item.comment.id));
-      const attUrls = commAtts.map((a) => `${origin}/uploads/${a.filePath}`);
+      const attUrls = commAtts.map((a) =>
+        a.filePath.startsWith('http')
+          ? a.filePath
+          : `${origin}/${a.filePath.replace(/^\/+/, '')}`,
+      );
 
       const msgId = await syncCommentToDiscord(
         {
@@ -1079,7 +1200,7 @@ export async function syncExistingReports(
 
 /**
  * Forward a newly uploaded attachment to the Discord Forum Thread as a plain
- * message so Discord auto-embeds images/videos natively.
+ * message (or multipart file upload) so Discord embeds images/videos natively.
  */
 export async function syncAttachmentToDiscord(
   reportId: number,
@@ -1089,6 +1210,8 @@ export async function syncAttachmentToDiscord(
   origin: string,
   uploaderUsername?: string,
   cfg?: Config,
+  fileBuffer?: ArrayBuffer,
+  mimeType?: string,
 ): Promise<boolean> {
   const c = cfg ?? (await readConfig());
   if (c.discord_forum_sync_enabled !== '1') return false;
@@ -1103,22 +1226,45 @@ export async function syncAttachmentToDiscord(
   if (!report?.discordThreadId) return false;
 
   try {
-    const fileUrl = `${origin}/uploads/${filePath}`;
+    const fileUrl = filePath.startsWith('http')
+      ? filePath
+      : `${origin}/${filePath.replace(/^\/+/, '')}`;
     const byLine = uploaderUsername ? ` by **${uploaderUsername}**` : '';
-    // Plain message — Discord auto-embeds image and video URLs
     const content = `📎 **${fileName}**${byLine}\n${fileUrl}`;
 
-    await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bot ${botToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        content: content.slice(0, 2000),
-        allowed_mentions: { parse: [] },
-      }),
-    });
+    if (fileBuffer && fileBuffer.byteLength > 0 && fileBuffer.byteLength < 25 * 1024 * 1024) {
+      const form = new FormData();
+      form.append(
+        'payload_json',
+        JSON.stringify({
+          content: content.slice(0, 2000),
+          allowed_mentions: { parse: [] },
+        }),
+      );
+      form.append(
+        'files[0]',
+        new Blob([fileBuffer], { type: mimeType || 'application/octet-stream' }),
+        fileName,
+      );
+
+      await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bot ${botToken}` },
+        body: form,
+      });
+    } else {
+      await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bot ${botToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          content: content.slice(0, 2000),
+          allowed_mentions: { parse: [] },
+        }),
+      });
+    }
 
     return true;
   } catch (err) {

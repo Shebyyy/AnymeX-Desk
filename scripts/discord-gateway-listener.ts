@@ -122,6 +122,12 @@ function connect() {
               avatar: d.author.avatar,
             },
             message_reference: d.message_reference,
+            attachments: (d.attachments || []).map((a: any) => ({
+              url: a.url,
+              filename: a.filename,
+              content_type: a.content_type,
+              size: a.size,
+            })),
           });
         }
       }
