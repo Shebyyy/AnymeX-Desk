@@ -166,7 +166,10 @@ export const POST: APIRoute = async (ctx) => {
     arrayBuffer,
     file.type,
   );
-  const cf = (ctx.locals as any)?.runtime?.ctx;
+  // Use 'Astro.locals.cfContext' — the adapter's old 'Astro.locals.runtime.ctx'
+  // getter throws ("has been removed in Astro v6"), which used to crash every
+  // upload on this line. cfContext is what every other route in this repo uses.
+  const cf = (ctx.locals as any)?.cfContext;
   if (cf?.waitUntil) {
     cf.waitUntil(syncTask);
   } else {
