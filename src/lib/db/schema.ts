@@ -235,6 +235,10 @@ export const reports = sqliteTable(
     /** Discord Contributor Forum sync fields */
     discordThreadId: text('discord_thread_id'),
     discordStarterMessageId: text('discord_starter_message_id'),
+    /** Unix timestamp of the last cron poll for this thread. */
+    discordLastPolledAt: integer('discord_last_polled_at'),
+    /** Snowflake of the newest Discord message seen — used as `after` cursor. */
+    discordLastMessageId: text('discord_last_message_id'),
   },
   (t) => [
     /**
@@ -314,6 +318,11 @@ export const attachments = sqliteTable(
     /** Display order within the report. */
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    /**
+     * For attachments that came from Discord: the original Discord CDN URL.
+     * Served via the uploads proxy route (302 redirect to CDN).
+     */
+    discordCdnUrl: text('discord_cdn_url'),
   },
   (t) => [
     index('attachments_by_report').on(t.reportId, t.sortOrder),

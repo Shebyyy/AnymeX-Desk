@@ -51,7 +51,7 @@ const DEFAULTS: Record<SettingKey, () => string> = {
   discord_forum_suggestions_id: () => String((env as Record<string, unknown>).DISCORD_FORUM_SUGGESTIONS_ID ?? '1545003626823417906'),
   discord_forum_extensions_id: () => String((env as Record<string, unknown>).DISCORD_FORUM_EXTENSIONS_ID ?? '1545003859380805702'),
   discord_forum_sync_enabled: () => '1',
-  discord_sync_secret: () => String((env as Record<string, unknown>).DISCORD_SYNC_SECRET ?? ''),
+  discord_sync_secret: () => String((env as Record<string, unknown>).DISCORD_SYNC_SECRET ?? 'anymex_sync_8f4a9b2c6e1d3075e82f419c8a74e5bd'),
 };
 
 export type Config = Record<SettingKey, string>;

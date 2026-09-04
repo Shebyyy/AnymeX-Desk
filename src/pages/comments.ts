@@ -269,6 +269,8 @@ export const POST: APIRoute = async (ctx) => {
   dmTasks.push(log);
 
   if (report.discordThreadId) {
+    // Collect all mentioned Discord IDs so they arrive as <@id> pings in Discord
+    const allMentionedIds = body ? (await resolveMentions(body, user.id)).map((m) => m.id) : [];
     const attUrl = attachment ? `${ctx.url.origin}/uploads/${attachment.filePath}` : undefined;
     dmTasks.push(
       syncCommentToDiscord(
@@ -276,6 +278,8 @@ export const POST: APIRoute = async (ctx) => {
         comment,
         user,
         attUrl ? [attUrl] : undefined,
+        undefined,
+        allMentionedIds.length > 0 ? allMentionedIds : undefined,
       ),
     );
   }

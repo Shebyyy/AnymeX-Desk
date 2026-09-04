@@ -751,6 +751,7 @@ export async function syncCommentToDiscord(
   author: User,
   attachmentUrls?: string[],
   cfg?: Config,
+  mentionedUserIds?: string[],
 ): Promise<string | null> {
   const c = cfg ?? (await readConfig());
   if (c.discord_forum_sync_enabled !== '1') return null;
@@ -760,7 +761,19 @@ export async function syncCommentToDiscord(
 
   try {
     const avatar = resolveDiscordAvatarUrl(author as any, 256);
-    const content = comment.body || (attachmentUrls?.length ? '(Shared an attachment)' : '');
+
+    // Build content: prepend <@mention> pings, then body text, then attachment URLs
+    const mentionPrefix =
+      mentionedUserIds && mentionedUserIds.length > 0
+        ? mentionedUserIds.map((id) => `<@${id}>`).join(' ') + ' '
+        : '';
+    const bodyText = comment.body || '';
+    const attachmentLines =
+      attachmentUrls && attachmentUrls.length > 0
+        ? '\n' + attachmentUrls.join('\n')
+        : '';
+    const content = (mentionPrefix + bodyText + attachmentLines).trim() ||
+      '(attachment)';
 
     // Unarchive thread if it was archived
     await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {
@@ -770,11 +783,11 @@ export async function syncCommentToDiscord(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ archived: false }),
-    }).catch(() => { });
+    }).catch(() => {});
 
     // Resolve reply info if this is a reply to another comment
-    let messageReference: { message_id: string } | undefined;
-    let parentUserId: string | null = null;
+    let messageReference: { message_id: string; channel_id?: string } | undefined;
+    let parentUserDiscordId: string | null = null;
     if (comment.replyToId != null) {
       const [parent] = await db()
         .select({ discordMessageId: comments.discordMessageId, userId: comments.userId })
@@ -782,19 +795,25 @@ export async function syncCommentToDiscord(
         .where(eq(comments.id, comment.replyToId));
 
       if (parent?.discordMessageId) {
-        messageReference = { message_id: parent.discordMessageId };
+        messageReference = {
+          message_id: parent.discordMessageId,
+          channel_id: report.discordThreadId,
+        };
       }
       if (parent?.userId) {
-        parentUserId = parent.userId;
+        parentUserDiscordId = parent.userId;
       }
     }
 
-    // Embeds for attachments
-    const embeds: Record<string, unknown>[] = [];
-    if (attachmentUrls && attachmentUrls.length > 0) {
-      for (const url of attachmentUrls) {
-        embeds.push({ image: { url } });
-      }
+    // If we're replying to a Discord-origin comment and haven't mentioned the
+    // author yet via mentionedUserIds, prepend a ping so they're notified
+    let finalContent = content;
+    if (
+      parentUserDiscordId &&
+      !mentionedUserIds?.includes(parentUserDiscordId) &&
+      !bodyText.includes(parentUserDiscordId)
+    ) {
+      finalContent = `<@${parentUserDiscordId}> ${content}`;
     }
 
     // Attempt to send via Webhook so message uses the user's Discord Avatar & Username
@@ -811,41 +830,43 @@ export async function syncCommentToDiscord(
       } catch {}
     }
 
-    let hook = forumChannelId ? await getOrCreateChannelWebhook(forumChannelId, botToken) : null;
+    const hook = forumChannelId
+      ? await getOrCreateChannelWebhook(forumChannelId, botToken)
+      : null;
 
     let res: Response | null = null;
     if (hook) {
-      const webhookContent = parentUserId ? `<@${parentUserId}> ${content}` : content;
-      res = await fetch(`${DISCORD_API}/webhooks/${hook.id}/${hook.token}?thread_id=${report.discordThreadId}&wait=true`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: author.username.slice(0, 80),
-          avatar_url: avatar,
-          content: webhookContent,
-          embeds: embeds.length > 0 ? embeds : undefined,
-          allowed_mentions: { parse: ['users'], replied_user: true },
-        }),
-      });
+      res = await fetch(
+        `${DISCORD_API}/webhooks/${hook.id}/${hook.token}?thread_id=${report.discordThreadId}&wait=true`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: author.username.slice(0, 80),
+            avatar_url: avatar,
+            content: finalContent.slice(0, 2000),
+            // message_reference gives the Discord reply bar on webhook messages too
+            message_reference: messageReference,
+            allowed_mentions: {
+              parse: ['users'],
+              replied_user: true,
+            },
+          }),
+        },
+      );
 
       if (!res.ok) {
-        console.warn(`[ForumSync] Webhook execution failed (${res.status}):`, await res.text());
+        console.warn(
+          `[ForumSync] Webhook execution failed (${res.status}):`,
+          await res.text(),
+        );
+        res = null; // fall through to bot path
       }
     }
 
-    // Fallback to bot message with native Discord reply bar if webhook is not available or fails
+    // Fallback: post as bot with username prefix in plain content
     if (!res || !res.ok) {
-      const fallbackEmbeds: Record<string, unknown>[] = [
-        {
-          author: {
-            name: author.username,
-            icon_url: avatar,
-          },
-          description: content,
-          color: BLURPLE,
-        },
-        ...embeds,
-      ];
+      const fallbackContent = `**${author.username}** (via Desk):\n${finalContent}`.slice(0, 2000);
 
       res = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
         method: 'POST',
@@ -854,8 +875,8 @@ export async function syncCommentToDiscord(
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          content: fallbackContent,
           message_reference: messageReference,
-          embeds: fallbackEmbeds,
           allowed_mentions: { parse: ['users'], replied_user: true },
         }),
       });
@@ -869,15 +890,19 @@ export async function syncCommentToDiscord(
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            embeds: fallbackEmbeds,
+            content: fallbackContent,
             allowed_mentions: { parse: ['users'], replied_user: true },
           }),
         });
       }
     }
 
-    if (!res.ok) {
-      console.error('[ForumSync] Failed to post comment to Discord thread:', res.status, await res.text());
+    if (!res || !res.ok) {
+      console.error(
+        '[ForumSync] Failed to post comment to Discord thread:',
+        res?.status,
+        res ? await res.text() : 'no response',
+      );
       return null;
     }
 
@@ -911,6 +936,7 @@ export async function editCommentInDiscord(
   if (!botToken || !threadId || !discordMessageId) return false;
 
   try {
+    // Try to patch the message content directly (works if it was sent by our bot)
     const res = await fetch(`${DISCORD_API}/channels/${threadId}/messages/${discordMessageId}`, {
       method: 'PATCH',
       headers: {
@@ -918,7 +944,7 @@ export async function editCommentInDiscord(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        content: `**${authorUsername}** (via Tracker • edited):\n${newBody}`,
+        content: `${newBody} *(edited by ${authorUsername})*`,
       }),
     });
     return res.ok;
@@ -1049,7 +1075,8 @@ export async function syncExistingReports(
 }
 
 /**
- * Forward a newly uploaded attachment to the Discord Forum Thread
+ * Forward a newly uploaded attachment to the Discord Forum Thread as a plain
+ * message so Discord auto-embeds images/videos natively.
  */
 export async function syncAttachmentToDiscord(
   reportId: number,
@@ -1075,17 +1102,8 @@ export async function syncAttachmentToDiscord(
   try {
     const fileUrl = `${origin}/uploads/${filePath}`;
     const byLine = uploaderUsername ? ` by **${uploaderUsername}**` : '';
-
-    const embed: Record<string, unknown> = {
-      title: `📎 New Attachment: ${fileName}`,
-      description: `Uploaded${byLine} on AnymeX Desk. [View Full Attachment](${fileUrl})`,
-      url: fileUrl,
-      color: BLURPLE,
-    };
-
-    if (fileType === 'image') {
-      embed.image = { url: fileUrl };
-    }
+    // Plain message — Discord auto-embeds image and video URLs
+    const content = `📎 **${fileName}**${byLine}\n${fileUrl}`;
 
     await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
       method: 'POST',
@@ -1094,7 +1112,8 @@ export async function syncAttachmentToDiscord(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        embeds: [embed],
+        content: content.slice(0, 2000),
+        allowed_mentions: { parse: [] },
       }),
     });
 

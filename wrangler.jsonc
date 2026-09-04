@@ -15,6 +15,10 @@
 
   "kv_namespaces": [{ "binding": "SESSION", "id": "c242141443344c4a840770b2ff0e05f6" }],
 
+  "triggers": {
+    "crons": ["*/2 * * * *"]
+  },
+
   "vars": {
     "DISCORD_CLIENT_ID": "1483322438551994499",
     "DISCORD_GUILD_ID": "1539489014778826904",
@@ -24,6 +28,7 @@
     "DISCORD_FORUM_EXTENSIONS_ID": "1545003859380805702",
     "MAINTAINER_ROLE_IDS": "",
     "MIN_ACCOUNT_AGE_DAYS": "3",
-    "PUBLIC_SITE_NAME": "AnymeX Desk"
+    "PUBLIC_SITE_NAME": "AnymeX Desk",
+    "DISCORD_SYNC_SECRET": "anymex_sync_8f4a9b2c6e1d3075e82f419c8a74e5bd"
   }
 }
