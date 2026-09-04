@@ -4,9 +4,9 @@ import { desc, eq, isNotNull, or } from 'drizzle-orm';
 import { db } from '../lib/db/client';
 import { audit, labels, STAFF_LEVELS, users, type StaffLevel } from '../lib/db/schema';
 import { snowflakeCreatedAt } from '../lib/auth';
-import { LEVEL_LABELS, combine } from '../lib/levels';
+import { LEVEL_LABELS, combine, atLeast } from '../lib/levels';
 import { idList, readConfig, writeSettings } from '../lib/settings';
-import { isOwner, isResponse, logAction, requireStaff, setManualLevel } from '../lib/staff';
+import { isOwner, isResponse, levelOf, logAction, requireStaff, setManualLevel } from '../lib/staff';
 import { testWebhook } from '../lib/webhook';
 import { ensureForumTags, syncExistingReports } from '../lib/discord-forums';
 import { relativeAge } from '../lib/format';
@@ -14,141 +14,191 @@ import { relativeAge } from '../lib/format';
 export const prerender = false;
 
 /**
- * The dashboard.
+ * Staff Dashboard.
  *
- * Admin-only, and every action is re-authorised against D1 rather than the
- * session — see lib/staff.ts.
+ * Accessible to Staff (mod, admin, owner).
+ * Permissions:
+ * - Owner: Full authority (can add/remove admins & mods, manage Discord roles, and edit sensitive integration secrets/tokens).
+ * - Admin: Moderation authority (can add/remove mods, manage account-age gate, blocked users, report labels, CSV export). Cannot touch admins or environment secrets.
+ * - Moderator: View-only dashboard access (can review audit logs and staff directory; directed to /triage for report actions).
  */
-const gate = await requireStaff(Astro, 'admin');
+const gate = await requireStaff(Astro, 'mod');
 if (isResponse(gate)) return gate;
 const { user, level } = gate;
 
+const isOwnerUser = level === 'owner';
+const isAdminUser = atLeast(level, 'admin');
+const isModUser = level === 'mod';
+
+// Role-based allowed tabs
+const allowedTabs: string[] = isOwnerUser
+  ? ['staff', 'moderation', 'audit', 'settings']
+  : isAdminUser
+    ? ['staff', 'moderation', 'audit']
+    : ['audit', 'staff'];
+
 let error: string | null = null;
 let done: string | null = null;
+let postedTab: string | null = null;
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const intent = String(form.get('intent') ?? '');
+  postedTab = String(form.get('tab') ?? '');
   const origin = Astro.url.origin;
 
-  if (intent === 'roles') {
-    const mod = idList(String(form.get('mod_role_ids') ?? '')).join(',');
-    const admin = idList(String(form.get('admin_role_ids') ?? '')).join(',');
-    await writeSettings({ mod_role_ids: mod, admin_role_ids: admin }, user.id);
-    await logAction(user, 'settings.roles', null, `mod=[${mod}] admin=[${admin}]`);
-    done = 'Role mapping saved. It applies to each person the next time they sign in.';
+  if (isModUser) {
+    error = 'Moderators have view-only access to the dashboard. Please use the triage queue for report management.';
+  } else if (intent === 'roles') {
+    if (!isOwnerUser) {
+      error = 'Only the owner can configure Discord staff role mappings.';
+    } else {
+      const mod = idList(String(form.get('mod_role_ids') ?? '')).join(',');
+      const admin = idList(String(form.get('admin_role_ids') ?? '')).join(',');
+      await writeSettings({ mod_role_ids: mod, admin_role_ids: admin }, user.id);
+      await logAction(user, 'settings.roles', null, `mod=[${mod}] admin=[${admin}]`);
+      done = 'Discord role mapping saved. It applies to each person the next time they sign in.';
+    }
   } else if (intent === 'gate') {
     const days = Math.max(0, Math.min(3650, Number(form.get('min_account_age_days') ?? 30)));
     await writeSettings({ min_account_age_days: String(days) }, user.id);
     await logAction(user, 'settings.gate', null, `min_account_age_days=${days}`);
     done = `Accounts must now be ${days} days old to post or vote.`;
   } else if (intent === 'webhook') {
-    const raw = String(form.get('webhook_url') ?? '').trim();
-    const onFixed = form.get('webhook_on_fixed') === '1' ? '1' : '0';
-    const onNewReport = form.get('webhook_on_new_report') === '1' ? '1' : '0';
-    const threshold = Math.max(0, Math.min(9999, Number(form.get('webhook_vote_threshold') ?? 0)));
-    const patch: Record<string, string> = {
-      webhook_on_fixed: onFixed,
-      webhook_on_new_report: onNewReport,
-      webhook_vote_threshold: String(threshold),
-    };
-    if (raw === '__clear__') {
-      patch.webhook_url = '';
-    } else if (raw) {
-      if (!/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//.test(raw)) {
-        error = 'That is not a Discord webhook URL. Copy it from Channel → Edit Channel → Integrations → Webhooks.';
-      } else {
-        patch.webhook_url = raw;
+    if (!isOwnerUser) {
+      error = 'Only the owner can view or modify announcement webhook settings.';
+    } else {
+      const raw = String(form.get('webhook_url') ?? '').trim();
+      const onFixed = form.get('webhook_on_fixed') === '1' ? '1' : '0';
+      const onNewReport = form.get('webhook_on_new_report') === '1' ? '1' : '0';
+      const threshold = Math.max(0, Math.min(9999, Number(form.get('webhook_vote_threshold') ?? 0)));
+      const patch: Record<string, string> = {
+        webhook_on_fixed: onFixed,
+        webhook_on_new_report: onNewReport,
+        webhook_vote_threshold: String(threshold),
+      };
+      if (raw === '__clear__') {
+        patch.webhook_url = '';
+      } else if (raw) {
+        if (!/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//.test(raw)) {
+          error = 'That is not a Discord webhook URL. Copy it from Channel → Edit Channel → Integrations → Webhooks.';
+        } else {
+          patch.webhook_url = raw;
+        }
       }
-    }
-    if (!error) {
-      await writeSettings(patch, user.id);
-      await logAction(user, 'settings.webhook', null,
-        `${patch.webhook_url === '' ? 'cleared' : raw ? 'replaced' : 'unchanged'}, on_fixed=${onFixed}, on_new_report=${onNewReport}, threshold=${threshold}`);
-      done = 'Announcement settings saved.';
+      if (!error) {
+        await writeSettings(patch, user.id);
+        await logAction(user, 'settings.webhook', null,
+          `${patch.webhook_url === '' ? 'cleared' : raw ? 'replaced' : 'unchanged'}, on_fixed=${onFixed}, on_new_report=${onNewReport}, threshold=${threshold}`);
+        done = 'Announcement settings saved.';
+      }
     }
   } else if (intent === 'webhook-test') {
-    const cfg = await readConfig();
-    if (!cfg.webhook_url) {
-      error = 'Save a webhook URL first.';
+    if (!isOwnerUser) {
+      error = 'Only the owner can trigger webhook test messages.';
     } else {
-      const res = await testWebhook(cfg.webhook_url, origin, user.username);
-      done = res.ok ? 'Test message sent. Check the channel.' : null;
-      error = res.ok ? null : `Discord rejected it (${res.status}). ${res.body.slice(0, 200)}`;
+      const cfg = await readConfig();
+      if (!cfg.webhook_url) {
+        error = 'Save a webhook URL first.';
+      } else {
+        const res = await testWebhook(cfg.webhook_url, origin, user.username);
+        done = res.ok ? 'Test message sent. Check the channel.' : null;
+        error = res.ok ? null : `Discord rejected it (${res.status}). ${res.body.slice(0, 200)}`;
+      }
     }
   } else if (intent === 'dm') {
-    const dmEnabled = form.get('discord_dm_enabled') === '1' ? '1' : '0';
-    const botToken = String(form.get('discord_bot_token') ?? '').trim();
-    const patch: Record<string, string> = { discord_dm_enabled: dmEnabled };
-    if (botToken && botToken !== '••••••••') {
-      patch.discord_bot_token = botToken;
-    }
-    await writeSettings(patch, user.id);
-    await logAction(user, 'settings.dm', null, `enabled=${dmEnabled}, token=${botToken ? 'changed' : 'unchanged'}`);
-    done = 'DM notification settings saved.';
-  } else if (intent === 'telegram') {
-    const tgDmEnabled = form.get('telegram_dm_enabled') === '1' ? '1' : '0';
-    const tgToken = String(form.get('telegram_bot_token') ?? '').trim();
-    const tgUsername = String(form.get('telegram_bot_username') ?? '').trim().replace(/^@/, '');
-    const patch: Record<string, string> = {
-      telegram_dm_enabled: tgDmEnabled,
-      telegram_bot_username: tgUsername,
-    };
-    if (tgToken && tgToken !== '••••••••') {
-      patch.telegram_bot_token = tgToken;
-    }
-    await writeSettings(patch, user.id);
-    await logAction(user, 'settings.telegram', null, `username=${tgUsername}, token=${tgToken ? 'changed' : 'unchanged'}`);
-    done = 'Telegram settings saved.';
-  } else if (intent === 'contributor-forums') {
-    const syncEnabled = form.get('discord_forum_sync_enabled') === '1' ? '1' : '0';
-    const guildId = String(form.get('contributor_guild_id') ?? '').trim();
-    const bugsId = String(form.get('discord_forum_bugs_id') ?? '').trim();
-    const suggestionsId = String(form.get('discord_forum_suggestions_id') ?? '').trim();
-    const extensionsId = String(form.get('discord_forum_extensions_id') ?? '').trim();
-    const syncSecret = String(form.get('discord_sync_secret') ?? '').trim();
-
-    const patch: Record<string, string> = {
-      discord_forum_sync_enabled: syncEnabled,
-      contributor_guild_id: guildId,
-      discord_forum_bugs_id: bugsId,
-      discord_forum_suggestions_id: suggestionsId,
-      discord_forum_extensions_id: extensionsId,
-      discord_sync_secret: syncSecret,
-    };
-    await writeSettings(patch, user.id);
-    await logAction(user, 'settings.forums', null, `enabled=${syncEnabled}, guild=${guildId}`);
-    done = 'Contributor forum settings saved.';
-  } else if (intent === 'setup-forum-tags') {
-    const cfg = await readConfig();
-    if (!cfg.discord_bot_token) {
-      error = 'Please enter and save your Bot Token in the DM notifications section above first.';
+    if (!isOwnerUser) {
+      error = 'Only the owner can modify Discord DM notification settings and bot tokens.';
     } else {
-      let count = 0;
-      if (cfg.discord_forum_bugs_id) {
-        await ensureForumTags(cfg.discord_forum_bugs_id, cfg.discord_bot_token, 'bug');
-        count++;
+      const dmEnabled = form.get('discord_dm_enabled') === '1' ? '1' : '0';
+      const botToken = String(form.get('discord_bot_token') ?? '').trim();
+      const patch: Record<string, string> = { discord_dm_enabled: dmEnabled };
+      if (botToken && botToken !== '••••••••') {
+        patch.discord_bot_token = botToken;
       }
-      if (cfg.discord_forum_suggestions_id) {
-        await ensureForumTags(cfg.discord_forum_suggestions_id, cfg.discord_bot_token, 'suggestion');
-        count++;
+      await writeSettings(patch, user.id);
+      await logAction(user, 'settings.dm', null, `enabled=${dmEnabled}, token=${botToken ? 'changed' : 'unchanged'}`);
+      done = 'DM notification settings saved.';
+    }
+  } else if (intent === 'telegram') {
+    if (!isOwnerUser) {
+      error = 'Only the owner can modify Telegram credentials and settings.';
+    } else {
+      const tgDmEnabled = form.get('telegram_dm_enabled') === '1' ? '1' : '0';
+      const tgToken = String(form.get('telegram_bot_token') ?? '').trim();
+      const tgUsername = String(form.get('telegram_bot_username') ?? '').trim().replace(/^@/, '');
+      const patch: Record<string, string> = {
+        telegram_dm_enabled: tgDmEnabled,
+        telegram_bot_username: tgUsername,
+      };
+      if (tgToken && tgToken !== '••••••••') {
+        patch.telegram_bot_token = tgToken;
       }
-      if (cfg.discord_forum_extensions_id) {
-        await ensureForumTags(cfg.discord_forum_extensions_id, cfg.discord_bot_token, 'extension');
-        count++;
+      await writeSettings(patch, user.id);
+      await logAction(user, 'settings.telegram', null, `username=${tgUsername}, token=${tgToken ? 'changed' : 'unchanged'}`);
+      done = 'Telegram settings saved.';
+    }
+  } else if (intent === 'contributor-forums') {
+    if (!isOwnerUser) {
+      error = 'Only the owner can modify contributor forum synchronization settings.';
+    } else {
+      const syncEnabled = form.get('discord_forum_sync_enabled') === '1' ? '1' : '0';
+      const guildId = String(form.get('contributor_guild_id') ?? '').trim();
+      const bugsId = String(form.get('discord_forum_bugs_id') ?? '').trim();
+      const suggestionsId = String(form.get('discord_forum_suggestions_id') ?? '').trim();
+      const extensionsId = String(form.get('discord_forum_extensions_id') ?? '').trim();
+      const syncSecret = String(form.get('discord_sync_secret') ?? '').trim();
+
+      const patch: Record<string, string> = {
+        discord_forum_sync_enabled: syncEnabled,
+        contributor_guild_id: guildId,
+        discord_forum_bugs_id: bugsId,
+        discord_forum_suggestions_id: suggestionsId,
+        discord_forum_extensions_id: extensionsId,
+        discord_sync_secret: syncSecret,
+      };
+      await writeSettings(patch, user.id);
+      await logAction(user, 'settings.forums', null, `enabled=${syncEnabled}, guild=${guildId}`);
+      done = 'Contributor forum settings saved.';
+    }
+  } else if (intent === 'setup-forum-tags') {
+    if (!isOwnerUser) {
+      error = 'Only the owner can trigger forum tag generation.';
+    } else {
+      const cfg = await readConfig();
+      if (!cfg.discord_bot_token) {
+        error = 'Please enter and save your Bot Token in the Settings & Secrets tab first.';
+      } else {
+        let count = 0;
+        if (cfg.discord_forum_bugs_id) {
+          await ensureForumTags(cfg.discord_forum_bugs_id, cfg.discord_bot_token, 'bug');
+          count++;
+        }
+        if (cfg.discord_forum_suggestions_id) {
+          await ensureForumTags(cfg.discord_forum_suggestions_id, cfg.discord_bot_token, 'suggestion');
+          count++;
+        }
+        if (cfg.discord_forum_extensions_id) {
+          await ensureForumTags(cfg.discord_forum_extensions_id, cfg.discord_bot_token, 'extension');
+          count++;
+        }
+        done = `Successfully verified and auto-created forum tags across ${count} channel(s)!`;
       }
-      done = `Successfully verified and auto-created forum tags across ${count} channel(s)!`;
     }
   } else if (intent === 'sync-existing-reports') {
-    const res = await syncExistingReports(origin, 50);
-    done = `Sync completed: ${res.success} new report thread(s) created, ${res.commentsSynced} comment(s) posted to Discord!`;
+    if (!isOwnerUser) {
+      error = 'Only the owner can run forum synchronization.';
+    } else {
+      const res = await syncExistingReports(origin, 50);
+      done = `Sync completed: ${res.success} new report thread(s) created, ${res.commentsSynced} comment(s) posted to Discord!`;
+    }
   } else if (intent === 'block') {
     const target = String(form.get('discord_id') ?? '').trim();
     const blocked = form.get('blocked') === '1';
     if (!/^\d{17,20}$/.test(target)) {
       error = 'That is not a Discord user id. Enable Developer Mode in Discord, then right-click a name → Copy User ID.';
     } else if (isOwner(target)) {
-      error = 'The owner cannot be blocked from here. That is the point of the environment variable.';
+      error = 'The owner cannot be blocked from here.';
     } else if (target === user.id) {
       error = "You can't block yourself.";
     } else {
@@ -172,12 +222,16 @@ if (Astro.request.method === 'POST') {
     const newLevel = (STAFF_LEVELS as readonly string[]).includes(wanted)
       ? (wanted as StaffLevel)
       : null;
+    const targetCurrentLevel = await levelOf(target);
+
     if (!/^\d{17,20}$/.test(target)) {
       error = 'That is not a Discord user id. Enable Developer Mode in Discord, then right-click a name → Copy User ID.';
-    } else if (target === user.id && level !== 'owner') {
+    } else if (target === user.id && !isOwnerUser) {
       error = "You can't change your own level. Ask the owner, or edit OWNER_DISCORD_ID.";
-    } else if (isOwner(target) && newLevel !== 'admin') {
-      error = 'The owner cannot be demoted from here. That is the point of the environment variable.';
+    } else if (isOwner(target)) {
+      error = 'The owner cannot be demoted or modified from here.';
+    } else if (!isOwnerUser && (newLevel === 'admin' || targetCurrentLevel === 'admin' || targetCurrentLevel === 'owner')) {
+      error = 'Only the owner can add, promote, or remove administrators. Admins may only add or remove moderators.';
     } else {
       await db()
         .insert(users)
@@ -216,7 +270,12 @@ if (Astro.request.method === 'POST') {
   }
 }
 
-const [cfg, staff, blocked, log, allLabels] = await Promise.all([
+// Determine active tab
+const urlTab = Astro.url.searchParams.get('tab');
+const requestedTab = postedTab || urlTab;
+let activeTab = requestedTab && allowedTabs.includes(requestedTab) ? requestedTab : allowedTabs[0];
+
+const [cfg, rawStaff, blocked, log, allLabels] = await Promise.all([
   readConfig(),
   db()
     .select({
@@ -233,442 +292,899 @@ const [cfg, staff, blocked, log, allLabels] = await Promise.all([
     .select({ discordId: users.discordId, username: users.username })
     .from(users)
     .where(eq(users.banned, true)),
-  db().select().from(audit).orderBy(desc(audit.createdAt)).limit(15),
+  db().select().from(audit).orderBy(desc(audit.createdAt)).limit(30),
   db().select().from(labels).orderBy(labels.name),
 ]);
+
+// Sort staff: Owner first, then Admins, then Mods
+const staff = [...rawStaff].sort((a, b) => {
+  const effA = isOwner(a.discordId) ? 'owner' : combine(a.discordLevel, a.manualLevel);
+  const effB = isOwner(b.discordId) ? 'owner' : combine(b.discordLevel, b.manualLevel);
+  const rank: Record<string, number> = { owner: 3, admin: 2, mod: 1, user: 0 };
+  return (rank[effB] ?? 0) - (rank[effA] ?? 0);
+});
+
+// Secrets metadata (Only used if user is Owner)
 const webhookSet = !!cfg.webhook_url;
 const webhookTail = webhookSet ? cfg.webhook_url.slice(-6) : '';
 const dmEnabled = cfg.discord_dm_enabled === '1';
 const botTokenSet = !!cfg.discord_bot_token;
+const tgDmEnabled = cfg.telegram_dm_enabled === '1';
+const tgTokenSet = !!cfg.telegram_bot_token;
+const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
 ---
 
-<Base title="Dashboard">
+<Base title="Staff Dashboard">
   <header class="head">
-    <div>
-      <h1>Dashboard</h1>
-      <p class="sub">
-        You're signed in as <b>{user.username}</b>, {LEVEL_LABELS[level]}.
-        {level === 'owner' && ' Ownership comes from the environment, so nothing on this page can take it away from you.'}
-      </p>
+    <div class="head-content">
+      <div>
+        <div class="title-row">
+          <h1>Staff Dashboard</h1>
+          <span class={`role-badge role-${level}`}>
+            {LEVEL_LABELS[level]}
+          </span>
+        </div>
+        <p class="sub">
+          Signed in as <b>{user.username}</b>.
+          {level === 'owner' && ' You have full root authority over staff, moderation, and system secrets.'}
+          {level === 'admin' && ' You have administrator access for managing moderators, moderation policies, and reports.'}
+          {level === 'mod' && ' You have moderator access. You can view the audit log and staff roster.'}
+        </p>
+      </div>
+
+      <div class="head-quick-actions">
+        <a href="/triage" class="btn btn-ghost triage-btn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="9 11 12 14 22 4"></polyline>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+          </svg>
+          <span>Triage Queue</span>
+        </a>
+      </div>
     </div>
+
+    <!-- Tab Navigation -->
+    <nav class="tabs-nav" aria-label="Dashboard sections">
+      {allowedTabs.includes('staff') && (
+        <a
+          href={`/admin?tab=staff`}
+          class:list={['tab-btn', { active: activeTab === 'staff' }]}
+          data-tab-trigger="staff"
+          role="tab"
+          aria-selected={activeTab === 'staff'}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </svg>
+          <span>Staff &amp; Team</span>
+          <span class="tab-badge">{staff.length}</span>
+        </a>
+      )}
+
+      {allowedTabs.includes('moderation') && (
+        <a
+          href={`/admin?tab=moderation`}
+          class:list={['tab-btn', { active: activeTab === 'moderation' }]}
+          data-tab-trigger="moderation"
+          role="tab"
+          aria-selected={activeTab === 'moderation'}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
+          <span>Moderation</span>
+          {blocked.length > 0 && <span class="tab-badge warn">{blocked.length}</span>}
+        </a>
+      )}
+
+      {allowedTabs.includes('audit') && (
+        <a
+          href={`/admin?tab=audit`}
+          class:list={['tab-btn', { active: activeTab === 'audit' }]}
+          data-tab-trigger="audit"
+          role="tab"
+          aria-selected={activeTab === 'audit'}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+          </svg>
+          <span>Audit Log</span>
+        </a>
+      )}
+
+      {allowedTabs.includes('settings') && (
+        <a
+          href={`/admin?tab=settings`}
+          class:list={['tab-btn', 'tab-owner-only', { active: activeTab === 'settings' }]}
+          data-tab-trigger="settings"
+          role="tab"
+          aria-selected={activeTab === 'settings'}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+          <span>Settings &amp; Secrets</span>
+          <span class="owner-pill">Owner</span>
+        </a>
+      )}
+    </nav>
   </header>
 
   {done && <p class="flash" role="status">{done}</p>}
   {error && <p class="error" role="alert">{error}</p>}
 
-  <section class="panel">
-    <h2>Staff</h2>
-    <p class="panel-sub">
-      Moderators change a report's status. Admins can also edit this page and block accounts.
-    </p>
-
-    {
-      staff.length === 0 ? (
-        <p class="empty-line">No staff yet. You are the only one who can act.</p>
-      ) : (
-        <ul class="staff">
-          {staff.map((s) => {
-            const eff = isOwner(s.discordId) ? 'owner' : combine(s.discordLevel, s.manualLevel);
-            return (
-              <li>
-                <div class="staff-who">
-                  <span class="staff-name">{s.username}</span>
-                  <span class="staff-id num">{s.discordId}</span>
-                </div>
-                <div class="staff-meta">
-                  <span class="tag">{LEVEL_LABELS[eff]}</span>
-                  <span class="from">
-                    {s.discordLevel && s.manualLevel
-                      ? 'Discord role and manual grant'
-                      : s.discordLevel
-                        ? 'From Discord role'
-                        : 'Granted here'}
-                  </span>
-                </div>
-                <form method="POST" class="staff-actions">
-                  <input type="hidden" name="intent" value="staff-set" />
-                  <input type="hidden" name="discord_id" value={s.discordId} />
-                  {eff !== 'admin' && eff !== 'owner' && (
-                    <button class="btn btn-ghost" type="submit" name="level" value="admin">Make admin</button>
-                  )}
-                  {eff !== 'mod' && eff !== 'owner' && (
-                    <button class="btn btn-ghost" type="submit" name="level" value="mod">Make moderator</button>
-                  )}
-                  {s.manualLevel && (
-                    <button class="btn btn-ghost danger" type="submit" name="level" value="">Remove grant</button>
-                  )}
-                </form>
-              </li>
-            );
-          })}
-        </ul>
-      )
-    }
-
-    <form method="POST" class="add">
-      <input type="hidden" name="intent" value="staff-set" />
-      <div class="field">
-        <label class="label" for="discord_id">Add by Discord user id</label>
-        <input class="input" id="discord_id" name="discord_id" inputmode="numeric" placeholder="e.g. 216154654256398347" autocomplete="off" />
-        <p class="field-hint">Developer Mode in Discord → right-click a name → Copy User ID.</p>
+  {isModUser && (
+    <div class="info-callout">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="16" x2="12" y2="12" />
+        <line x1="12" y1="8" x2="12.01" y2="8" />
+      </svg>
+      <div>
+        <b>Moderator View:</b> You have access to review the staff directory and audit log. To triage reports, change statuses, or manage duplicate submissions, visit the <a href="/triage"><b>Triage Queue</b></a>.
       </div>
-      <div class="add-actions">
-        <button class="btn" type="submit" name="level" value="mod">Add as moderator</button>
-        <button class="btn" type="submit" name="level" value="admin">Add as admin</button>
-      </div>
-    </form>
-  </section>
-
-  <section class="panel">
-    <h2>Discord roles that grant staff</h2>
-    <p class="panel-sub">
-      Role <b>ids</b>, comma-separated. Names can't be resolved without a bot.
-    </p>
-    <form method="POST" class="rows-2">
-      <input type="hidden" name="intent" value="roles" />
-      <div class="field">
-        <label class="label" for="mod_role_ids">Moderator roles</label>
-        <input class="input num" id="mod_role_ids" name="mod_role_ids" value={cfg.mod_role_ids} autocomplete="off" />
-      </div>
-      <div class="field">
-        <label class="label" for="admin_role_ids">Admin roles</label>
-        <input class="input num" id="admin_role_ids" name="admin_role_ids" value={cfg.admin_role_ids} autocomplete="off" />
-      </div>
-      <div class="wide">
-        <button class="btn btn-primary" type="submit">Save roles</button>
-      </div>
-    </form>
-  </section>
-
-  <section class="panel">
-    <h2>Discord announcements</h2>
-    <p class="panel-sub">
-      A channel webhook for announcing fixes and new reports — and for logging every
-      vote, comment, reply, filed report, and staff action. Channel → Edit Channel →
-      Integrations → Webhooks → New Webhook → Copy URL.
-    </p>
-    <form method="POST" class="rows-2">
-      <input type="hidden" name="intent" value="webhook" />
-      <div class="field wide">
-        <label class="label" for="webhook_url">Webhook URL</label>
-        <input
-          class="input"
-          id="webhook_url"
-          name="webhook_url"
-          type="password"
-          placeholder={webhookSet ? `saved, ending …${webhookTail}. Paste a new one to replace` : 'https://discord.com/api/webhooks/…'}
-          autocomplete="off"
-        />
-        <p class="field-hint">
-          {webhookSet ? 'Leave empty to keep it, or type __clear__ to remove it.' : 'Nothing is announced until this is set.'}
-        </p>
-      </div>
-      <div class="field wide">
-        <label class="check">
-          <input type="checkbox" name="webhook_on_fixed" value="1" checked={cfg.webhook_on_fixed === '1'} />
-          <span>Announce every fix / implementation</span>
-        </label>
-      </div>
-      <div class="field wide">
-        <label class="check">
-          <input type="checkbox" name="webhook_on_new_report" value="1" checked={cfg.webhook_on_new_report === '1'} />
-          <span>Announce new reports</span>
-        </label>
-      </div>
-      <div class="field">
-        <label class="label" for="webhook_vote_threshold">Announce at this many votes</label>
-        <input class="input num" id="webhook_vote_threshold" name="webhook_vote_threshold" inputmode="numeric" value={cfg.webhook_vote_threshold} />
-        <p class="field-hint">0 turns demand alerts off.</p>
-      </div>
-      <div class="wide actions">
-        <button class="btn btn-primary" type="submit">Save announcements</button>
-      </div>
-    </form>
-    <form method="POST" class="test">
-      <input type="hidden" name="intent" value="webhook-test" />
-      <button class="btn" type="submit" disabled={!webhookSet}>Send a test message</button>
-    </form>
-  </section>
-
-  <section class="panel">
-    <h2>DM notifications</h2>
-    <p class="panel-sub">
-      Send a DM to reporters when their report's status changes. Requires a bot token that shares a guild with the user.
-    </p>
-    <form method="POST" class="rows-2">
-      <input type="hidden" name="intent" value="dm" />
-      <div class="field wide">
-        <label class="check">
-          <input type="checkbox" name="discord_dm_enabled" value="1" checked={dmEnabled} />
-          <span>Enable DM notifications</span>
-        </label>
-      </div>
-      <div class="field wide">
-        <label class="label" for="discord_bot_token">Bot token</label>
-        <input
-          class="input"
-          id="discord_bot_token"
-          name="discord_bot_token"
-          type="password"
-          placeholder={botTokenSet ? 'saved. Paste a new one to replace.' : 'Paste the bot token'}
-          autocomplete="off"
-        />
-        <p class="field-hint">The bot must share a guild with the user to send DMs.</p>
-      </div>
-      <div class="wide actions">
-        <button class="btn btn-primary" type="submit">Save DM settings</button>
-      </div>
-    </form>
-  </section>
-
-  <section class="panel">
-    <h2>Telegram Integration</h2>
-    <p class="panel-sub">
-      Allows users to log in with Telegram and receive DM updates for report status changes, replies, and mentions.
-    </p>
-    <form method="POST" class="rows-2">
-      <input type="hidden" name="intent" value="telegram" />
-      <div class="field wide">
-        <label class="check">
-          <input type="checkbox" name="telegram_dm_enabled" value="1" checked={cfg.telegram_dm_enabled === '1'} />
-          <span>Enable Telegram DM notifications</span>
-        </label>
-      </div>
-      <div class="field">
-        <label class="label" for="telegram_bot_username">Telegram Bot Username (without @)</label>
-        <input
-          class="input"
-          id="telegram_bot_username"
-          name="telegram_bot_username"
-          value={cfg.telegram_bot_username}
-          placeholder="e.g. AnymeXDeskBot"
-        />
-        <p class="field-hint">Used for the official Telegram Login Widget on the site.</p>
-      </div>
-      <div class="field">
-        <label class="label" for="telegram_bot_token">Telegram Bot Token</label>
-        <input
-          class="input"
-          id="telegram_bot_token"
-          name="telegram_bot_token"
-          type="password"
-          placeholder={cfg.telegram_bot_token ? 'saved. Paste a new one to replace.' : 'Token from @BotFather'}
-          autocomplete="off"
-        />
-        <p class="field-hint">Issued by @BotFather when creating your bot.</p>
-      </div>
-      <div class="wide actions">
-        <button class="btn btn-primary" type="submit">Save Telegram settings</button>
-      </div>
-    </form>
-  </section>
-
-  <section class="panel">
-    <h2>Contributor Discord Server & Forums</h2>
-    <p class="panel-sub">
-      Automatically creates threads in your Contributor Discord Forum channels when bugs, suggestions, or extension issues are filed. Syncs comments, edits, deletions, and forum tags bidirectionally.
-    </p>
-    <form method="POST" class="rows-2">
-      <input type="hidden" name="intent" value="contributor-forums" />
-      <div class="field wide">
-        <label class="check">
-          <input type="checkbox" name="discord_forum_sync_enabled" value="1" checked={cfg.discord_forum_sync_enabled === '1'} />
-          <span>Enable Contributor Forum synchronization</span>
-        </label>
-      </div>
-      <div class="field">
-        <label class="label" for="contributor_guild_id">Contributor Server (Guild) ID</label>
-        <input class="input" id="contributor_guild_id" name="contributor_guild_id" value={cfg.contributor_guild_id} placeholder="1545003117018357850" />
-      </div>
-      <div class="field">
-        <label class="label" for="discord_sync_secret">Inbound Sync Secret</label>
-        <input class="input" id="discord_sync_secret" name="discord_sync_secret" type="password" value={cfg.discord_sync_secret} placeholder="Optional shared token for inbound webhook" />
-      </div>
-      <div class="field">
-        <label class="label" for="discord_forum_bugs_id">Bugs Forum Channel ID</label>
-        <input class="input" id="discord_forum_bugs_id" name="discord_forum_bugs_id" value={cfg.discord_forum_bugs_id} placeholder="1545003724961751096" />
-      </div>
-      <div class="field">
-        <label class="label" for="discord_forum_suggestions_id">Suggestions Forum Channel ID</label>
-        <input class="input" id="discord_forum_suggestions_id" name="discord_forum_suggestions_id" value={cfg.discord_forum_suggestions_id} placeholder="1545003626823417906" />
-      </div>
-      <div class="field wide">
-        <label class="label" for="discord_forum_extensions_id">Extension Issues Forum Channel ID</label>
-        <input class="input" id="discord_forum_extensions_id" name="discord_forum_extensions_id" value={cfg.discord_forum_extensions_id} placeholder="1545003859380805702" />
-      </div>
-      <div class="wide actions">
-        <button class="btn btn-primary" type="submit">Save Forum Settings</button>
-      </div>
-    </form>
-    <form method="POST" class="test" style="margin-top: 16px;">
-      <input type="hidden" name="intent" value="setup-forum-tags" />
-      <button class="btn btn-action-with-icon" type="submit">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-        </svg>
-        <span>Auto-Generate / Verify Forum Tags on Discord</span>
-      </button>
-      <p class="field-hint" style="margin-top: 6px;">Creates Open, In Progress, Fixed, Duplicate, Won't Fix, and Platform/Source tags in all 3 channels automatically.</p>
-    </form>
-    <form method="POST" class="test" style="margin-top: 16px;">
-      <input type="hidden" name="intent" value="sync-existing-reports" />
-      <button class="btn btn-action-with-icon" type="submit">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
-        </svg>
-        <span>Sync All Existing Reports to Discord Forums</span>
-      </button>
-      <p class="field-hint" style="margin-top: 6px;">Creates Discord threads for any existing bugs, suggestions, or extension issues that don't have one yet, and syncs their comments.</p>
-    </form>
-  </section>
-
-  <section class="panel">
-    <h2>Who can post</h2>
-    <form method="POST" class="rows-2">
-      <input type="hidden" name="intent" value="gate" />
-      <div class="field">
-        <label class="label" for="min_account_age_days">Minimum Discord account age (days)</label>
-        <input class="input num" id="min_account_age_days" name="min_account_age_days" inputmode="numeric" value={cfg.min_account_age_days} />
-        <p class="field-hint">
-          Any Discord account can participate. This is the throwaway-account brake.
-        </p>
-      </div>
-      <div class="wide">
-        <button class="btn btn-primary" type="submit">Save</button>
-      </div>
-    </form>
-  </section>
-
-  <section class="panel">
-    <h2>Blocked accounts</h2>
-    <p class="panel-sub">
-      A block is checked on every post and every vote. It leaves what they already filed in place.
-    </p>
-    {
-      blocked.length === 0 ? (
-        <p class="empty-line">Nobody is blocked.</p>
-      ) : (
-        <ul class="staff">
-          {blocked.map((b) => (
-            <li>
-              <div class="staff-who">
-                <span class="staff-name">{b.username}</span>
-                <span class="staff-id num">{b.discordId}</span>
-              </div>
-              <div class="staff-meta">
-                <span class="tag">Blocked</span>
-              </div>
-              <form method="POST" class="staff-actions">
-                <input type="hidden" name="intent" value="block" />
-                <input type="hidden" name="discord_id" value={b.discordId} />
-                <button class="btn btn-ghost" type="submit" name="blocked" value="0">Unblock</button>
-              </form>
-            </li>
-          ))}
-        </ul>
-      )
-    }
-    <form method="POST" class="add">
-      <input type="hidden" name="intent" value="block" />
-      <input type="hidden" name="blocked" value="1" />
-      <div class="field">
-        <label class="label" for="block_discord_id">Block by Discord user id</label>
-        <input class="input" id="block_discord_id" name="discord_id" inputmode="numeric" placeholder="e.g. 216154654256398347" autocomplete="off" />
-        <p class="field-hint">Developer Mode in Discord → right-click a name → Copy User ID.</p>
-      </div>
-      <div class="add-actions">
-        <button class="btn danger" type="submit">Block</button>
-      </div>
-    </form>
-  </section>
-
-  <section class="panel">
-    <h2>Report labels</h2>
-    <p class="panel-lede">Tags used by moderators on reports (e.g. regression, upstream, needs-repro).</p>
-    {
-      allLabels.length === 0 ? (
-        <p class="empty-line">No labels created yet.</p>
-      ) : (
-        <ul class="staff-list">
-          {allLabels.map((l) => (
-            <li class="staff-row">
-              <div class="staff-name">
-                <span class="label-chip" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color};`}>
-                  {l.name}
-                </span>
-                <span class="staff-tag num">{l.color}</span>
-              </div>
-              <form method="POST" class="staff-actions">
-                <input type="hidden" name="intent" value="label_delete" />
-                <input type="hidden" name="label_id" value={l.id} />
-                <button class="btn btn-ghost" type="submit">Delete</button>
-              </form>
-            </li>
-          ))}
-        </ul>
-      )
-    }
-    <form method="POST" class="add">
-      <input type="hidden" name="intent" value="label_create" />
-      <div class="field-row">
-        <div class="field">
-          <label class="label" for="label_name">New label name</label>
-          <input class="input" id="label_name" name="name" placeholder="e.g. regression" maxlength="32" required />
-        </div>
-        <div class="field">
-          <label class="label" for="label_color">Color (hex)</label>
-          <input class="input" id="label_color" name="color" type="color" value="#6b7280" />
-        </div>
-      </div>
-      <div class="add-actions">
-        <button class="btn" type="submit">Create label</button>
-      </div>
-    </form>
-  </section>
-
-  <section class="panel">
-    <h2>Data export &amp; backups</h2>
-    <p class="panel-lede">Download a full snapshot of all reports, statuses, and metrics as CSV.</p>
-    <div style="margin-block-start: var(--space-3);">
-      <a href="/admin/export.csv" class="btn" download>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Download reports CSV
-      </a>
     </div>
-  </section>
+  )}
 
-  <section class="panel">
-    <h2>Recent staff actions</h2>
-    {
-      log.length === 0 ? (
-        <p class="empty-line">Nothing yet.</p>
+  <!-- TAB 1: STAFF & TEAM -->
+  <div class:list={['tab-pane', { active: activeTab === 'staff' }]} data-tab-pane="staff" hidden={activeTab !== 'staff'}>
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Staff Members</h2>
+          <p class="panel-sub">
+            {isOwnerUser
+              ? 'As Owner, you can appoint or remove Administrators and Moderators.'
+              : isAdminUser
+                ? 'As Admin, you can appoint and manage Moderators. Only the Owner can assign Administrators.'
+                : 'Directory of active staff members and their permissions.'}
+          </p>
+        </div>
+      </div>
+
+      {
+        staff.length === 0 ? (
+          <p class="empty-line">No staff configured yet.</p>
+        ) : (
+          <ul class="staff-grid">
+            {staff.map((s) => {
+              const eff = isOwner(s.discordId) ? 'owner' : combine(s.discordLevel, s.manualLevel);
+              const isTargetOwner = isOwner(s.discordId);
+              const isTargetAdmin = eff === 'admin';
+              const isTargetMod = eff === 'mod';
+
+              return (
+                <li class="staff-card">
+                  <div class="staff-card-header">
+                    <div class="staff-who">
+                      <span class="staff-name">{s.username}</span>
+                      <span class="staff-id num">{s.discordId}</span>
+                    </div>
+                    <span class={`role-badge role-${eff}`}>{LEVEL_LABELS[eff]}</span>
+                  </div>
+
+                  <div class="staff-meta">
+                    <span class="from">
+                      {s.discordLevel && s.manualLevel
+                        ? 'Discord role & manual grant'
+                        : s.discordLevel
+                          ? 'From Discord role'
+                          : 'Manual grant'}
+                    </span>
+                    {s.lastLogin && (
+                      <span class="last-seen">Active {relativeAge(s.lastLogin)} ago</span>
+                    )}
+                  </div>
+
+                  {!isModUser && !isTargetOwner && (
+                    <form method="POST" class="staff-actions">
+                      <input type="hidden" name="intent" value="staff-set" />
+                      <input type="hidden" name="tab" value="staff" />
+                      <input type="hidden" name="discord_id" value={s.discordId} />
+
+                      {/* OWNER ACTIONS: Can promote to admin, mod, or remove any grant */}
+                      {isOwnerUser && (
+                        <>
+                          {!isTargetAdmin && (
+                            <button class="btn btn-ghost btn-sm" type="submit" name="level" value="admin">
+                              Make admin
+                            </button>
+                          )}
+                          {!isTargetMod && (
+                            <button class="btn btn-ghost btn-sm" type="submit" name="level" value="mod">
+                              Make moderator
+                            </button>
+                          )}
+                          {s.manualLevel && (
+                            <button class="btn btn-ghost btn-sm danger" type="submit" name="level" value="">
+                              Remove grant
+                            </button>
+                          )}
+                        </>
+                      )}
+
+                      {/* ADMIN ACTIONS: Can ONLY manage moderators. CANNOT touch admins */}
+                      {!isOwnerUser && isAdminUser && (
+                        <>
+                          {!isTargetAdmin && !isTargetMod && (
+                            <button class="btn btn-ghost btn-sm" type="submit" name="level" value="mod">
+                              Make moderator
+                            </button>
+                          )}
+                          {isTargetMod && s.manualLevel === 'mod' && (
+                            <button class="btn btn-ghost btn-sm danger" type="submit" name="level" value="">
+                              Remove moderator
+                            </button>
+                          )}
+                          {isTargetAdmin && (
+                            <span class="locked-badge" title="Only the Owner can modify Administrators">
+                              Admin (Protected)
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </form>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )
+      }
+
+      {!isModUser && (
+        <div class="add-box">
+          <h3>Add Staff Member</h3>
+          <form method="POST" class="add">
+            <input type="hidden" name="intent" value="staff-set" />
+            <input type="hidden" name="tab" value="staff" />
+            <div class="field">
+              <label class="label" for="discord_id">Discord User ID</label>
+              <input
+                class="input"
+                id="discord_id"
+                name="discord_id"
+                inputmode="numeric"
+                placeholder="e.g. 216154654256398347"
+                autocomplete="off"
+                required
+              />
+              <p class="field-hint">Enable Developer Mode in Discord → right-click user → Copy User ID.</p>
+            </div>
+            <div class="add-actions">
+              <button class="btn btn-primary" type="submit" name="level" value="mod">
+                Add as Moderator
+              </button>
+              {isOwnerUser ? (
+                <button class="btn btn-accent" type="submit" name="level" value="admin">
+                  Add as Administrator
+                </button>
+              ) : (
+                <span class="admin-notice-hint">
+                  ℹ️ Only the Owner can appoint Administrators.
+                </span>
+              )}
+            </div>
+          </form>
+        </div>
+      )}
+    </section>
+
+    <!-- Role Mapping Panel -->
+    <section class="panel">
+      <h2>Discord Staff Role IDs</h2>
+      <p class="panel-sub">
+        Comma-separated Discord role IDs that automatically grant Moderator or Administrator status upon sign-in.
+      </p>
+
+      {isOwnerUser ? (
+        <form method="POST" class="rows-2">
+          <input type="hidden" name="intent" value="roles" />
+          <input type="hidden" name="tab" value="staff" />
+          <div class="field">
+            <label class="label" for="mod_role_ids">Moderator Role IDs</label>
+            <input class="input num" id="mod_role_ids" name="mod_role_ids" value={cfg.mod_role_ids} autocomplete="off" placeholder="e.g. 10293847561,192837465" />
+          </div>
+          <div class="field">
+            <label class="label" for="admin_role_ids">Administrator Role IDs</label>
+            <input class="input num" id="admin_role_ids" name="admin_role_ids" value={cfg.admin_role_ids} autocomplete="off" placeholder="e.g. 9876543210" />
+          </div>
+          <div class="wide">
+            <button class="btn btn-primary" type="submit">Save Role Mapping</button>
+          </div>
+        </form>
       ) : (
-        <ol class="log">
-          {log.map((e) => (
-            <li>
-              <span class="log-who">{e.actorName}</span>
-              <span class="log-what">{e.action}</span>
-              {e.target && <span class="log-target num">{e.target}</span>}
-              {e.detail && <span class="log-detail">{e.detail}</span>}
-              <span class="log-when">{relativeAge(e.createdAt)} ago</span>
-            </li>
-          ))}
-        </ol>
-      )
-    }
-  </section>
+        <div class="read-only-card">
+          <div class="read-only-row">
+            <span class="label-text">Moderator Roles:</span>
+            <code>{cfg.mod_role_ids || 'None configured'}</code>
+          </div>
+          <div class="read-only-row">
+            <span class="label-text">Admin Roles:</span>
+            <code>{cfg.admin_role_ids || 'None configured'}</code>
+          </div>
+          <p class="field-hint" style="margin-block-start: var(--space-2);">
+            🔒 Discord staff role mapping can only be configured by the Owner.
+          </p>
+        </div>
+      )}
+    </section>
+  </div>
+
+  <!-- TAB 2: MODERATION (Admin & Owner) -->
+  {isAdminUser && (
+    <div class:list={['tab-pane', { active: activeTab === 'moderation' }]} data-tab-pane="moderation" hidden={activeTab !== 'moderation'}>
+      <section class="panel">
+        <h2>Account-Age Security Gate</h2>
+        <p class="panel-sub">
+          Prevent throwaway spam accounts from creating reports or voting on existing issues.
+        </p>
+        <form method="POST" class="rows-2">
+          <input type="hidden" name="intent" value="gate" />
+          <input type="hidden" name="tab" value="moderation" />
+          <div class="field">
+            <label class="label" for="min_account_age_days">Minimum Discord Account Age (days)</label>
+            <input class="input num" id="min_account_age_days" name="min_account_age_days" inputmode="numeric" value={cfg.min_account_age_days} />
+            <p class="field-hint">Accounts younger than this threshold will be blocked from posting or voting.</p>
+          </div>
+          <div class="wide">
+            <button class="btn btn-primary" type="submit">Save Gate</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Blocked Accounts</h2>
+        <p class="panel-sub">
+          Blocked accounts cannot post new reports, comment, or vote. Existing contributions remain intact.
+        </p>
+        {
+          blocked.length === 0 ? (
+            <p class="empty-line">No accounts are currently blocked.</p>
+          ) : (
+            <ul class="staff-grid" style="margin-block-end: var(--space-4);">
+              {blocked.map((b) => (
+                <li class="staff-card">
+                  <div class="staff-card-header">
+                    <div class="staff-who">
+                      <span class="staff-name">{b.username}</span>
+                      <span class="staff-id num">{b.discordId}</span>
+                    </div>
+                    <span class="role-badge" style="background: var(--dead-fill); color: var(--dead); border-color: var(--dead);">Blocked</span>
+                  </div>
+                  <form method="POST" class="staff-actions">
+                    <input type="hidden" name="intent" value="block" />
+                    <input type="hidden" name="tab" value="moderation" />
+                    <input type="hidden" name="discord_id" value={b.discordId} />
+                    <button class="btn btn-ghost btn-sm" type="submit" name="blocked" value="0">Unblock Account</button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+        <form method="POST" class="add">
+          <input type="hidden" name="intent" value="block" />
+          <input type="hidden" name="tab" value="moderation" />
+          <input type="hidden" name="blocked" value="1" />
+          <div class="field">
+            <label class="label" for="block_discord_id">Block Discord User ID</label>
+            <input class="input" id="block_discord_id" name="discord_id" inputmode="numeric" placeholder="e.g. 216154654256398347" autocomplete="off" required />
+            <p class="field-hint">Developer Mode in Discord → right-click user → Copy User ID.</p>
+          </div>
+          <div class="add-actions">
+            <button class="btn danger" type="submit">Block Account</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Report Labels</h2>
+        <p class="panel-sub">Taxonomy labels applied by moderators to categorize issues (e.g. regression, upstream, needs-repro).</p>
+        {
+          allLabels.length === 0 ? (
+            <p class="empty-line">No custom labels created yet.</p>
+          ) : (
+            <ul class="staff-grid" style="margin-block-end: var(--space-4);">
+              {allLabels.map((l) => (
+                <li class="staff-card" style="align-items: center;">
+                  <div style="display: flex; align-items: center; gap: var(--space-3);">
+                    <span class="label-chip" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color}; font-weight: 600;`}>
+                      {l.name}
+                    </span>
+                    <span class="staff-id num">{l.color}</span>
+                  </div>
+                  <form method="POST" class="staff-actions">
+                    <input type="hidden" name="intent" value="label_delete" />
+                    <input type="hidden" name="tab" value="moderation" />
+                    <input type="hidden" name="label_id" value={l.id} />
+                    <button class="btn btn-ghost btn-sm danger" type="submit">Delete</button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+        <form method="POST" class="add">
+          <input type="hidden" name="intent" value="label_create" />
+          <input type="hidden" name="tab" value="moderation" />
+          <div class="field-row">
+            <div class="field">
+              <label class="label" for="label_name">Label Name</label>
+              <input class="input" id="label_name" name="name" placeholder="e.g. regression" maxlength="32" required />
+            </div>
+            <div class="field">
+              <label class="label" for="label_color">Accent Color</label>
+              <input class="input" id="label_color" name="color" type="color" value="#6b7280" />
+            </div>
+          </div>
+          <div class="add-actions">
+            <button class="btn btn-primary" type="submit">Create Label</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Data Export &amp; Snapshot</h2>
+        <p class="panel-sub">Download a full snapshot of all submitted bugs, suggestions, votes, and metadata in CSV format.</p>
+        <div style="margin-block-start: var(--space-3);">
+          <a href="/admin/export.csv" class="btn" download>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span>Download Reports CSV</span>
+          </a>
+        </div>
+      </section>
+    </div>
+  )}
+
+  <!-- TAB 3: AUDIT LOG -->
+  <div class:list={['tab-pane', { active: activeTab === 'audit' }]} data-tab-pane="audit" hidden={activeTab !== 'audit'}>
+    <section class="panel">
+      <h2>Recent Staff Actions</h2>
+      <p class="panel-sub">Chronological audit log tracking administrative changes, status updates, and moderation actions.</p>
+      {
+        log.length === 0 ? (
+          <p class="empty-line">No audit log entries recorded yet.</p>
+        ) : (
+          <ol class="audit-log">
+            {log.map((e) => (
+              <li class="audit-item">
+                <div class="audit-main">
+                  <span class="log-who">{e.actorName}</span>
+                  <span class="log-what">{e.action}</span>
+                  {e.target && <span class="log-target num">target: {e.target}</span>}
+                </div>
+                {e.detail && <span class="log-detail">{e.detail}</span>}
+                <span class="log-when">{relativeAge(e.createdAt)} ago</span>
+              </li>
+            ))}
+          </ol>
+        )
+      }
+    </section>
+  </div>
+
+  <!-- TAB 4: SETTINGS & SECRETS (STRICTLY OWNER ONLY) -->
+  {isOwnerUser && (
+    <div class:list={['tab-pane', { active: activeTab === 'settings' }]} data-tab-pane="settings" hidden={activeTab !== 'settings'}>
+      <div class="owner-secure-banner">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
+        <div>
+          <b>Owner Restricted Area:</b> The sensitive credentials, bot tokens, webhooks, and synchronization secrets in this section are <b>strictly hidden and protected</b> from Administrators and Moderators. Only your Owner account has access.
+        </div>
+      </div>
+
+      <!-- Discord Announcements Webhook -->
+      <section class="panel">
+        <h2>Discord Announcements Webhook</h2>
+        <p class="panel-sub">
+          A channel webhook for announcing new reports, fixes, high-vote threshold alerts, and audit logging.
+        </p>
+        <form method="POST" class="rows-2">
+          <input type="hidden" name="intent" value="webhook" />
+          <input type="hidden" name="tab" value="settings" />
+          <div class="field wide">
+            <label class="label" for="webhook_url">Webhook URL</label>
+            <input
+              class="input"
+              id="webhook_url"
+              name="webhook_url"
+              type="password"
+              placeholder={webhookSet ? `Saved, ending in …${webhookTail}. Type a new URL to replace` : 'https://discord.com/api/webhooks/…'}
+              autocomplete="off"
+            />
+            <p class="field-hint">
+              {webhookSet ? 'Leave blank to keep current URL, or type __clear__ to remove it.' : 'No announcements will be posted until set.'}
+            </p>
+          </div>
+          <div class="field wide">
+            <label class="check">
+              <input type="checkbox" name="webhook_on_fixed" value="1" checked={cfg.webhook_on_fixed === '1'} />
+              <span>Announce every fix / implementation resolution</span>
+            </label>
+          </div>
+          <div class="field wide">
+            <label class="check">
+              <input type="checkbox" name="webhook_on_new_report" value="1" checked={cfg.webhook_on_new_report === '1'} />
+              <span>Announce newly filed reports</span>
+            </label>
+          </div>
+          <div class="field">
+            <label class="label" for="webhook_vote_threshold">Announce when report hits votes</label>
+            <input class="input num" id="webhook_vote_threshold" name="webhook_vote_threshold" inputmode="numeric" value={cfg.webhook_vote_threshold} />
+            <p class="field-hint">Set to 0 to disable vote threshold alerts.</p>
+          </div>
+          <div class="wide actions">
+            <button class="btn btn-primary" type="submit">Save Announcement Settings</button>
+          </div>
+        </form>
+        <form method="POST" class="test">
+          <input type="hidden" name="intent" value="webhook-test" />
+          <input type="hidden" name="tab" value="settings" />
+          <button class="btn btn-ghost" type="submit" disabled={!webhookSet}>
+            Send Test Webhook Message
+          </button>
+        </form>
+      </section>
+
+      <!-- Discord DM Bot Notifications -->
+      <section class="panel">
+        <h2>Discord DM Bot Notifications</h2>
+        <p class="panel-sub">
+          Dispatches automated Discord Direct Messages to users when their report status updates or receives official replies.
+        </p>
+        <form method="POST" class="rows-2">
+          <input type="hidden" name="intent" value="dm" />
+          <input type="hidden" name="tab" value="settings" />
+          <div class="field wide">
+            <label class="check">
+              <input type="checkbox" name="discord_dm_enabled" value="1" checked={dmEnabled} />
+              <span>Enable Discord DM Notifications</span>
+            </label>
+          </div>
+          <div class="field wide">
+            <label class="label" for="discord_bot_token">Discord Bot Token</label>
+            <input
+              class="input"
+              id="discord_bot_token"
+              name="discord_bot_token"
+              type="password"
+              placeholder={botTokenSet ? '••••••••  (Saved. Paste a new token to replace)' : 'Paste Discord Bot Token'}
+              autocomplete="off"
+            />
+            <p class="field-hint">The bot must share a Discord server (guild) with the target user to deliver DMs.</p>
+          </div>
+          <div class="wide actions">
+            <button class="btn btn-primary" type="submit">Save DM Settings</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Telegram Integration -->
+      <section class="panel">
+        <h2>Telegram Integration &amp; Alerts</h2>
+        <p class="panel-sub">
+          Enables Telegram Login Widget authentication and sends instant status alerts directly to reporters on Telegram.
+        </p>
+        <form method="POST" class="rows-2">
+          <input type="hidden" name="intent" value="telegram" />
+          <input type="hidden" name="tab" value="settings" />
+          <div class="field wide">
+            <label class="check">
+              <input type="checkbox" name="telegram_dm_enabled" value="1" checked={tgDmEnabled} />
+              <span>Enable Telegram DM Notifications</span>
+            </label>
+          </div>
+          <div class="field">
+            <label class="label" for="telegram_bot_username">Telegram Bot Username (without @)</label>
+            <input
+              class="input"
+              id="telegram_bot_username"
+              name="telegram_bot_username"
+              value={cfg.telegram_bot_username}
+              placeholder="e.g. AnymeXDeskBot"
+            />
+            <p class="field-hint">Used for the official Telegram login widget on the website.</p>
+          </div>
+          <div class="field">
+            <label class="label" for="telegram_bot_token">Telegram Bot Token</label>
+            <input
+              class="input"
+              id="telegram_bot_token"
+              name="telegram_bot_token"
+              type="password"
+              placeholder={tgTokenSet ? '••••••••  (Saved. Paste new token to replace)' : 'Token from @BotFather'}
+              autocomplete="off"
+            />
+            <p class="field-hint">Issued by @BotFather on Telegram.</p>
+          </div>
+          <div class="wide actions">
+            <button class="btn btn-primary" type="submit">Save Telegram Settings</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Contributor Discord Server & Forums -->
+      <section class="panel">
+        <h2>Contributor Discord Server &amp; Forum Sync</h2>
+        <p class="panel-sub">
+          Automatically bridges reports and suggestions with Discord Forum threads. Bidirectionally syncs comments, edits, closures, and status tags.
+        </p>
+        <form method="POST" class="rows-2">
+          <input type="hidden" name="intent" value="contributor-forums" />
+          <input type="hidden" name="tab" value="settings" />
+          <div class="field wide">
+            <label class="check">
+              <input type="checkbox" name="discord_forum_sync_enabled" value="1" checked={forumSyncEnabled} />
+              <span>Enable Contributor Forum Synchronization</span>
+            </label>
+          </div>
+          <div class="field">
+            <label class="label" for="contributor_guild_id">Contributor Server (Guild) ID</label>
+            <input class="input num" id="contributor_guild_id" name="contributor_guild_id" value={cfg.contributor_guild_id} placeholder="1545003117018357850" />
+          </div>
+          <div class="field">
+            <label class="label" for="discord_sync_secret">Inbound Sync Secret</label>
+            <input class="input" id="discord_sync_secret" name="discord_sync_secret" type="password" value={cfg.discord_sync_secret} placeholder="Shared secret token for inbound Discord webhook" />
+          </div>
+          <div class="field">
+            <label class="label" for="discord_forum_bugs_id">Bugs Forum Channel ID</label>
+            <input class="input num" id="discord_forum_bugs_id" name="discord_forum_bugs_id" value={cfg.discord_forum_bugs_id} placeholder="1545003724961751096" />
+          </div>
+          <div class="field">
+            <label class="label" for="discord_forum_suggestions_id">Suggestions Forum Channel ID</label>
+            <input class="input num" id="discord_forum_suggestions_id" name="discord_forum_suggestions_id" value={cfg.discord_forum_suggestions_id} placeholder="1545003626823417906" />
+          </div>
+          <div class="field wide">
+            <label class="label" for="discord_forum_extensions_id">Extension Issues Forum Channel ID</label>
+            <input class="input num" id="discord_forum_extensions_id" name="discord_forum_extensions_id" value={cfg.discord_forum_extensions_id} placeholder="1545003859380805702" />
+          </div>
+          <div class="wide actions">
+            <button class="btn btn-primary" type="submit">Save Forum Settings</button>
+          </div>
+        </form>
+
+        <div class="forum-tools">
+          <form method="POST">
+            <input type="hidden" name="intent" value="setup-forum-tags" />
+            <input type="hidden" name="tab" value="settings" />
+            <button class="btn btn-action-with-icon" type="submit">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+              </svg>
+              <span>Auto-Generate / Verify Forum Tags on Discord</span>
+            </button>
+            <p class="field-hint" style="margin-top: 6px;">Creates Open, In Progress, Fixed, Duplicate, and Platform tags across all 3 forum channels.</p>
+          </form>
+
+          <form method="POST">
+            <input type="hidden" name="intent" value="sync-existing-reports" />
+            <input type="hidden" name="tab" value="settings" />
+            <button class="btn btn-action-with-icon" type="submit">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+              </svg>
+              <span>Sync All Existing Reports to Discord Forums</span>
+            </button>
+            <p class="field-hint" style="margin-top: 6px;">Creates forum threads for any existing reports that lack one and syncs all comments.</p>
+          </form>
+        </div>
+      </section>
+    </div>
+  )}
 </Base>
 
-<style>
-  .head { padding-block-end: var(--space-4); border-block-end: 1px solid var(--border-subtle); }
-  h1 { font-size: var(--text-xl); letter-spacing: var(--track-tight); }
-  .sub { max-inline-size: 64ch; margin-block-start: var(--space-1); color: var(--text-tertiary); font-size: var(--text-sm); }
+<script is:inline>
+  document.addEventListener('DOMContentLoaded', () => {
+    const tabs = document.querySelectorAll('[data-tab-trigger]');
+    const panes = document.querySelectorAll('[data-tab-pane]');
 
+    function activateTab(targetId) {
+      let found = false;
+      panes.forEach(pane => {
+        if (pane.dataset.tabPane === targetId) {
+          pane.classList.add('active');
+          pane.hidden = false;
+          found = true;
+        } else {
+          pane.classList.remove('active');
+          pane.hidden = true;
+        }
+      });
+
+      if (!found && panes.length > 0) {
+        panes[0].classList.add('active');
+        panes[0].hidden = false;
+        targetId = panes[0].dataset.tabPane;
+      }
+
+      tabs.forEach(tab => {
+        const isMatch = tab.dataset.tabTrigger === targetId;
+        tab.classList.toggle('active', isMatch);
+        tab.setAttribute('aria-selected', isMatch ? 'true' : 'false');
+      });
+
+      // Update hidden tab fields across all forms
+      document.querySelectorAll('input[type="hidden"][name="tab"]').forEach(input => {
+        input.value = targetId;
+      });
+
+      // Update URL without page reload
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('tab', targetId);
+        window.history.replaceState({}, '', url.toString());
+      } catch (e) {}
+    }
+
+    tabs.forEach(tab => {
+      tab.addEventListener('click', (e) => {
+        e.preventDefault();
+        const tabId = tab.dataset.tabTrigger;
+        if (tabId) activateTab(tabId);
+      });
+    });
+  });
+</script>
+
+<style>
+  .head {
+    padding-block-end: var(--space-2);
+    border-block-end: 1px solid var(--border-subtle);
+  }
+  .head-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    margin-block-end: var(--space-4);
+  }
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  h1 {
+    font-size: var(--text-xl);
+    letter-spacing: var(--track-tight);
+    font-weight: var(--weight-semi);
+  }
+  .sub {
+    max-inline-size: 68ch;
+    margin-block-start: var(--space-1);
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+  }
+  .head-quick-actions {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .triage-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /* Role Badges */
+  .role-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    border: 1px solid var(--border-default);
+    text-transform: uppercase;
+    letter-spacing: var(--track-wider);
+  }
+  .role-owner {
+    background: #f59e0b18;
+    color: #f59e0b;
+    border-color: #f59e0b44;
+  }
+  .role-admin {
+    background: #6366f118;
+    color: #818cf8;
+    border-color: #6366f144;
+  }
+  .role-mod {
+    background: #06b6d418;
+    color: #22d3ee;
+    border-color: #06b6d444;
+  }
+
+  /* Tabs Bar */
+  .tabs-nav {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-block-start: var(--space-3);
+    padding-block-end: 2px;
+  }
+  .tabs-nav::-webkit-scrollbar { display: none; }
+
+  .tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    text-decoration: none;
+    transition: all 0.15s ease;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .tab-btn:hover {
+    color: var(--text-primary);
+    background: var(--surface-raised);
+  }
+  .tab-btn.active {
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    border-color: var(--border-subtle);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  }
+  .tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-family: var(--font-data);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+  }
+  .tab-badge.warn {
+    background: var(--dead-fill);
+    color: var(--dead);
+  }
+  .tab-owner-only {
+    color: #f59e0b;
+  }
+  .owner-pill {
+    font-size: 0.65rem;
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    background: #f59e0b22;
+    color: #f59e0b;
+    border: 1px solid #f59e0b44;
+    text-transform: uppercase;
+  }
+
+  /* Tab Pane Visibility & Animation */
+  .tab-pane {
+    animation: fadeIn 0.15s ease-out;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(3px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Flash & Alerts */
   .flash, .error {
     margin-block-start: var(--space-4);
     padding: var(--space-3);
     border: 1px solid var(--border-default);
-    border-inline-start-width: 2px;
+    border-inline-start-width: 3px;
     border-radius: var(--radius-md);
     font-size: var(--text-sm);
     color: var(--text-primary);
@@ -676,68 +1192,206 @@ const botTokenSet = !!cfg.discord_bot_token;
   .flash { border-inline-start-color: var(--live); background: var(--live-fill); }
   .error { border-color: var(--dead); background: var(--dead-fill); }
 
+  .info-callout {
+    display: flex;
+    gap: var(--space-3);
+    align-items: flex-start;
+    margin-block-start: var(--space-4);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+  .info-callout svg {
+    color: var(--signal);
+    flex-shrink: 0;
+    margin-block-start: 1px;
+  }
+  .info-callout a {
+    color: var(--signal-ink);
+    text-decoration: underline;
+  }
+
+  .owner-secure-banner {
+    display: flex;
+    gap: var(--space-3);
+    align-items: flex-start;
+    margin-block-start: var(--space-4);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    background: #f59e0b12;
+    border: 1px solid #f59e0b33;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+  .owner-secure-banner svg {
+    color: #f59e0b;
+    flex-shrink: 0;
+    margin-block-start: 1px;
+  }
+
+  /* Panels */
   .panel {
     padding-block: var(--space-6);
     border-block-end: 1px solid var(--border-subtle);
   }
-  .panel h2 { font-size: var(--text-md); margin-block-end: var(--space-4); }
+  .panel h2 { font-size: var(--text-md); margin-block-end: var(--space-1); }
   .panel-sub {
-    max-inline-size: 68ch;
-    margin-block: calc(-1 * var(--space-3)) var(--space-4);
+    max-inline-size: 70ch;
+    margin-block-end: var(--space-4);
     font-size: var(--text-sm);
     color: var(--text-tertiary);
   }
   .empty-line { font-size: var(--text-sm); color: var(--text-muted); }
-  .panel .empty-line + .add { margin-block-start: var(--space-4); }
 
-  .staff { display: grid; gap: var(--space-2); margin-block-end: var(--space-5); }
-  .staff li {
-    display: flex;
-    align-items: center;
+  /* Staff Cards Grid */
+  .staff-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: var(--space-3);
-    flex-wrap: wrap;
-    padding: var(--space-2) var(--space-3);
+    margin-block-end: var(--space-5);
+  }
+  .staff-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     background: var(--surface-raised);
   }
+  .staff-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
   .staff-who { display: flex; flex-direction: column; min-inline-size: 0; }
-  .staff-name { font-weight: var(--weight-medium); }
+  .staff-name { font-weight: var(--weight-medium); font-size: var(--text-base); }
   .staff-id { font-size: var(--text-xs); color: var(--text-muted); }
-  .staff-meta { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
-  .from { color: var(--text-tertiary); }
-  .staff-actions { display: flex; gap: var(--space-1); margin-inline-start: auto; flex-wrap: wrap; }
+  .staff-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+  }
+  .staff-actions {
+    display: flex;
+    gap: var(--space-1);
+    margin-block-start: auto;
+    padding-block-start: var(--space-2);
+    border-block-start: 1px solid var(--border-subtle);
+    flex-wrap: wrap;
+  }
+  .locked-badge {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    font-style: italic;
+    padding: var(--space-1) 0;
+  }
   .danger { color: var(--dead); }
+  .danger:hover { border-color: var(--dead); color: var(--dead); }
 
-  .add { display: grid; gap: var(--space-3); max-inline-size: 42rem; }
-  .add-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  /* Add Box */
+  .add-box {
+    margin-block-start: var(--space-4);
+    padding: var(--space-4);
+    border: 1px dashed var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+  }
+  .add-box h3 {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    margin-block-end: var(--space-3);
+  }
+  .add { display: grid; gap: var(--space-3); max-inline-size: 44rem; }
+  .add-actions { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+  .admin-notice-hint { font-size: var(--text-xs); color: var(--text-tertiary); }
 
+  /* Forms & Inputs */
   .rows-2 {
     display: grid;
     gap: var(--space-4);
     grid-template-columns: 1fr 1fr;
     align-items: start;
-    max-inline-size: 46rem;
+    max-inline-size: 48rem;
   }
   .rows-2 .wide, .rows-2 .field.wide { grid-column: 1 / -1; }
-  .rows-2 .field + .field { margin-block-start: 0; }
   @media (max-width: 640px) { .rows-2 { grid-template-columns: 1fr; } }
   .actions { display: flex; gap: var(--space-2); }
   .check { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); cursor: pointer; }
   .check input { inline-size: 18px; block-size: 18px; accent-color: var(--signal); }
   .test { margin-block-start: var(--space-3); }
+
+  .read-only-card {
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+    max-inline-size: 48rem;
+  }
+  .read-only-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-block-end: var(--space-1);
+    font-size: var(--text-sm);
+  }
+  .read-only-row .label-text {
+    font-weight: var(--weight-medium);
+    min-inline-size: 130px;
+  }
+
+  .field-row {
+    display: flex;
+    gap: var(--space-3);
+    align-items: flex-end;
+  }
+  .forum-tools {
+    display: grid;
+    gap: var(--space-3);
+    margin-block-start: var(--space-4);
+  }
   .btn-action-with-icon {
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
   }
 
-  .log { display: grid; gap: var(--space-1); font-size: var(--text-sm); }
-  .log li { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: baseline; }
-  .log-who { font-weight: var(--weight-medium); }
+  /* Audit Log */
+  .audit-log {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .audit-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: var(--space-3);
+    align-items: baseline;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    font-size: var(--text-sm);
+  }
+  @media (max-width: 640px) {
+    .audit-item {
+      grid-template-columns: 1fr;
+      gap: var(--space-1);
+    }
+  }
+  .audit-main {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .log-who { font-weight: var(--weight-medium); color: var(--text-primary); }
   .log-what { color: var(--signal-ink); font-family: var(--font-data); font-size: var(--text-xs); }
   .log-target { color: var(--text-muted); }
-  .log-detail { color: var(--text-tertiary); }
-  .log-when { margin-inline-start: auto; color: var(--text-muted); }
-  .danger:hover { border-color: var(--dead); color: var(--dead); }
+  .log-detail { color: var(--text-tertiary); font-size: var(--text-xs); }
+  .log-when { color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; margin-inline-start: auto; }
 </style>
