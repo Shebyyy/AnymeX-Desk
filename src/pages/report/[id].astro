@@ -418,8 +418,12 @@ const allPreviewUrls = [
 ];
 const linkPreviews = allPreviewUrls.length ? await fetchLinkPreviews(allPreviewUrls) : new Map();
 
+const nowSeconds = Math.floor(Date.now() / 1000);
 const canModerate = user ? atLeast(await levelOf(user.id), 'mod') : false;
-const reporterPresence = canModerate && reporter ? getPresence(reporter.lastSeen, reporter.lastLogin) : null;
+const isReporterCurrentViewer = user && reporter && (reporter.discordId === user.id || (user.telegramId && reporter.telegramId === user.telegramId));
+const reporterPresence = canModerate && reporter
+  ? getPresence(isReporterCurrentViewer ? nowSeconds : (reporter.lastSeen || reporter.lastLogin), reporter.lastLogin, nowSeconds)
+  : null;
 const mine = user
   ? (
       await db()
@@ -681,7 +685,10 @@ Astro.response.headers.set(
         )}
         {orderedComments.map(({ comment: c, depth }) => {
           const avatar = avatarUrl({ id: c.userId, avatarHash: c.avatarHash }, 24);
-          const commentPresence = canModerate ? getPresence(c.lastSeen, c.lastLogin) : null;
+          const isCommentAuthorViewer = user && c.userId === user.id;
+          const commentPresence = canModerate
+            ? getPresence(isCommentAuthorViewer ? nowSeconds : (c.lastSeen || c.lastLogin), c.lastLogin, nowSeconds)
+            : null;
           const cAtts = attByComment.get(c.id) ?? [];
           const replyToUsername = c.replyToId != null
             ? reportComments.find((p) => p.id === c.replyToId)?.username ?? null

@@ -81,10 +81,21 @@ const initial = (userRow.username || '?')[0].toUpperCase();
 
 const viewer = await currentUser(Astro);
 const viewerLevel = viewer ? await levelOf(viewer.id) : 'user';
-const isViewerStaff = atLeast(viewerLevel, 'mod');
+const nowSeconds = Math.floor(Date.now() / 1000);
 const isSelf = !!(viewer && (viewer.id === targetId || (userRow.telegramId && viewer.telegramId === userRow.telegramId)));
 const canViewPresence = isViewerStaff || isSelf;
-const presence = canViewPresence ? getPresence(userRow.lastSeen, userRow.lastLogin) : null;
+const effectiveLastSeen = isSelf ? nowSeconds : (userRow.lastSeen || userRow.lastLogin);
+const presence = canViewPresence ? getPresence(effectiveLastSeen, userRow.lastLogin, nowSeconds) : null;
+
+if (isSelf && viewer) {
+  const cf = Astro.locals.cfContext;
+  const touchPromise = db()
+    .update(users)
+    .set({ lastSeen: nowSeconds })
+    .where(eq(users.discordId, userRow.discordId));
+  if (cf) cf.waitUntil(touchPromise);
+  else touchPromise.catch(() => {});
+}
 
 Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, stale-while-revalidate=300');
 ---

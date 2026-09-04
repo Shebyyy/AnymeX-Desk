@@ -478,6 +478,21 @@ const [cfg, rawStaff, blocked, log, allLabels, allUsersList] = await Promise.all
     .limit(300),
 ]);
 
+const nowSeconds = Math.floor(Date.now() / 1000);
+
+// Background-touch the current staff viewer's lastSeen so D1 immediately reflects their presence
+const cf = Astro.locals.cfContext;
+const touchPresencePromise = db()
+  .update(users)
+  .set({ lastSeen: nowSeconds })
+  .where(
+    user.telegramId
+      ? or(eq(users.discordId, user.id), eq(users.telegramId, user.telegramId))
+      : eq(users.discordId, user.id)
+  );
+if (cf) cf.waitUntil(touchPresencePromise);
+else touchPresencePromise.catch(() => {});
+
 const recentUsers = allUsersList;
 
 const fmtDate = (timestamp: number | null) => {
@@ -491,7 +506,9 @@ const userRecordsWithPresence = allUsersList.map((u) => {
     isOwner(u.discordId) ||
     (ownerDiscordId && (u.discordId === ownerDiscordId || u.telegramId === ownerDiscordId));
   const effectiveRole = isTargetOwner ? 'owner' : combine(u.discordLevel, u.manualLevel);
-  const presence = getPresence(u.lastSeen, u.lastLogin);
+  const isCurrentViewer = user && (u.discordId === user.id || (user.telegramId && u.telegramId === user.telegramId));
+  const effectiveLastSeen = isCurrentViewer ? nowSeconds : u.lastSeen;
+  const presence = getPresence(effectiveLastSeen, u.lastLogin, nowSeconds);
   const hasDiscord = !u.discordId.startsWith('tg:') && u.discordLinked !== false;
   const hasTelegram = !!u.telegramId;
   const isDual = hasDiscord && hasTelegram;
@@ -556,8 +573,8 @@ if (ownerDiscordId && !staffList.some((s) => s.discordId === ownerDiscordId)) {
     avatarHash: user.id === ownerDiscordId ? user.avatarHash : null,
     discordLevel: null,
     manualLevel: 'owner' as any,
-    lastLogin: user.id === ownerDiscordId ? Math.floor(Date.now() / 1000) : null,
-    lastSeen: user.id === ownerDiscordId ? Math.floor(Date.now() / 1000) : null,
+    lastLogin: user.id === ownerDiscordId ? nowSeconds : null,
+    lastSeen: user.id === ownerDiscordId ? nowSeconds : null,
   });
 }
 
@@ -952,7 +969,8 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
               const isTargetOwner = isOwner(s.discordId);
               const isTargetAdmin = eff === 'admin';
               const isTargetMod = eff === 'mod';
-              const presence = getPresence(s.lastSeen, s.lastLogin);
+              const isCurrentViewer = s.discordId === user.id || (user.telegramId && s.telegramId === user.telegramId);
+              const presence = getPresence(isCurrentViewer ? nowSeconds : s.lastSeen, s.lastLogin, nowSeconds);
               const avatar = avatarUrl({ id: s.discordId, avatarHash: s.avatarHash }, 64);
               const initial = (s.username || '?')[0].toUpperCase();
 

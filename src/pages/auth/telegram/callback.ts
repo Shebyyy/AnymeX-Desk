@@ -111,6 +111,7 @@ export const GET: APIRoute = async (ctx) => {
           telegramPhotoUrl: rawParams.photo_url || null,
           notifyTelegram: true,
           lastLogin: sql`(unixepoch())`,
+          lastSeen: sql`(unixepoch())`,
         })
         .where(eq(users.discordId, loggedInUser.id));
 

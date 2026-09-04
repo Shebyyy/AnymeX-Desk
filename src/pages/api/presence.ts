@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { eq, sql } from 'drizzle-orm';
+import { eq, or, sql } from 'drizzle-orm';
 import { db } from '../../lib/db/client';
 import { users } from '../../lib/db/schema';
 import { currentUser } from '../../lib/auth';
@@ -18,20 +18,42 @@ export const POST: APIRoute = async (ctx) => {
   const now = Math.floor(Date.now() / 1000);
 
   try {
-    // Throttle D1 writes: only update if last_seen was > 90 seconds ago
-    const [row] = await db()
-      .select({ lastSeen: users.lastSeen })
-      .from(users)
-      .where(eq(users.discordId, user.id));
+    const userMatch = user.telegramId
+      ? or(eq(users.discordId, user.id), eq(users.telegramId, user.telegramId))
+      : eq(users.discordId, user.id);
 
-    if (!row?.lastSeen || now - row.lastSeen > 90) {
+    const [row] = await db()
+      .select({ lastSeen: users.lastSeen, discordId: users.discordId })
+      .from(users)
+      .where(userMatch)
+      .limit(1);
+
+    if (row) {
+      if (!row.lastSeen || now - row.lastSeen > 30) {
+        await db()
+          .update(users)
+          .set({ lastSeen: now })
+          .where(eq(users.discordId, row.discordId));
+      }
+    } else {
       await db()
-        .update(users)
-        .set({ lastSeen: now })
-        .where(eq(users.discordId, user.id));
+        .insert(users)
+        .values({
+          discordId: user.id,
+          username: user.username,
+          avatarHash: user.avatarHash,
+          lastLogin: now,
+          lastSeen: now,
+          accountCreatedAt: user.accountCreatedAt || now,
+          telegramId: user.telegramId || null,
+        })
+        .onConflictDoUpdate({
+          target: users.discordId,
+          set: { lastSeen: now },
+        });
     }
 
-    return new Response(JSON.stringify({ ok: true, now }), {
+    return new Response(JSON.stringify({ ok: true, now, status: 'online' }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });

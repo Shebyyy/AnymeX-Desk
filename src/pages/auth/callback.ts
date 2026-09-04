@@ -88,6 +88,7 @@ export const GET: APIRoute = async (ctx) => {
           username: me.username || loggedInUser.username,
           avatarHash: me.avatar || loggedInUser.avatarHash,
           lastLogin: sql`(unixepoch())`,
+          lastSeen: sql`(unixepoch())`,
         })
         .where(eq(users.discordId, loggedInUser.id));
 

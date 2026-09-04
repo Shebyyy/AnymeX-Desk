@@ -23,6 +23,7 @@ const {
 
 const baseUser = await currentUser(Astro);
 const staffPreview = baseUser ? await effectiveStaffLevel(Astro, baseUser.id) : null;
+const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
 
 const reportIdMatch = Astro.url.pathname.match(/^\/report\/(\d+)$/);
 const ogImage = reportIdMatch
@@ -123,20 +124,27 @@ const ogImage = reportIdMatch
       }
     </style>
 
-    {baseUser && (
+    {(baseUser || maybeSignedIn) && (
       <script is:inline>
         (function() {
           function pingPresence() {
             if (document.visibilityState === 'visible') {
-              fetch('/api/presence', { method: 'POST', keepalive: true }).catch(function() {});
+              fetch('/api/presence', {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' },
+                keepalive: true,
+              }).catch(function() {});
             }
           }
           // Initial ping
           pingPresence();
-          // Heartbeat every 2 minutes
-          setInterval(pingPresence, 120000);
+          // Heartbeat every 60 seconds
+          setInterval(pingPresence, 60000);
           // Ping when user returns to the tab
           window.addEventListener('focus', pingPresence);
+          document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'visible') pingPresence();
+          });
         })();
       </script>
     )}

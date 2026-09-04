@@ -171,6 +171,7 @@ export async function buildSessionUser(token: string): Promise<SessionUser> {
         discordLinked: true,
         discordUserId: me.id,
         lastLogin: sql`(unixepoch())`,
+        lastSeen: sql`(unixepoch())`,
         ...roleColumns,
       },
     })
@@ -236,6 +237,7 @@ export async function buildTelegramSessionUser(tgUser: {
         telegramUsername: tgUser.username || existing.telegramUsername,
         telegramPhotoUrl: avatar || existing.telegramPhotoUrl,
         lastLogin: sql`(unixepoch())`,
+        lastSeen: sql`(unixepoch())`,
       })
       .where(eq(users.discordId, existing.discordId))
       .returning();
@@ -255,6 +257,7 @@ export async function buildTelegramSessionUser(tgUser: {
         telegramPhotoUrl: avatar,
         firstSeen: now,
         lastLogin: now,
+        lastSeen: now,
       })
       .returning();
     userRow = inserted;
