@@ -12,30 +12,30 @@ export const POST: APIRoute = async (ctx) => {
     return ctx.redirect('/?auth=sign_in_required', 302);
   }
 
-  // Prevent account lockout: must have at least one active authentication method.
   const d = db();
   const [dbUser] = await d
-    .select({ discordLinked: users.discordLinked, discordId: users.discordId })
+    .select({
+      telegramId: users.telegramId,
+    })
     .from(users)
     .where(eq(users.discordId, user.id));
 
-  const hasDiscord = dbUser?.discordLinked !== false && !dbUser?.discordId.startsWith('tg:');
-  if (!hasDiscord) {
-    return ctx.redirect('/me?telegram=cannot_unlink_primary', 302);
+  // A user must have at least ONE active authentication method to prevent account lockout.
+  if (!dbUser?.telegramId) {
+    return ctx.redirect('/me?discord=cannot_unlink_primary', 302);
   }
+
   await d
     .update(users)
     .set({
-      telegramId: null,
-      telegramUsername: null,
-      telegramPhotoUrl: null,
+      discordLinked: false,
+      discordUserId: null,
     })
     .where(eq(users.discordId, user.id));
 
-  // Update session
-  user.telegramId = null;
-  user.telegramUsername = null;
+  // Update in-memory session user
+  user.discordLinked = false;
   await ctx.session?.set('user', user);
 
-  return ctx.redirect('/me?telegram=unlinked', 302);
+  return ctx.redirect('/me?discord=unlinked', 302);
 };

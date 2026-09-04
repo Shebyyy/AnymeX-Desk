@@ -1,5 +1,8 @@
 import type { APIRoute } from 'astro';
-import { buildSessionUser, canWriteNow, exchangeCode } from '../../lib/auth';
+import { eq, sql } from 'drizzle-orm';
+import { buildSessionUser, canWriteNow, currentUser, exchangeCode } from '../../lib/auth';
+import { db } from '../../lib/db/client';
+import { users } from '../../lib/db/schema';
 import { safeReturnTo } from '../../lib/redirect';
 import { ensureVote } from '../../lib/vote';
 
@@ -21,6 +24,53 @@ export const GET: APIRoute = async (ctx) => {
   const redirectUri = new URL('/auth/callback', ctx.url.origin).toString();
   try {
     const { access_token } = await exchangeCode(code, redirectUri);
+    const loggedInUser = await currentUser(ctx);
+
+    // Case A: User is already logged in — they came from /me to LINK or RE-LINK Discord!
+    if (loggedInUser) {
+      const meRes = await fetch('https://discord.com/api/v10/users/@me', {
+        headers: { authorization: `Bearer ${access_token}` },
+      });
+      if (!meRes.ok) throw new Error('Failed to fetch Discord user profile');
+      const me = (await meRes.json()) as { id: string; username: string; avatar: string | null };
+
+      // Check if this Discord account is already linked to ANOTHER user
+      const [conflict] = await db()
+        .select({ discordId: users.discordId })
+        .from(users)
+        .where(eq(users.discordId, me.id));
+
+      if (conflict && conflict.discordId !== loggedInUser.id) {
+        return ctx.redirect('/me?discord=already_linked_to_other_account', 302);
+      }
+
+      await db()
+        .update(users)
+        .set({
+          discordLinked: true,
+          discordUserId: me.id,
+          username: me.username || loggedInUser.username,
+          avatarHash: me.avatar || loggedInUser.avatarHash,
+          lastLogin: sql`(unixepoch())`,
+        })
+        .where(eq(users.discordId, loggedInUser.id));
+
+      loggedInUser.discordLinked = true;
+      if (me.username) loggedInUser.username = me.username;
+      await ctx.session?.set('user', loggedInUser);
+
+      ctx.cookies.set('signed_in', '1', {
+        path: '/',
+        httpOnly: false,
+        secure: ctx.url.protocol === 'https:',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 30,
+      });
+
+      return ctx.redirect('/me?discord=linked', 302);
+    }
+
+    // Case B: Normal Discord login
     const user = await buildSessionUser(access_token);
 
     // Session fixation. Up to this line the session id is whatever the browser

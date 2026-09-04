@@ -32,6 +32,8 @@ export interface SessionUser {
   telegramId?: string | null;
   /** Linked Telegram Username if connected */
   telegramUsername?: string | null;
+  /** Whether Discord is actively connected */
+  discordLinked?: boolean;
 }
 
 const DISCORD_API = 'https://discord.com/api/v10';
@@ -147,6 +149,8 @@ export async function buildSessionUser(token: string): Promise<SessionUser> {
       username: me.username,
       avatarHash: me.avatar,
       accountCreatedAt: Math.floor(accountCreatedAt),
+      discordLinked: true,
+      discordUserId: me.id,
       ...roleColumns,
     })
     .onConflictDoUpdate({
@@ -154,6 +158,8 @@ export async function buildSessionUser(token: string): Promise<SessionUser> {
       set: {
         username: me.username,
         avatarHash: me.avatar,
+        discordLinked: true,
+        discordUserId: me.id,
         lastLogin: sql`(unixepoch())`,
         ...roleColumns,
       },
@@ -164,6 +170,7 @@ export async function buildSessionUser(token: string): Promise<SessionUser> {
       banned: users.banned,
       telegramId: users.telegramId,
       telegramUsername: users.telegramUsername,
+      discordLinked: users.discordLinked,
     });
 
   const owner = !!env.OWNER_DISCORD_ID && String(env.OWNER_DISCORD_ID).trim() === me.id;
@@ -179,6 +186,7 @@ export async function buildSessionUser(token: string): Promise<SessionUser> {
     canWrite: !row?.banned && ageDays >= minAgeDays,
     telegramId: row?.telegramId ?? null,
     telegramUsername: row?.telegramUsername ?? null,
+    discordLinked: true,
   };
 }
 
@@ -254,6 +262,7 @@ export async function buildTelegramSessionUser(tgUser: {
     canWrite: !userRow?.banned,
     telegramId,
     telegramUsername: userRow?.telegramUsername || tgUser.username || null,
+    discordLinked: userRow?.discordLinked !== false && !finalUserId.startsWith('tg:'),
   };
 }
 

@@ -170,6 +170,10 @@ export const users = sqliteTable('users', {
   firstSeen: integer('first_seen').notNull().default(sql`(unixepoch())`),
   lastLogin: integer('last_login').notNull().default(sql`(unixepoch())`),
 
+  /** Discord account link state */
+  discordLinked: integer('discord_linked', { mode: 'boolean' }).notNull().default(true),
+  discordUserId: text('discord_user_id'),
+
   /** Telegram integration fields */
   telegramId: text('telegram_id'),
   telegramUsername: text('telegram_username'),
