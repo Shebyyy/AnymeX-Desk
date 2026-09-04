@@ -502,12 +502,22 @@ const botTokenSet = !!cfg.discord_bot_token;
     </form>
     <form method="POST" class="test" style="margin-top: 16px;">
       <input type="hidden" name="intent" value="setup-forum-tags" />
-      <button class="btn" type="submit">⚡ Auto-Generate / Verify Forum Tags on Discord</button>
+      <button class="btn btn-action-with-icon" type="submit">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+        </svg>
+        <span>Auto-Generate / Verify Forum Tags on Discord</span>
+      </button>
       <p class="field-hint" style="margin-top: 6px;">Creates Open, In Progress, Fixed, Duplicate, Won't Fix, and Platform/Source tags in all 3 channels automatically.</p>
     </form>
     <form method="POST" class="test" style="margin-top: 16px;">
       <input type="hidden" name="intent" value="sync-existing-reports" />
-      <button class="btn" type="submit">📦 Sync All Existing Reports to Discord Forums</button>
+      <button class="btn btn-action-with-icon" type="submit">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+        </svg>
+        <span>Sync All Existing Reports to Discord Forums</span>
+      </button>
       <p class="field-hint" style="margin-top: 6px;">Creates Discord threads for any existing bugs, suggestions, or extension issues that don't have one yet, and syncs their comments.</p>
     </form>
   </section>
@@ -716,6 +726,11 @@ const botTokenSet = !!cfg.discord_bot_token;
   .check { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); cursor: pointer; }
   .check input { inline-size: 18px; block-size: 18px; accent-color: var(--signal); }
   .test { margin-block-start: var(--space-3); }
+  .btn-action-with-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
 
   .log { display: grid; gap: var(--space-1); font-size: var(--text-sm); }
   .log li { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: baseline; }

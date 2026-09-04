@@ -53,8 +53,22 @@ const platLabel = PLATFORM_LABELS[r.platform] ?? r.platform;
       <span class="tag">{kindTag}</span>
       <span class="tag">{catLabel}</span>
       <span>{platLabel}</span>
-      {r.attachmentCount > 0 && <span class="attachments">{r.attachmentCount} attachment{r.attachmentCount !== 1 ? 's' : ''}</span>}
-      {r.commentCount > 0 && <span>{r.commentCount} comment{r.commentCount !== 1 ? 's' : ''}</span>}
+      {r.attachmentCount > 0 && (
+        <span class="meta-icon-count" title={`${r.attachmentCount} attachment${r.attachmentCount !== 1 ? 's' : ''}`}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+          </svg>
+          <span>{r.attachmentCount}</span>
+        </span>
+      )}
+      {r.commentCount > 0 && (
+        <span class="meta-icon-count" title={`${r.commentCount} comment${r.commentCount !== 1 ? 's' : ''}`}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span>{r.commentCount}</span>
+        </span>
+      )}
       {
         stalled ? (
           <span class="stalled">{stalled}</span>
@@ -96,7 +110,17 @@ const platLabel = PLATFORM_LABELS[r.platform] ?? r.platform;
     font-size: var(--text-xs);
   }
   .stalled { color: var(--stalled); font-weight: var(--weight-medium); }
-  .attachments { color: var(--text-muted); font-size: var(--text-xs); }
+  .meta-icon-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+  }
+  .meta-icon-count svg {
+    flex-shrink: 0;
+    opacity: 0.85;
+  }
 
   .dup {
     align-self: center;

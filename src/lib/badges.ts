@@ -5,7 +5,7 @@
 export interface Badge {
   id: string;
   name: string;
-  icon: string;
+  iconType: 'bug' | 'idea' | 'puzzle' | 'flame' | 'shield';
   description: string;
   color: string;
 }
@@ -14,35 +14,35 @@ export const ALL_BADGES: Record<string, Badge> = {
   bug_hunter: {
     id: 'bug_hunter',
     name: 'Bug Hunter',
-    icon: '🐛',
+    iconType: 'bug',
     description: 'Reported 5 or more confirmed or fixed bugs in AnymeX.',
     color: '#ed4245',
   },
   visionary: {
     id: 'visionary',
     name: 'Visionary',
-    icon: '💡',
+    iconType: 'idea',
     description: 'Submitted a popular suggestion with 20 or more votes.',
     color: '#f5c542',
   },
   extension_pioneer: {
     id: 'extension_pioneer',
     name: 'Extension Pioneer',
-    icon: '⚡',
+    iconType: 'puzzle',
     description: 'Reported an extension compatibility issue that was fixed.',
     color: '#5865f2',
   },
   active_supporter: {
     id: 'active_supporter',
     name: 'Active Supporter',
-    icon: '🔥',
+    iconType: 'flame',
     description: 'Voted on 10 or more reports on AnymeX Desk.',
     color: '#e67e22',
   },
   staff: {
     id: 'staff',
     name: 'Staff Contributor',
-    icon: '🛡️',
+    iconType: 'shield',
     description: 'Verified staff member helping moderate and triage reports.',
     color: '#57f287',
   },

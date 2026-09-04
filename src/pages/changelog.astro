@@ -83,7 +83,28 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, st
                   <span class="change-title">{r.title}</span>
                   <span class="change-meta">
                     <span class:list={['change-kind', `kind-${r.kind}`]}>
-                      {r.kind === 'suggestion' ? '✦ Feature' : r.kind === 'extension' ? '⚡ Extension fix' : '✓ Bug fix'}
+                      {r.kind === 'suggestion' ? (
+                        <>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                          </svg>
+                          <span>Feature</span>
+                        </>
+                      ) : r.kind === 'extension' ? (
+                        <>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                          </svg>
+                          <span>Extension fix</span>
+                        </>
+                      ) : (
+                        <>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <polyline points="20 6 9 17 4 12"/>
+                          </svg>
+                          <span>Bug fix</span>
+                        </>
+                      )}
                     </span>
                     <span class="change-cat">{categoryLabel(r.category)}</span>
                     <span class="change-votes">{r.votes} votes</span>
@@ -159,6 +180,9 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, st
     flex-shrink: 0;
   }
   .change-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-weight: var(--weight-medium);
     white-space: nowrap;
   }
