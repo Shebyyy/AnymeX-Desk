@@ -1,7 +1,7 @@
 ---
 import Base from '../layouts/Base.astro';
 import { env } from 'cloudflare:workers';
-import { desc, eq, isNotNull, or } from 'drizzle-orm';
+import { desc, eq, isNotNull, or, sql } from 'drizzle-orm';
 import { db } from '../lib/db/client';
 import { audit, labels, STAFF_LEVELS, users, type StaffLevel } from '../lib/db/schema';
 import { avatarUrl, snowflakeCreatedAt } from '../lib/auth';
@@ -40,10 +40,51 @@ const allowedPreviewRoles = ALL_ROLES.filter((r) => RANK[r] <= RANK[realLevel]);
 
 // Role-based allowed tabs
 const allowedTabs: string[] = isOwnerUser
-  ? ['staff', 'moderation', 'audit', 'settings']
+  ? ['staff', 'users', 'moderation', 'audit', 'settings']
   : isAdminUser
-    ? ['staff', 'moderation', 'audit']
-    : ['audit', 'staff'];
+    ? ['staff', 'users', 'moderation', 'audit']
+    : ['staff', 'users', 'audit'];
+
+const ownerDiscordId = env.OWNER_DISCORD_ID ? String(env.OWNER_DISCORD_ID).trim() : null;
+
+// Helper to resolve user across Discord ID, Telegram ID, @username, or internal ID
+async function resolveTargetUser(raw: string) {
+  const input = raw.trim();
+  if (!input) return null;
+  const cleanHandle = input.replace(/^@/, '').toLowerCase();
+
+  // 1. Direct query against existing users
+  const [existing] = await db()
+    .select()
+    .from(users)
+    .where(
+      or(
+        eq(users.discordId, input),
+        eq(users.telegramId, input),
+        eq(users.discordId, `tg:${input}`),
+        eq(sql`lower(${users.telegramUsername})`, cleanHandle),
+        eq(sql`lower(${users.username})`, cleanHandle)
+      )
+    )
+    .limit(1);
+
+  if (existing) {
+    return { type: 'existing' as const, user: existing };
+  }
+
+  // 2. Discord Snowflake (17-20 digits)
+  if (/^\d{17,20}$/.test(input)) {
+    return { type: 'discord_snowflake' as const, id: input };
+  }
+
+  // 3. Telegram Numeric ID (5-15 digits) or tg:<digits>
+  const tgMatch = input.match(/^(?:tg:)?(\d{5,15})$/);
+  if (tgMatch) {
+    return { type: 'telegram_id' as const, id: tgMatch[1] };
+  }
+
+  return null;
+}
 
 let error: string | null = null;
 let done: string | null = null;
@@ -201,60 +242,157 @@ if (Astro.request.method === 'POST') {
       done = `Sync completed: ${res.success} new report thread(s) created, ${res.commentsSynced} comment(s) posted to Discord!`;
     }
   } else if (intent === 'block') {
-    const target = String(form.get('discord_id') ?? '').trim();
+    const targetInput = String(form.get('discord_id') ?? form.get('target') ?? '').trim();
     const blocked = form.get('blocked') === '1';
-    if (!/^\d{17,20}$/.test(target)) {
-      error = 'That is not a Discord user id. Enable Developer Mode in Discord, then right-click a name → Copy User ID.';
-    } else if (isOwner(target)) {
-      error = 'The owner cannot be blocked from here.';
-    } else if (target === user.id) {
-      error = "You can't block yourself.";
-    } else {
-      await db()
-        .insert(users)
-        .values({
-          discordId: target,
-          username: 'not signed in yet',
-          accountCreatedAt: Math.floor(snowflakeCreatedAt(target)),
-          banned: blocked,
-        })
-        .onConflictDoUpdate({ target: users.discordId, set: { banned: blocked } });
-      await logAction(user, blocked ? 'user.block' : 'user.unblock', target, null);
-      done = blocked
-        ? `${target} can no longer post or vote. Their existing reports and votes are untouched.`
-        : `${target} can post and vote again.`;
+    const resolved = await resolveTargetUser(targetInput);
+
+    if (!resolved) {
+      error = `Could not find an account matching "${targetInput}". To pre-block an unregistered user before their first sign-in, please provide their 17-20 digit Discord User ID or numeric Telegram ID.`;
+    } else if (resolved.type === 'existing') {
+      const u = resolved.user;
+      const isTargetOwner = isOwner(u.discordId) || (ownerDiscordId && (u.discordId === ownerDiscordId || u.telegramId === ownerDiscordId));
+      if (isTargetOwner) {
+        error = 'The owner cannot be blocked.';
+      } else if (u.discordId === user.id || (u.telegramId && u.telegramId === user.telegramId)) {
+        error = "You can't block yourself.";
+      } else {
+        await db()
+          .update(users)
+          .set({ banned: blocked })
+          .where(eq(users.discordId, u.discordId));
+
+        const tgLabel = u.telegramUsername ? `@${u.telegramUsername}` : u.telegramId ? `TG:${u.telegramId}` : null;
+        const dcLabel = !u.discordId.startsWith('tg:') && u.discordLinked !== false ? `DC:${u.discordId}` : null;
+        const linkedInfo = [dcLabel, tgLabel].filter(Boolean).join(' | ');
+
+        await logAction(
+          user,
+          blocked ? 'user.block' : 'user.unblock',
+          u.discordId,
+          `${u.username}${linkedInfo ? ` (${linkedInfo})` : ''}`
+        );
+        done = blocked
+          ? `${u.username} has been blocked. They can no longer post or vote across Discord or Telegram.`
+          : `${u.username} can post and vote again.`;
+      }
+    } else if (resolved.type === 'discord_snowflake') {
+      if (isOwner(resolved.id) || (ownerDiscordId && resolved.id === ownerDiscordId)) {
+        error = 'The owner cannot be blocked.';
+      } else if (resolved.id === user.id) {
+        error = "You can't block yourself.";
+      } else {
+        await db()
+          .insert(users)
+          .values({
+            discordId: resolved.id,
+            username: 'not signed in yet',
+            accountCreatedAt: Math.floor(snowflakeCreatedAt(resolved.id)),
+            banned: blocked,
+          })
+          .onConflictDoUpdate({ target: users.discordId, set: { banned: blocked } });
+        await logAction(user, blocked ? 'user.block' : 'user.unblock', resolved.id, 'Pre-registered Discord snowflake');
+        done = blocked
+          ? `Discord snowflake ${resolved.id} is blocked (pre-registered).`
+          : `Discord snowflake ${resolved.id} unblocked.`;
+      }
+    } else if (resolved.type === 'telegram_id') {
+      const internalId = `tg:${resolved.id}`;
+      if (ownerDiscordId && (internalId === ownerDiscordId || resolved.id === ownerDiscordId)) {
+        error = 'The owner cannot be blocked.';
+      } else if (user.telegramId === resolved.id || user.id === internalId) {
+        error = "You can't block yourself.";
+      } else {
+        await db()
+          .insert(users)
+          .values({
+            discordId: internalId,
+            username: `Telegram User ${resolved.id.slice(-4)}`,
+            accountCreatedAt: Math.floor(Date.now() / 1000),
+            telegramId: resolved.id,
+            banned: blocked,
+          })
+          .onConflictDoUpdate({ target: users.discordId, set: { banned: blocked } });
+        await logAction(user, blocked ? 'user.block' : 'user.unblock', internalId, `Pre-registered Telegram ID ${resolved.id}`);
+        done = blocked
+          ? `Telegram user ${resolved.id} is blocked (pre-registered). When they sign in, they will be blocked.`
+          : `Telegram user ${resolved.id} unblocked.`;
+      }
     }
   } else if (intent === 'staff-set') {
-    const target = String(form.get('discord_id') ?? '').trim();
+    const targetInput = String(form.get('discord_id') ?? form.get('target') ?? '').trim();
     const wanted = String(form.get('level') ?? '');
     const newLevel = (STAFF_LEVELS as readonly string[]).includes(wanted)
       ? (wanted as StaffLevel)
       : null;
-    const targetCurrentLevel = await levelOf(target);
+    const resolved = await resolveTargetUser(targetInput);
 
-    if (!/^\d{17,20}$/.test(target)) {
-      error = 'That is not a Discord user id. Enable Developer Mode in Discord, then right-click a name → Copy User ID.';
-    } else if (target === user.id && !isOwnerUser) {
-      error = "You can't change your own level. Ask the owner, or edit OWNER_DISCORD_ID.";
-    } else if (isOwner(target)) {
-      error = 'The owner cannot be demoted or modified from here.';
-    } else if (!isOwnerUser && (newLevel === 'admin' || targetCurrentLevel === 'admin' || targetCurrentLevel === 'owner')) {
-      error = 'Only the owner can add, promote, or remove administrators. Admins may only add or remove moderators.';
-    } else {
-      await db()
-        .insert(users)
-        .values({
-          discordId: target,
-          username: 'not signed in yet',
-          accountCreatedAt: Math.floor(snowflakeCreatedAt(target)),
-          manualLevel: newLevel,
-        })
-        .onConflictDoNothing();
-      await setManualLevel(target, newLevel);
-      await logAction(user, newLevel ? 'staff.grant' : 'staff.revoke', target, newLevel ?? 'none');
-      done = newLevel
-        ? `Granted ${LEVEL_LABELS[newLevel]} to ${target}.`
-        : `Removed the manual grant from ${target}.`;
+    if (!resolved) {
+      error = `Could not find an account matching "${targetInput}". Provide a valid Discord snowflake (17-20 digits), Telegram User ID, or registered username.`;
+    } else if (resolved.type === 'existing') {
+      const u = resolved.user;
+      const targetCurrentLevel = await levelOf(u.discordId);
+      const isTargetOwner = isOwner(u.discordId) || (ownerDiscordId && (u.discordId === ownerDiscordId || u.telegramId === ownerDiscordId));
+
+      if ((u.discordId === user.id || (u.telegramId && u.telegramId === user.telegramId)) && !isOwnerUser) {
+        error = "You can't change your own level. Ask the owner, or edit OWNER_DISCORD_ID.";
+      } else if (isTargetOwner) {
+        error = 'The owner cannot be demoted or modified from here.';
+      } else if (!isOwnerUser && (newLevel === 'admin' || targetCurrentLevel === 'admin' || targetCurrentLevel === 'owner')) {
+        error = 'Only the owner can add, promote, or remove administrators. Admins may only add or remove moderators.';
+      } else {
+        await setManualLevel(u.discordId, newLevel);
+        const nameLabel = u.telegramUsername ? `${u.username} (@${u.telegramUsername})` : u.username;
+        await logAction(user, newLevel ? 'staff.grant' : 'staff.revoke', u.discordId, newLevel ?? 'none');
+        done = newLevel
+          ? `Granted ${LEVEL_LABELS[newLevel]} to ${nameLabel}.`
+          : `Removed the manual grant from ${nameLabel}.`;
+      }
+    } else if (resolved.type === 'discord_snowflake') {
+      const targetCurrentLevel = await levelOf(resolved.id);
+      if (resolved.id === user.id && !isOwnerUser) {
+        error = "You can't change your own level.";
+      } else if (isOwner(resolved.id)) {
+        error = 'The owner cannot be modified.';
+      } else if (!isOwnerUser && (newLevel === 'admin' || targetCurrentLevel === 'admin' || targetCurrentLevel === 'owner')) {
+        error = 'Only the owner can add, promote, or remove administrators.';
+      } else {
+        await db()
+          .insert(users)
+          .values({
+            discordId: resolved.id,
+            username: 'not signed in yet',
+            accountCreatedAt: Math.floor(snowflakeCreatedAt(resolved.id)),
+            manualLevel: newLevel,
+          })
+          .onConflictDoNothing();
+        await setManualLevel(resolved.id, newLevel);
+        await logAction(user, newLevel ? 'staff.grant' : 'staff.revoke', resolved.id, newLevel ?? 'none');
+        done = newLevel
+          ? `Granted ${LEVEL_LABELS[newLevel]} to Discord user ${resolved.id}.`
+          : `Removed the manual grant from Discord user ${resolved.id}.`;
+      }
+    } else if (resolved.type === 'telegram_id') {
+      const internalId = `tg:${resolved.id}`;
+      const targetCurrentLevel = await levelOf(internalId);
+      if (!isOwnerUser && (newLevel === 'admin' || targetCurrentLevel === 'admin' || targetCurrentLevel === 'owner')) {
+        error = 'Only the owner can add, promote, or remove administrators.';
+      } else {
+        await db()
+          .insert(users)
+          .values({
+            discordId: internalId,
+            username: `Telegram User ${resolved.id.slice(-4)}`,
+            accountCreatedAt: Math.floor(Date.now() / 1000),
+            telegramId: resolved.id,
+            manualLevel: newLevel,
+          })
+          .onConflictDoNothing();
+        await setManualLevel(internalId, newLevel);
+        await logAction(user, newLevel ? 'staff.grant' : 'staff.revoke', internalId, newLevel ?? 'none');
+        done = newLevel
+          ? `Granted ${LEVEL_LABELS[newLevel]} to Telegram user ${resolved.id}.`
+          : `Removed the manual grant from Telegram user ${resolved.id}.`;
+      }
     }
   } else if (intent === 'label_create') {
     const name = String(form.get('name') ?? '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 32);
@@ -283,13 +421,11 @@ const urlTab = Astro.url.searchParams.get('tab');
 const requestedTab = postedTab || urlTab;
 let activeTab = requestedTab && allowedTabs.includes(requestedTab) ? requestedTab : allowedTabs[0];
 
-const ownerDiscordId = env.OWNER_DISCORD_ID ? String(env.OWNER_DISCORD_ID).trim() : null;
-
 const staffFilter = ownerDiscordId
   ? or(isNotNull(users.discordLevel), isNotNull(users.manualLevel), eq(users.discordId, ownerDiscordId))
   : or(isNotNull(users.discordLevel), isNotNull(users.manualLevel));
 
-const [cfg, rawStaff, blocked, log, allLabels, recentUsers] = await Promise.all([
+const [cfg, rawStaff, blocked, log, allLabels, allUsersList] = await Promise.all([
   readConfig(),
   db()
     .select({
@@ -299,25 +435,75 @@ const [cfg, rawStaff, blocked, log, allLabels, recentUsers] = await Promise.all(
       discordLevel: users.discordLevel,
       manualLevel: users.manualLevel,
       lastLogin: users.lastLogin,
+      telegramId: users.telegramId,
+      telegramUsername: users.telegramUsername,
+      telegramPhotoUrl: users.telegramPhotoUrl,
     })
     .from(users)
     .where(staffFilter),
   db()
-    .select({ discordId: users.discordId, username: users.username })
+    .select({
+      discordId: users.discordId,
+      username: users.username,
+      telegramId: users.telegramId,
+      telegramUsername: users.telegramUsername,
+      telegramPhotoUrl: users.telegramPhotoUrl,
+      avatarHash: users.avatarHash,
+    })
     .from(users)
     .where(eq(users.banned, true)),
-  db().select().from(audit).orderBy(desc(audit.createdAt)).limit(30),
+  db().select().from(audit).orderBy(desc(audit.createdAt)).limit(50),
   db().select().from(labels).orderBy(labels.name),
   db()
     .select({
       discordId: users.discordId,
       username: users.username,
       avatarHash: users.avatarHash,
+      discordLevel: users.discordLevel,
+      manualLevel: users.manualLevel,
+      discordLinked: users.discordLinked,
+      telegramId: users.telegramId,
+      telegramUsername: users.telegramUsername,
+      telegramPhotoUrl: users.telegramPhotoUrl,
+      banned: users.banned,
+      firstSeen: users.firstSeen,
+      lastLogin: users.lastLogin,
+      accountCreatedAt: users.accountCreatedAt,
     })
     .from(users)
     .orderBy(desc(users.lastLogin))
-    .limit(100),
+    .limit(300),
 ]);
+
+const recentUsers = allUsersList;
+
+const fmtDate = (timestamp: number | null) => {
+  if (!timestamp) return 'Never';
+  const d = new Date(timestamp * 1000);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
+const dualLinkedUsersCount = allUsersList.filter(
+  (u) => !u.discordId.startsWith('tg:') && u.discordLinked !== false && !!u.telegramId
+).length;
+
+const discordOnlyUsersCount = allUsersList.filter(
+  (u) => !u.discordId.startsWith('tg:') && u.discordLinked !== false && !u.telegramId
+).length;
+
+const telegramOnlyUsersCount = allUsersList.filter(
+  (u) => !!u.telegramId && (u.discordId.startsWith('tg:') || u.discordLinked === false)
+).length;
+
+const bannedUsersCount = allUsersList.filter((u) => u.banned).length;
+
+const staffUsersCount = allUsersList.filter(
+  (u) =>
+    isOwner(u.discordId) ||
+    (ownerDiscordId && (u.discordId === ownerDiscordId || u.telegramId === ownerDiscordId)) ||
+    u.discordLevel ||
+    u.manualLevel
+).length;
 
 let staffList = [...rawStaff];
 if (ownerDiscordId && !staffList.some((s) => s.discordId === ownerDiscordId)) {
@@ -437,6 +623,25 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
           </svg>
           <span>Staff &amp; Team</span>
           <span class="tab-badge">{staff.length}</span>
+        </a>
+      )}
+
+      {allowedTabs.includes('users') && (
+        <a
+          href={`/admin?tab=users`}
+          class:list={['tab-btn', { active: activeTab === 'users' }]}
+          data-tab-trigger="users"
+          role="tab"
+          aria-selected={activeTab === 'users'}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </svg>
+          <span>Users Directory</span>
+          <span class="tab-badge">{allUsersList.length}</span>
         </a>
       )}
 
@@ -574,21 +779,67 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
                 <span>Cancel</span>
               </button>
             </div>
+            <!-- Interactive Database User Search Picker for Staff -->
+            <div class="field" style="margin-block-end: var(--space-3);">
+              <label class="label" for="add-staff-search">Search Registered User</label>
+              <div class="staff-search-box" style="inline-size: 100%; margin-block-end: var(--space-2);">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="11" cy="11" r="8" />
+                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+                <input
+                  type="search"
+                  class="staff-search-input"
+                  id="add-staff-search"
+                  placeholder="Type username, Discord ID, or Telegram @handle..."
+                  autocomplete="off"
+                />
+              </div>
+
+              <!-- Quick pick staff suggestion list -->
+              <div class="user-autocomplete-list" id="add-staff-suggestions" hidden>
+                {recentUsers.map((u) => {
+                  const avatar = avatarUrl({ id: u.discordId, avatarHash: u.avatarHash }, 32) || u.telegramPhotoUrl;
+                  const initial = (u.username || '?')[0].toUpperCase();
+                  const searchData = `${u.username} ${u.discordId} ${u.telegramUsername || ''} ${u.telegramId || ''}`.toLowerCase();
+                  return (
+                    <button
+                      type="button"
+                      class="user-autocomplete-item add-staff-item"
+                      data-user-id={u.discordId}
+                      data-username={u.username}
+                      data-search={searchData}
+                    >
+                      <div class="user-item-avatar">
+                        {avatar ? <img src={avatar} alt="" width="24" height="24" loading="lazy" /> : <span>{initial}</span>}
+                      </div>
+                      <div class="user-item-content">
+                        <span class="user-item-name">{u.username}</span>
+                        <div class="user-item-chips">
+                          {!u.discordId.startsWith('tg:') && <span class="mini-tag dc">DC: {u.discordId.slice(-4)}</span>}
+                          {u.telegramUsername && <span class="mini-tag tg">@{u.telegramUsername}</span>}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <form method="POST" class="add">
               <input type="hidden" name="intent" value="staff-set" />
               <input type="hidden" name="tab" value="staff" />
               <div class="field">
-                <label class="label" for="discord_id">Discord User ID</label>
+                <label class="label" for="discord_id">Target User Identifier</label>
                 <input
                   class="input"
                   id="discord_id"
                   name="discord_id"
-                  inputmode="numeric"
-                  placeholder="e.g. 216154654256398347"
+                  placeholder="e.g. 216154654256398347, @username, or Telegram ID"
                   autocomplete="off"
                   required
                 />
-                <p class="field-hint">Enable Developer Mode in Discord → right-click user → Copy User ID.</p>
+                <p class="field-hint">Pick from the database above, or enter a Discord snowflake, Telegram User ID, or registered username.</p>
               </div>
               <div class="add-actions">
                 <button class="btn btn-primary" type="submit" name="level" value="mod">
@@ -807,6 +1058,195 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     </section>
   </div>
 
+  <!-- TAB: USERS DIRECTORY (Owner, Admin & Mod) -->
+  <div class:list={['tab-pane', { active: activeTab === 'users' }]} data-tab-pane="users" hidden={activeTab !== 'users'}>
+    <section class="panel">
+      <div class="panel-header-with-action">
+        <div>
+          <h2>Registered Users Directory</h2>
+          <p class="panel-sub">
+            All users signed in via Discord or Telegram. Banning or appointing staff applies across all linked identities simultaneously.
+          </p>
+        </div>
+      </div>
+
+      <!-- User Directory Platform KPI Cards -->
+      <div class="user-stats-grid">
+        <div class="stat-card">
+          <div class="stat-num">{allUsersList.length}</div>
+          <div class="stat-label">Total Registered</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num stat-highlight">{dualLinkedUsersCount}</div>
+          <div class="stat-label">Dual Linked (DC + TG)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num stat-discord">{discordOnlyUsersCount}</div>
+          <div class="stat-label">Discord Only</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num stat-telegram">{telegramOnlyUsersCount}</div>
+          <div class="stat-label">Telegram Only</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num stat-danger">{bannedUsersCount}</div>
+          <div class="stat-label">Banned Users</div>
+        </div>
+      </div>
+
+      <!-- Filter & Search Toolbar -->
+      <div class="staff-toolbar" style="margin-block-start: var(--space-4);">
+        <div class="staff-search-box">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="search"
+            class="staff-search-input"
+            id="users-dir-search"
+            placeholder="Search by username, Discord ID, Telegram @handle, or Telegram ID..."
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="staff-filter-chips" role="group" aria-label="Filter users by platform or role">
+          <button type="button" class="chip active" data-user-filter="all">
+            All ({allUsersList.length})
+          </button>
+          <button type="button" class="chip" data-user-filter="dual">
+            Dual Linked ({dualLinkedUsersCount})
+          </button>
+          <button type="button" class="chip" data-user-filter="discord">
+            Discord ({discordOnlyUsersCount + dualLinkedUsersCount})
+          </button>
+          <button type="button" class="chip" data-user-filter="telegram">
+            Telegram ({telegramOnlyUsersCount + dualLinkedUsersCount})
+          </button>
+          <button type="button" class="chip" data-user-filter="staff">
+            Staff ({staffUsersCount})
+          </button>
+          <button type="button" class="chip" data-user-filter="banned">
+            Banned ({bannedUsersCount})
+          </button>
+        </div>
+      </div>
+
+      <!-- Users Directory Table -->
+      <div class="users-table-container">
+        <table class="users-table" id="users-directory-table">
+          <thead>
+            <tr>
+              <th scope="col">User</th>
+              <th scope="col">Connected Accounts</th>
+              <th scope="col">Access Role</th>
+              <th scope="col">Joined / Seen</th>
+              <th scope="col" class="num">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {allUsersList.map((u) => {
+              const isOwnerUserRecord = isOwner(u.discordId) || (ownerDiscordId && (u.discordId === ownerDiscordId || u.telegramId === ownerDiscordId));
+              const effectiveRole = isOwnerUserRecord ? 'owner' : combine(u.discordLevel, u.manualLevel);
+              const isBanned = !!u.banned;
+              const hasDiscord = !u.discordId.startsWith('tg:') && u.discordLinked !== false;
+              const hasTelegram = !!u.telegramId;
+              const isDual = hasDiscord && hasTelegram;
+              const platform = isDual ? 'dual' : hasDiscord ? 'discord' : 'telegram';
+              const avatar = avatarUrl({ id: u.discordId, avatarHash: u.avatarHash }, 40) || u.telegramPhotoUrl;
+              const initial = (u.username || '?')[0].toUpperCase();
+              const searchText = `${u.username} ${u.discordId} ${u.telegramUsername || ''} ${u.telegramId || ''}`.toLowerCase();
+
+              return (
+                <tr
+                  class="user-dir-row"
+                  data-search={searchText}
+                  data-platform={platform}
+                  data-role={effectiveRole}
+                  data-banned={isBanned ? 'true' : 'false'}
+                >
+                  <td>
+                    <div class="user-identity-cell">
+                      <div class="user-cell-avatar">
+                        {avatar ? <img src={avatar} alt="" width="32" height="32" loading="lazy" /> : <span>{initial}</span>}
+                      </div>
+                      <div class="user-cell-meta">
+                        <a href={`/user/${u.discordId}`} class="user-cell-name">
+                          {u.username}
+                        </a>
+                        <span class="user-cell-id num">{u.discordId}</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="user-accounts-cell">
+                      {hasDiscord && (
+                        <span class="service-tag discord" title={`Discord ID: ${u.discordId}`}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994.021-.041.001-.09-.041-.106a13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028z" />
+                          </svg>
+                          <span class="num">{u.discordId.slice(-4)}</span>
+                        </span>
+                      )}
+                      {hasTelegram && (
+                        <span class="service-tag telegram" title={`Telegram: @${u.telegramUsername || u.telegramId}`}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
+                          </svg>
+                          <span>{u.telegramUsername ? `@${u.telegramUsername}` : u.telegramId}</span>
+                        </span>
+                      )}
+                      {isDual && <span class="badge-mini-gold">Dual Linked</span>}
+                    </div>
+                  </td>
+                  <td>
+                    <div class="user-role-cell">
+                      {isBanned ? (
+                        <span class="role-badge role-banned">Banned</span>
+                      ) : (
+                        <span class={`role-badge role-${effectiveRole}`}>
+                          {LEVEL_LABELS[effectiveRole]}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <div class="user-seen-cell">
+                      <span class="seen-label">Seen: {fmtDate(u.lastLogin)}</span>
+                      <span class="joined-label">Joined: {fmtDate(u.firstSeen)}</span>
+                    </div>
+                  </td>
+                  <td class="num">
+                    <div class="user-actions-cell">
+                      <a href={`/user/${u.discordId}`} class="btn btn-ghost btn-sm" title="View contributor profile">
+                        Profile
+                      </a>
+                      {!isModUser && !isOwnerUserRecord && u.discordId !== user.id && (
+                        <form method="POST" style="display: inline-block;">
+                          <input type="hidden" name="intent" value="block" />
+                          <input type="hidden" name="tab" value="users" />
+                          <input type="hidden" name="discord_id" value={u.discordId} />
+                          <input type="hidden" name="blocked" value={isBanned ? '0' : '1'} />
+                          <button
+                            type="submit"
+                            class:list={['btn', 'btn-sm', isBanned ? 'btn-ghost' : 'danger-btn']}
+                            onclick={`return confirm('${isBanned ? "Unblock" : "Block"} ${u.username} across all linked accounts?');`}
+                          >
+                            {isBanned ? 'Unblock' : 'Block'}
+                          </button>
+                        </form>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
   <!-- TAB 2: MODERATION (Admin & Owner) -->
   {isAdminUser && (
     <div class:list={['tab-pane', { active: activeTab === 'moderation' }]} data-tab-pane="moderation" hidden={activeTab !== 'moderation'}>
@@ -880,21 +1320,27 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
               <!-- Quick pick user suggestion list -->
               <div class="user-autocomplete-list" id="block-user-suggestions" hidden>
                 {recentUsers.map((u) => {
-                  const avatar = avatarUrl({ id: u.discordId, avatarHash: u.avatarHash }, 32);
+                  const avatar = avatarUrl({ id: u.discordId, avatarHash: u.avatarHash }, 32) || u.telegramPhotoUrl;
                   const initial = (u.username || '?')[0].toUpperCase();
+                  const searchData = `${u.username} ${u.discordId} ${u.telegramUsername || ''} ${u.telegramId || ''}`.toLowerCase();
                   return (
                     <button
                       type="button"
                       class="user-autocomplete-item"
                       data-user-id={u.discordId}
                       data-username={u.username}
-                      data-search={`${u.username} ${u.discordId}`.toLowerCase()}
+                      data-search={searchData}
                     >
                       <div class="user-item-avatar">
                         {avatar ? <img src={avatar} alt="" width="24" height="24" loading="lazy" /> : <span>{initial}</span>}
                       </div>
-                      <span class="user-item-name">{u.username}</span>
-                      <span class="user-item-id num">{u.discordId}</span>
+                      <div class="user-item-content">
+                        <span class="user-item-name">{u.username}</span>
+                        <div class="user-item-chips">
+                          {!u.discordId.startsWith('tg:') && <span class="mini-tag dc">DC: {u.discordId.slice(-4)}</span>}
+                          {u.telegramUsername && <span class="mini-tag tg">@{u.telegramUsername}</span>}
+                        </div>
+                      </div>
                     </button>
                   );
                 })}
@@ -906,17 +1352,16 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
               <input type="hidden" name="tab" value="moderation" />
               <input type="hidden" name="blocked" value="1" />
               <div class="field">
-                <label class="label" for="block_discord_id">Target Discord User ID</label>
+                <label class="label" for="block_discord_id">Target User Identifier</label>
                 <input
-                  class="input num"
+                  class="input"
                   id="block_discord_id"
                   name="discord_id"
-                  inputmode="numeric"
-                  placeholder="e.g. 216154654256398347"
+                  placeholder="e.g. 216154654256398347, @username, or numeric Telegram ID"
                   autocomplete="off"
                   required
                 />
-                <p class="field-hint">Selected from database above, or paste an 18-digit Discord snowflake manually.</p>
+                <p class="field-hint">Select from database above, or enter a Discord Snowflake, Telegram User ID, or registered username.</p>
               </div>
               <div class="add-actions">
                 <button class="btn danger" type="submit">Confirm Block Account</button>
@@ -930,23 +1375,52 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
             <p class="empty-line">No accounts are currently blocked.</p>
           ) : (
             <ul class="staff-grid" style="margin-block-end: var(--space-4);">
-              {blocked.map((b) => (
-                <li class="staff-card">
-                  <div class="staff-card-header">
-                    <div class="staff-who">
-                      <span class="staff-name">{b.username}</span>
-                      <span class="staff-id num">{b.discordId}</span>
+              {blocked.map((b) => {
+                const hasDiscord = !b.discordId.startsWith('tg:');
+                const hasTelegram = !!b.telegramId;
+                const isDual = hasDiscord && hasTelegram;
+                const avatar = avatarUrl({ id: b.discordId, avatarHash: b.avatarHash }, 36) || b.telegramPhotoUrl;
+                const initial = (b.username || '?')[0].toUpperCase();
+
+                return (
+                  <li class="staff-card">
+                    <div class="staff-card-header">
+                      <div class="staff-identity">
+                        <div class="staff-avatar-wrap">
+                          {avatar ? (
+                            <img class="staff-avatar" src={avatar} alt="" width="36" height="36" loading="lazy" />
+                          ) : (
+                            <div class="staff-avatar-fallback">{initial}</div>
+                          )}
+                        </div>
+                        <div class="staff-who">
+                          <span class="staff-name">{b.username}</span>
+                          <div class="user-accounts-cell" style="margin-block-start: 4px;">
+                            {hasDiscord && (
+                              <span class="service-tag discord">
+                                <span>DC: {b.discordId.slice(-6)}</span>
+                              </span>
+                            )}
+                            {hasTelegram && (
+                              <span class="service-tag telegram">
+                                <span>TG: {b.telegramUsername ? `@${b.telegramUsername}` : b.telegramId}</span>
+                              </span>
+                            )}
+                            {isDual && <span class="badge-mini-gold">Dual Blocked</span>}
+                          </div>
+                        </div>
+                      </div>
+                      <span class="role-badge role-banned">Blocked</span>
                     </div>
-                    <span class="role-badge" style="background: var(--dead-fill); color: var(--dead); border-color: var(--dead);">Blocked</span>
-                  </div>
-                  <form method="POST" class="staff-actions">
-                    <input type="hidden" name="intent" value="block" />
-                    <input type="hidden" name="tab" value="moderation" />
-                    <input type="hidden" name="discord_id" value={b.discordId} />
-                    <button class="btn btn-ghost btn-sm" type="submit" name="blocked" value="0">Unblock Account</button>
-                  </form>
-                </li>
-              ))}
+                    <form method="POST" class="staff-actions">
+                      <input type="hidden" name="intent" value="block" />
+                      <input type="hidden" name="tab" value="moderation" />
+                      <input type="hidden" name="discord_id" value={b.discordId} />
+                      <button class="btn btn-ghost btn-sm" type="submit" name="blocked" value="0">Unblock Account</button>
+                    </form>
+                  </li>
+                );
+              })}
             </ul>
           )
         }
@@ -1363,6 +1837,61 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
       closeAddStaffBtn.addEventListener('click', () => toggleAddStaff(false));
     }
 
+    // 2b. Add Staff Drawer DB Search Autocomplete
+    const addStaffSearch = document.getElementById('add-staff-search');
+    const addStaffSuggestions = document.getElementById('add-staff-suggestions');
+    const addStaffInput = document.getElementById('discord_id');
+    const addStaffItems = document.querySelectorAll('.add-staff-item');
+
+    if (addStaffSearch && addStaffSuggestions && addStaffInput) {
+      function filterStaffSuggestions() {
+        const q = (addStaffSearch.value || '').trim().toLowerCase();
+        let matched = 0;
+        addStaffItems.forEach(item => {
+          const s = item.getAttribute('data-search') || '';
+          const match = !q || s.includes(q);
+          item.hidden = !match;
+          item.style.display = match ? 'flex' : 'none';
+          if (match) matched++;
+        });
+        if (addStaffSuggestions) {
+          addStaffSuggestions.hidden = matched === 0;
+        }
+      }
+
+      addStaffSearch.addEventListener('focus', () => {
+        if (addStaffSuggestions) addStaffSuggestions.hidden = false;
+        filterStaffSuggestions();
+      });
+
+      addStaffSearch.addEventListener('input', () => {
+        if (addStaffSuggestions) addStaffSuggestions.hidden = false;
+        filterStaffSuggestions();
+      });
+
+      addStaffItems.forEach(item => {
+        item.addEventListener('click', () => {
+          const id = item.getAttribute('data-user-id');
+          const name = item.getAttribute('data-username');
+          if (id) {
+            addStaffInput.value = id;
+            if (addStaffSearch) addStaffSearch.value = `${name} (${id})`;
+            if (addStaffSuggestions) addStaffSuggestions.hidden = true;
+          }
+        });
+      });
+
+      document.addEventListener('click', (e) => {
+        if (
+          addStaffSuggestions &&
+          !addStaffSuggestions.contains(e.target) &&
+          e.target !== addStaffSearch
+        ) {
+          addStaffSuggestions.hidden = true;
+        }
+      });
+    }
+
     // 3. Click to Copy Discord ID
     document.querySelectorAll('[data-copy-id]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
@@ -1436,7 +1965,7 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     const blockUserSearch = document.getElementById('block-user-search');
     const blockUserSuggestions = document.getElementById('block-user-suggestions');
     const blockDiscordIdInput = document.getElementById('block_discord_id');
-    const userSuggestItems = document.querySelectorAll('.user-autocomplete-item');
+    const userSuggestItems = document.querySelectorAll('#block-user-suggestions .user-autocomplete-item');
 
     function toggleBlockDrawer(show) {
       if (!blockDrawer || !toggleBlockBtn) return;
@@ -1549,12 +2078,63 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
       });
 
       document.addEventListener('click', (e) => {
-        if (!viewAsMenu.contains(e.target) && e.target !== viewAsBtn) {
+        if (!viewAsMenu.contains(e.target) && !viewAsBtn.contains(e.target)) {
           viewAsMenu.hidden = true;
           viewAsBtn.setAttribute('aria-expanded', 'false');
         }
       });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !viewAsMenu.hidden) {
+          viewAsMenu.hidden = true;
+          viewAsBtn.setAttribute('aria-expanded', 'false');
+          viewAsBtn.focus();
+        }
+      });
     }
+
+    // 8. Users Directory Live Search & Filter
+    const usersSearchInput = document.getElementById('users-dir-search');
+    const userFilterChips = document.querySelectorAll('[data-user-filter]');
+    const userRows = document.querySelectorAll('.user-dir-row');
+    let currentUserFilter = 'all';
+
+    function applyUserFilters() {
+      const q = (usersSearchInput ? usersSearchInput.value : '').trim().toLowerCase();
+
+      userRows.forEach(row => {
+        const text = (row.getAttribute('data-search') || '').toLowerCase();
+        const platform = row.getAttribute('data-platform') || '';
+        const role = row.getAttribute('data-role') || '';
+        const isBanned = row.getAttribute('data-banned') === 'true';
+
+        let matchesFilter = true;
+        if (currentUserFilter === 'dual') matchesFilter = platform === 'dual';
+        else if (currentUserFilter === 'discord') matchesFilter = platform === 'discord' || platform === 'dual';
+        else if (currentUserFilter === 'telegram') matchesFilter = platform === 'telegram' || platform === 'dual';
+        else if (currentUserFilter === 'staff') matchesFilter = role === 'owner' || role === 'admin' || role === 'mod';
+        else if (currentUserFilter === 'banned') matchesFilter = isBanned;
+
+        const matchesSearch = !q || text.includes(q);
+        const visible = matchesFilter && matchesSearch;
+
+        row.hidden = !visible;
+        row.style.display = visible ? '' : 'none';
+      });
+    }
+
+    if (usersSearchInput) {
+      usersSearchInput.addEventListener('input', applyUserFilters);
+    }
+
+    userFilterChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        userFilterChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        currentUserFilter = chip.getAttribute('data-user-filter') || 'all';
+        applyUserFilters();
+      });
+    });
   });
 </script>
 
@@ -2173,6 +2753,9 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     gap: 4px;
     animation: menuFadeIn 0.15s ease-out;
   }
+  .view-as-menu[hidden] {
+    display: none !important;
+  }
   @keyframes menuFadeIn {
     from { opacity: 0; transform: translateY(-4px); }
     to { opacity: 1; transform: translateY(0); }
@@ -2276,5 +2859,197 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     align-items: center;
     flex-wrap: wrap;
     justify-content: center;
+  }
+
+  /* Users Directory & Multi-platform Styles */
+  .user-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: var(--space-3);
+    margin-block-start: var(--space-2);
+  }
+  .stat-card {
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    text-align: center;
+  }
+  .stat-card .stat-num {
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-bold);
+    font-family: var(--font-data);
+    color: var(--text-primary);
+  }
+  .stat-card .stat-highlight { color: #f59e0b; }
+  .stat-card .stat-discord { color: #5865f2; }
+  .stat-card .stat-telegram { color: #24a1de; }
+  .stat-card .stat-danger { color: var(--dead); }
+  .stat-card .stat-label {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    margin-block-start: 2px;
+  }
+
+  .users-table-container {
+    overflow-x: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    margin-block-start: var(--space-3);
+    background: var(--surface-raised);
+  }
+  .users-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+  }
+  .users-table th {
+    background: var(--surface-sunken);
+    padding: var(--space-3);
+    text-align: left;
+    font-weight: var(--weight-semi);
+    color: var(--text-tertiary);
+    border-block-end: 1px solid var(--border-subtle);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: var(--track-wider);
+  }
+  .users-table td {
+    padding: var(--space-3);
+    border-block-end: 1px solid var(--border-subtle);
+    vertical-align: middle;
+  }
+  .users-table tbody tr:last-child td {
+    border-block-end: none;
+  }
+  .users-table tbody tr:hover {
+    background: var(--surface-hover);
+  }
+
+  .user-identity-cell {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .user-cell-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 999px;
+    background: var(--surface-sunken);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: var(--weight-semi);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .user-cell-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .user-cell-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .user-cell-name {
+    font-weight: var(--weight-medium);
+    color: var(--text-primary);
+    text-decoration: none;
+  }
+  .user-cell-name:hover {
+    color: var(--signal);
+    text-decoration: underline;
+  }
+  .user-cell-id {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+  }
+
+  .user-accounts-cell {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .service-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    padding: 2px 7px;
+    border-radius: var(--radius-sm);
+    font-weight: var(--weight-medium);
+    border: 1px solid transparent;
+  }
+  .service-tag.discord {
+    background: rgba(88, 101, 242, 0.12);
+    color: #5865f2;
+    border-color: rgba(88, 101, 242, 0.25);
+  }
+  .service-tag.telegram {
+    background: rgba(36, 161, 222, 0.12);
+    color: #24a1de;
+    border-color: rgba(36, 161, 222, 0.25);
+  }
+  .badge-mini-gold {
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    font-weight: var(--weight-semi);
+    text-transform: uppercase;
+  }
+
+  .user-role-cell .role-banned {
+    background: var(--dead-fill);
+    color: var(--dead);
+    border: 1px solid var(--dead);
+  }
+
+  .user-seen-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+  }
+
+  .user-actions-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /* User Autocomplete item with dual badges */
+  .user-item-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+  }
+  .user-item-chips {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .mini-tag {
+    font-size: 0.65rem;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-family: var(--font-data);
+  }
+  .mini-tag.dc {
+    background: rgba(88, 101, 242, 0.2);
+    color: #818cf8;
+  }
+  .mini-tag.tg {
+    background: rgba(36, 161, 222, 0.2);
+    color: #38bdf8;
   }
 </style>

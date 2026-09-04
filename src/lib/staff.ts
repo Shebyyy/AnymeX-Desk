@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import type { APIContext, AstroGlobal } from 'astro';
-import { eq, sql } from 'drizzle-orm';
+import { eq, or, sql } from 'drizzle-orm';
 import { db } from './db/client';
 import { audit, users, type StaffLevel } from './db/schema';
 import { atLeast, combine as combineLevels, type Level, RANK } from './levels';
@@ -23,13 +23,32 @@ export const isOwner = (discordId: string) =>
   !!env.OWNER_DISCORD_ID && String(env.OWNER_DISCORD_ID).trim() === discordId;
 
 /** Authoritative level, read fresh. Owner outranks whatever the table says. */
-export async function levelOf(discordId: string): Promise<Level> {
-  if (isOwner(discordId)) return 'owner';
+export async function levelOf(identifier: string): Promise<Level> {
+  const clean = identifier?.trim();
+  if (!clean) return 'user';
+  if (isOwner(clean)) return 'owner';
+  const ownerId = env.OWNER_DISCORD_ID ? String(env.OWNER_DISCORD_ID).trim() : null;
+
   const [row] = await db()
-    .select({ discordLevel: users.discordLevel, manualLevel: users.manualLevel })
+    .select({
+      discordId: users.discordId,
+      discordLevel: users.discordLevel,
+      manualLevel: users.manualLevel,
+      telegramId: users.telegramId,
+    })
     .from(users)
-    .where(eq(users.discordId, discordId));
+    .where(
+      or(
+        eq(users.discordId, clean),
+        eq(users.telegramId, clean),
+        eq(users.discordId, `tg:${clean}`)
+      )
+    );
+
   if (!row) return 'user';
+  if (ownerId && (row.discordId === ownerId || row.telegramId === ownerId)) {
+    return 'owner';
+  }
   return combineLevels(row.discordLevel, row.manualLevel);
 }
 
