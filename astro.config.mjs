@@ -21,10 +21,7 @@ export default defineConfig({
     // Keep local D1/KV state on disk between `astro dev` runs so seeded
     // test reports survive a restart.
     persistState: true,
-    // Custom entrypoint adds the `scheduled` cron handler for DC→Site polling
-    // while delegating HTTP fetch to Astro's generated handler.
-    workerEntrypoint: './src/worker.ts',
-  }),
+    }),
 
   integrations: [
     svelte(),
