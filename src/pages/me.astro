@@ -22,7 +22,7 @@ const user = await currentUser(Astro);
 if (!user) {
   const rawNext = Astro.url.searchParams.get('next');
   const dest = rawNext ? safeReturnTo(rawNext, Astro.url.origin, '/me') : '/me';
-  return Astro.redirect(`/auth/discord?next=${encodeURIComponent(dest)}`, 302);
+  return Astro.redirect(`/auth/login?next=${encodeURIComponent(dest)}`, 302);
 }
 
 let done: string | null = null;
@@ -71,13 +71,7 @@ const [updates, filed, backed, [dbUserRow]] = await Promise.all([
   myReports(user.id),
   myBacked(user.id),
   db()
-    .select({
-      discordId: users.discordId,
-      telegramId: users.telegramId,
-      telegramUsername: users.telegramUsername,
-      notifyTelegram: users.notifyTelegram,
-      notifyDiscord: users.notifyDiscord,
-    })
+    .select()
     .from(users)
     .where(eq(users.discordId, user.id)),
 ]);
@@ -112,6 +106,7 @@ const discordAvatar = isDiscordLinked && dbUserRow?.avatarHash && !dbUserRow.ava
   : null;
 
 const telegramAvatar = isTelegramLinked ? dbUserRow?.telegramPhotoUrl : null;
+const activeAvatar = avatarUrl(user, 64) || discordAvatar || telegramAvatar;
 
 const unread = updates.filter((u) => u.readAt === null);
 
@@ -130,11 +125,19 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
 
 <Base title="Your reports" narrow>
   <header class="head">
-    <h1>Your reports</h1>
-    <p class="sub">
-      Signed in as <b>{user.username}</b> (<a href={`/user/${user.id}`} style="color: var(--signal-ink); text-decoration: underline;">view your public profile</a>). Everything you've filed and everything
-      you've voted on, plus what has changed since.
-    </p>
+    <div class="user-profile-header">
+      {activeAvatar ? (
+        <img class="profile-header-avatar" src={activeAvatar} alt="" width="48" height="48" />
+      ) : (
+        <div class="profile-header-avatar-blank"></div>
+      )}
+      <div>
+        <h1>Your reports</h1>
+        <p class="sub">
+          Signed in as <b>{user.username}</b> (<a href={`/user/${user.id}`} style="color: var(--signal-ink); text-decoration: underline;">view public profile</a>).
+        </p>
+      </div>
+    </div>
   </header>
 
   {done && <p class="flash" role="status">{done}</p>}
@@ -454,6 +457,28 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
   h1 {
     font-size: var(--text-xl);
     letter-spacing: var(--track-tight);
+  }
+  .user-profile-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+  }
+  .profile-header-avatar {
+    inline-size: 48px;
+    block-size: 48px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid var(--border-default);
+    background: var(--bg-surface-elevated, #24262b);
+    flex-shrink: 0;
+  }
+  .profile-header-avatar-blank {
+    inline-size: 48px;
+    block-size: 48px;
+    border-radius: 50%;
+    background: var(--bg-surface-elevated, #24262b);
+    border: 2px solid var(--border-default);
+    flex-shrink: 0;
   }
   .sub {
     max-inline-size: 62ch;

@@ -30,7 +30,7 @@ _retryParams.delete('auth');
 _retryParams.delete('__fresh');
 _retryParams.delete('_cb');
 const _retryNext = Astro.url.pathname + (_retryParams.toString() ? `?${_retryParams.toString()}` : '');
-const retryHref = `/auth/discord?next=${encodeURIComponent(_retryNext)}`;
+const retryHref = `/auth/login?next=${encodeURIComponent(_retryNext)}`;
 
 const from = Math.max(1, Number.parseInt(q.get('from') ?? '', 10) || 1);
 

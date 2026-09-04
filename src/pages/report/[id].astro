@@ -66,7 +66,7 @@ if (Astro.request.method === 'POST') {
   if (intent === 'edit') {
     // Must be the reporter (or a mod) and report must be open.
     const actingUser = await import('../../lib/auth').then((m) => m.currentUser(Astro));
-    if (!actingUser) return Astro.redirect(`/auth/discord?next=/report/${id}`, 302);
+    if (!actingUser) return Astro.redirect(`/auth/login?next=/report/${id}`, 302);
 
     const [target] = await db().select().from(reports).where(eq(reports.id, id));
     if (!target) return Astro.rewrite('/404');
@@ -1347,7 +1347,7 @@ Astro.response.headers.set(
       if (res.ok) {
         window.location.reload();
       } else if (res.status === 401) {
-        window.location.href = `/auth/discord?next=${encodeURIComponent(window.location.pathname)}`;
+        window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname)}`;
       } else {
         btn.disabled = false;
       }

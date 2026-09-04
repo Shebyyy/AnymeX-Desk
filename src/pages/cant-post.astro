@@ -7,7 +7,7 @@ export const prerender = false;
 
 const user = await currentUser(Astro);
 if (!user) {
-  return Astro.redirect('/auth/discord?next=/cant-post', 302);
+  return Astro.redirect('/auth/login?next=/cant-post', 302);
 }
 
 const reason = await writeBlockReason(user);

@@ -82,7 +82,7 @@ if (Astro.request.method === 'POST') {
   if (!user) {
     if (isAjax) return json({ error: 'sign-in' }, 401);
     Astro.session?.set('pending_report', submitted);
-    return Astro.redirect('/auth/discord?next=/new', 302);
+    return Astro.redirect('/auth/login?next=/new', 302);
   }
   if (!(await canWriteNow(user))) {
     if (isAjax) return json({ error: 'banned' }, 403);

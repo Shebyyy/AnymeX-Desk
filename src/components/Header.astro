@@ -7,7 +7,7 @@ _params.delete('auth');
 _params.delete('__fresh');
 _params.delete('_cb');
 const here = Astro.url.pathname + (_params.toString() ? `?${_params.toString()}` : '');
-const signInHref = `/me?next=${encodeURIComponent(here)}`;
+const signInHref = `/auth/login?next=${encodeURIComponent(here)}`;
 const tabs = [
   { href: '/', label: 'Bugs', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') !== 'suggestion' && new URL(Astro.url).searchParams.get('kind') !== 'extension' },
   { href: '/?kind=suggestion', label: 'Suggestions', match: (p: string) => p === '/' && new URL(Astro.url).searchParams.get('kind') === 'suggestion' },
@@ -80,9 +80,11 @@ const DISCORD_MARK =
             </a>
           </UserChip>
         ) : (
-          <a class="btn btn-discord signin-link" href={signInHref}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d={DISCORD_MARK} />
+          <a class="btn btn-primary signin-link" href={signInHref}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+              <polyline points="10 17 15 12 10 7" />
+              <line x1="15" y1="12" x2="3" y2="12" />
             </svg>
             <span class="guest-text">Sign in</span>
             <span class="authed-text">Your reports</span>

@@ -19,7 +19,7 @@ export const POST: APIRoute = async (ctx) => {
   const user = await currentUser(ctx);
   if (!user) {
     ctx.session?.set('pending_vote', reportId);
-    return ctx.redirect(`/auth/discord?next=${encodeURIComponent(back)}`, 302);
+    return ctx.redirect(`/auth/login?next=${encodeURIComponent(back)}`, 302);
   }
   if (!(await canWriteNow(user))) return ctx.redirect('/cant-post', 302);
 
