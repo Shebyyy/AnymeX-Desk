@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import { env } from 'cloudflare:workers';
 import { desc, eq, isNotNull, or } from 'drizzle-orm';
 import { db } from '../lib/db/client';
 import { audit, labels, STAFF_LEVELS, users, type StaffLevel } from '../lib/db/schema';
@@ -282,7 +283,13 @@ const urlTab = Astro.url.searchParams.get('tab');
 const requestedTab = postedTab || urlTab;
 let activeTab = requestedTab && allowedTabs.includes(requestedTab) ? requestedTab : allowedTabs[0];
 
-const [cfg, rawStaff, blocked, log, allLabels] = await Promise.all([
+const ownerDiscordId = env.OWNER_DISCORD_ID ? String(env.OWNER_DISCORD_ID).trim() : null;
+
+const staffFilter = ownerDiscordId
+  ? or(isNotNull(users.discordLevel), isNotNull(users.manualLevel), eq(users.discordId, ownerDiscordId))
+  : or(isNotNull(users.discordLevel), isNotNull(users.manualLevel));
+
+const [cfg, rawStaff, blocked, log, allLabels, recentUsers] = await Promise.all([
   readConfig(),
   db()
     .select({
@@ -294,17 +301,38 @@ const [cfg, rawStaff, blocked, log, allLabels] = await Promise.all([
       lastLogin: users.lastLogin,
     })
     .from(users)
-    .where(or(isNotNull(users.discordLevel), isNotNull(users.manualLevel))),
+    .where(staffFilter),
   db()
     .select({ discordId: users.discordId, username: users.username })
     .from(users)
     .where(eq(users.banned, true)),
   db().select().from(audit).orderBy(desc(audit.createdAt)).limit(30),
   db().select().from(labels).orderBy(labels.name),
+  db()
+    .select({
+      discordId: users.discordId,
+      username: users.username,
+      avatarHash: users.avatarHash,
+    })
+    .from(users)
+    .orderBy(desc(users.lastLogin))
+    .limit(100),
 ]);
 
+let staffList = [...rawStaff];
+if (ownerDiscordId && !staffList.some((s) => s.discordId === ownerDiscordId)) {
+  staffList.push({
+    discordId: ownerDiscordId,
+    username: user.id === ownerDiscordId ? user.username : 'Owner',
+    avatarHash: user.id === ownerDiscordId ? user.avatarHash : null,
+    discordLevel: null,
+    manualLevel: 'owner' as any,
+    lastLogin: user.id === ownerDiscordId ? Math.floor(Date.now() / 1000) : null,
+  });
+}
+
 // Sort staff: Owner first, then Admins, then Mods
-const staff = [...rawStaff].sort((a, b) => {
+const staff = staffList.sort((a, b) => {
   const effA = isOwner(a.discordId) ? 'owner' : combine(a.discordLevel, a.manualLevel);
   const effB = isOwner(b.discordId) ? 'owner' : combine(b.discordLevel, b.manualLevel);
   const rank: Record<string, number> = { owner: 3, admin: 2, mod: 1, user: 0 };
@@ -730,6 +758,9 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
               );
             })}
           </ul>
+          <p class="empty-line" id="staff-empty-search" hidden style="display: none;">
+            No staff members match your search or filter.
+          </p>
         )
       }
     </section>
@@ -798,10 +829,101 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
       </section>
 
       <section class="panel">
-        <h2>Blocked Accounts</h2>
-        <p class="panel-sub">
-          Blocked accounts cannot post new reports, comment, or vote. Existing contributions remain intact.
-        </p>
+        <div class="panel-header-with-action">
+          <div>
+            <h2>Blocked Accounts</h2>
+            <p class="panel-sub">
+              Blocked accounts cannot post new reports, comment, or vote. Existing contributions remain intact.
+            </p>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm danger-btn" id="toggle-block-user-btn" aria-expanded="false" aria-controls="block-user-drawer">
+            <svg class="toggle-icon-plus" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            <span>Block User</span>
+          </button>
+        </div>
+
+        <!-- Expandable Block User Drawer with Database Autocomplete -->
+        <div id="block-user-drawer" class="add-staff-drawer" hidden>
+          <div class="add-box danger-box">
+            <div class="add-box-header">
+              <h3>Block Account</h3>
+              <button type="button" class="btn btn-ghost btn-sm" id="close-block-user-btn" aria-label="Close drawer">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+                <span>Cancel</span>
+              </button>
+            </div>
+
+            <!-- Interactive Database User Search Picker -->
+            <div class="field" style="margin-block-end: var(--space-3);">
+              <label class="label" for="block-user-search">Search Registered User from Database</label>
+              <div class="staff-search-box" style="inline-size: 100%; margin-block-end: var(--space-2);">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="11" cy="11" r="8" />
+                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+                <input
+                  type="search"
+                  class="staff-search-input"
+                  id="block-user-search"
+                  placeholder="Type username or Discord ID to search database..."
+                  autocomplete="off"
+                />
+              </div>
+
+              <!-- Quick pick user suggestion list -->
+              <div class="user-autocomplete-list" id="block-user-suggestions" hidden>
+                {recentUsers.map((u) => {
+                  const avatar = avatarUrl({ id: u.discordId, avatarHash: u.avatarHash }, 32);
+                  const initial = (u.username || '?')[0].toUpperCase();
+                  return (
+                    <button
+                      type="button"
+                      class="user-autocomplete-item"
+                      data-user-id={u.discordId}
+                      data-username={u.username}
+                      data-search={`${u.username} ${u.discordId}`.toLowerCase()}
+                    >
+                      <div class="user-item-avatar">
+                        {avatar ? <img src={avatar} alt="" width="24" height="24" loading="lazy" /> : <span>{initial}</span>}
+                      </div>
+                      <span class="user-item-name">{u.username}</span>
+                      <span class="user-item-id num">{u.discordId}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <form method="POST" class="add">
+              <input type="hidden" name="intent" value="block" />
+              <input type="hidden" name="tab" value="moderation" />
+              <input type="hidden" name="blocked" value="1" />
+              <div class="field">
+                <label class="label" for="block_discord_id">Target Discord User ID</label>
+                <input
+                  class="input num"
+                  id="block_discord_id"
+                  name="discord_id"
+                  inputmode="numeric"
+                  placeholder="e.g. 216154654256398347"
+                  autocomplete="off"
+                  required
+                />
+                <p class="field-hint">Selected from database above, or paste an 18-digit Discord snowflake manually.</p>
+              </div>
+              <div class="add-actions">
+                <button class="btn danger" type="submit">Confirm Block Account</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
         {
           blocked.length === 0 ? (
             <p class="empty-line">No accounts are currently blocked.</p>
@@ -827,24 +949,61 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
             </ul>
           )
         }
-        <form method="POST" class="add">
-          <input type="hidden" name="intent" value="block" />
-          <input type="hidden" name="tab" value="moderation" />
-          <input type="hidden" name="blocked" value="1" />
-          <div class="field">
-            <label class="label" for="block_discord_id">Block Discord User ID</label>
-            <input class="input" id="block_discord_id" name="discord_id" inputmode="numeric" placeholder="e.g. 216154654256398347" autocomplete="off" required />
-            <p class="field-hint">Developer Mode in Discord → right-click user → Copy User ID.</p>
-          </div>
-          <div class="add-actions">
-            <button class="btn danger" type="submit">Block Account</button>
-          </div>
-        </form>
       </section>
 
       <section class="panel">
-        <h2>Report Labels</h2>
-        <p class="panel-sub">Taxonomy labels applied by moderators to categorize issues (e.g. regression, upstream, needs-repro).</p>
+        <div class="panel-header-with-action">
+          <div>
+            <h2>Report Labels</h2>
+            <p class="panel-sub">Taxonomy labels applied by moderators to categorize issues (e.g. regression, upstream, needs-repro).</p>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" id="toggle-add-label-btn" aria-expanded="false" aria-controls="add-label-drawer">
+            <svg class="toggle-icon-plus" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            <span>New Label</span>
+          </button>
+        </div>
+
+        <!-- Expandable Add Label Drawer with Live Preview -->
+        <div id="add-label-drawer" class="add-staff-drawer" hidden>
+          <div class="add-box">
+            <div class="add-box-header">
+              <h3>Create Report Label</h3>
+              <button type="button" class="btn btn-ghost btn-sm" id="close-add-label-btn" aria-label="Close drawer">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+                <span>Cancel</span>
+              </button>
+            </div>
+            <form method="POST" class="add">
+              <input type="hidden" name="intent" value="label_create" />
+              <input type="hidden" name="tab" value="moderation" />
+              <div class="rows-2">
+                <div class="field">
+                  <label class="label" for="label_name">Label Name</label>
+                  <input class="input" id="label_name" name="name" placeholder="e.g. regression, upstream, ui-bug" maxlength="32" required autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label class="label" for="label_color">Accent Color</label>
+                  <div style="display: flex; align-items: center; gap: var(--space-2);">
+                    <input class="input" id="label_color" name="color" type="color" value="#6366f1" style="inline-size: 52px; block-size: 38px; padding: 2px; cursor: pointer;" />
+                    <span id="label-live-preview" class="label-chip" style="background: #6366f122; border-color: #6366f1; color: #6366f1; font-weight: 600;">
+                      preview
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div class="add-actions">
+                <button class="btn btn-primary" type="submit">Create Label</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
         {
           allLabels.length === 0 ? (
             <p class="empty-line">No custom labels created yet.</p>
@@ -869,23 +1028,6 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
             </ul>
           )
         }
-        <form method="POST" class="add">
-          <input type="hidden" name="intent" value="label_create" />
-          <input type="hidden" name="tab" value="moderation" />
-          <div class="field-row">
-            <div class="field">
-              <label class="label" for="label_name">Label Name</label>
-              <input class="input" id="label_name" name="name" placeholder="e.g. regression" maxlength="32" required />
-            </div>
-            <div class="field">
-              <label class="label" for="label_color">Accent Color</label>
-              <input class="input" id="label_color" name="color" type="color" value="#6b7280" />
-            </div>
-          </div>
-          <div class="add-actions">
-            <button class="btn btn-primary" type="submit">Create Label</button>
-          </div>
-        </form>
       </section>
 
       <section class="panel">
@@ -1243,23 +1385,35 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
       });
     });
 
-    // 4. Staff Search & Filter
-    const searchInput = document.getElementById('staff-search');
+    // 4. Staff Search & Role Filter
+    const searchInput = document.getElementById('staff-search') as HTMLInputElement | null;
     const filterChips = document.querySelectorAll('[data-staff-filter]');
-    const staffCards = document.querySelectorAll('.staff-card');
+    const staffCards = document.querySelectorAll('#staff-card-grid .staff-card');
+    const emptySearchMsg = document.getElementById('staff-empty-search');
     let currentRoleFilter = 'all';
 
     function applyStaffFilters() {
       const query = (searchInput?.value || '').trim().toLowerCase();
+      let visibleCount = 0;
+
       staffCards.forEach(card => {
-        const cardRole = card.getAttribute('data-staff-role');
-        const cardSearch = card.getAttribute('data-staff-search') || '';
+        const el = card as HTMLElement;
+        const cardRole = el.getAttribute('data-staff-role');
+        const cardSearch = el.getAttribute('data-staff-search') || '';
 
         const matchesRole = currentRoleFilter === 'all' || cardRole === currentRoleFilter;
         const matchesQuery = !query || cardSearch.includes(query);
+        const isVisible = matchesRole && matchesQuery;
 
-        card.hidden = !(matchesRole && matchesQuery);
+        el.hidden = !isVisible;
+        el.style.display = isVisible ? '' : 'none';
+        if (isVisible) visibleCount++;
       });
+
+      if (emptySearchMsg) {
+        emptySearchMsg.hidden = visibleCount > 0;
+        emptySearchMsg.style.display = visibleCount > 0 ? 'none' : 'block';
+      }
     }
 
     if (searchInput) {
@@ -1275,7 +1429,115 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
       });
     });
 
-    // 5. View as Role Dropdown
+    // 5. Block User Drawer & DB Search Autocomplete
+    const toggleBlockBtn = document.getElementById('toggle-block-user-btn');
+    const closeBlockBtn = document.getElementById('close-block-user-btn');
+    const blockDrawer = document.getElementById('block-user-drawer');
+    const blockUserSearch = document.getElementById('block-user-search') as HTMLInputElement | null;
+    const blockUserSuggestions = document.getElementById('block-user-suggestions');
+    const blockDiscordIdInput = document.getElementById('block_discord_id') as HTMLInputElement | null;
+    const userSuggestItems = document.querySelectorAll('.user-autocomplete-item');
+
+    function toggleBlockDrawer(show?: boolean) {
+      if (!blockDrawer || !toggleBlockBtn) return;
+      const isShowing = show !== undefined ? show : blockDrawer.hidden;
+      blockDrawer.hidden = !isShowing;
+      toggleBlockBtn.classList.toggle('is-open', isShowing);
+      toggleBlockBtn.setAttribute('aria-expanded', isShowing ? 'true' : 'false');
+      if (isShowing && blockUserSearch) {
+        blockUserSearch.focus();
+      }
+    }
+
+    if (toggleBlockBtn) toggleBlockBtn.addEventListener('click', () => toggleBlockDrawer());
+    if (closeBlockBtn) closeBlockBtn.addEventListener('click', () => toggleBlockDrawer(false));
+
+    if (blockUserSearch && blockUserSuggestions && blockDiscordIdInput) {
+      function filterUserSuggestions() {
+        const q = blockUserSearch?.value.trim().toLowerCase() || '';
+        let matched = 0;
+        userSuggestItems.forEach(item => {
+          const el = item as HTMLElement;
+          const s = el.getAttribute('data-search') || '';
+          const match = !q || s.includes(q);
+          el.hidden = !match;
+          el.style.display = match ? 'flex' : 'none';
+          if (match) matched++;
+        });
+        if (blockUserSuggestions) {
+          blockUserSuggestions.hidden = matched === 0;
+        }
+      }
+
+      blockUserSearch.addEventListener('focus', () => {
+        if (blockUserSuggestions) blockUserSuggestions.hidden = false;
+        filterUserSuggestions();
+      });
+
+      blockUserSearch.addEventListener('input', () => {
+        if (blockUserSuggestions) blockUserSuggestions.hidden = false;
+        filterUserSuggestions();
+      });
+
+      userSuggestItems.forEach(item => {
+        item.addEventListener('click', () => {
+          const id = item.getAttribute('data-user-id');
+          const name = item.getAttribute('data-username');
+          if (id) {
+            blockDiscordIdInput.value = id;
+            if (blockUserSearch) blockUserSearch.value = `${name} (${id})`;
+            if (blockUserSuggestions) blockUserSuggestions.hidden = true;
+          }
+        });
+      });
+
+      document.addEventListener('click', (e) => {
+        if (
+          blockUserSuggestions &&
+          !blockUserSuggestions.contains(e.target as Node) &&
+          e.target !== blockUserSearch
+        ) {
+          blockUserSuggestions.hidden = true;
+        }
+      });
+    }
+
+    // 6. Add Label Drawer & Live Preview
+    const toggleLabelBtn = document.getElementById('toggle-add-label-btn');
+    const closeLabelBtn = document.getElementById('close-add-label-btn');
+    const labelDrawer = document.getElementById('add-label-drawer');
+    const labelNameInput = document.getElementById('label_name') as HTMLInputElement | null;
+    const labelColorInput = document.getElementById('label_color') as HTMLInputElement | null;
+    const labelLivePreview = document.getElementById('label-live-preview');
+
+    function toggleLabelDrawer(show?: boolean) {
+      if (!labelDrawer || !toggleLabelBtn) return;
+      const isShowing = show !== undefined ? show : labelDrawer.hidden;
+      labelDrawer.hidden = !isShowing;
+      toggleLabelBtn.classList.toggle('is-open', isShowing);
+      toggleLabelBtn.setAttribute('aria-expanded', isShowing ? 'true' : 'false');
+      if (isShowing && labelNameInput) {
+        labelNameInput.focus();
+      }
+    }
+
+    if (toggleLabelBtn) toggleLabelBtn.addEventListener('click', () => toggleLabelDrawer());
+    if (closeLabelBtn) closeLabelBtn.addEventListener('click', () => toggleLabelDrawer(false));
+
+    function updateLabelPreview() {
+      if (!labelLivePreview) return;
+      const name = labelNameInput?.value?.trim() || 'preview';
+      const color = labelColorInput?.value || '#6366f1';
+      labelLivePreview.textContent = name;
+      labelLivePreview.style.background = `${color}22`;
+      labelLivePreview.style.borderColor = color;
+      labelLivePreview.style.color = color;
+    }
+
+    if (labelNameInput) labelNameInput.addEventListener('input', updateLabelPreview);
+    if (labelColorInput) labelColorInput.addEventListener('input', updateLabelPreview);
+
+    // 7. View as Role Dropdown
     const viewAsBtn = document.getElementById('view-as-toggle-btn');
     const viewAsMenu = document.getElementById('view-as-menu');
 
@@ -1288,7 +1550,7 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
       });
 
       document.addEventListener('click', (e) => {
-        if (!viewAsMenu.contains(e.target) && e.target !== viewAsBtn) {
+        if (!viewAsMenu.contains(e.target as Node) && e.target !== viewAsBtn) {
           viewAsMenu.hidden = true;
           viewAsBtn.setAttribute('aria-expanded', 'false');
         }
@@ -1622,8 +1884,82 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     background: var(--surface-raised);
     transition: border-color 0.15s ease;
   }
+  .staff-card[hidden] {
+    display: none !important;
+  }
   .staff-card:hover {
     border-color: var(--border-default);
+  }
+
+  /* User Autocomplete Drawer Items */
+  .user-autocomplete-list {
+    display: flex;
+    flex-direction: column;
+    max-block-size: 200px;
+    overflow-y: auto;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    margin-block-end: var(--space-3);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  }
+  .user-autocomplete-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: none;
+    border-bottom: 1px solid var(--border-subtle);
+    background: none;
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s ease;
+    inline-size: 100%;
+  }
+  .user-autocomplete-item:last-child {
+    border-bottom: none;
+  }
+  .user-autocomplete-item:hover {
+    background: var(--surface-hover);
+  }
+  .user-item-avatar {
+    inline-size: 24px;
+    block-size: 24px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--surface-raised);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .user-item-avatar img {
+    inline-size: 100%;
+    block-size: 100%;
+    object-fit: cover;
+  }
+  .user-item-name {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+  }
+  .user-item-id {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    margin-inline-start: auto;
+  }
+  .danger-btn {
+    background: var(--dead);
+    color: #fff;
+    border-color: var(--dead);
+  }
+  .danger-btn:hover {
+    filter: brightness(1.15);
+  }
+  .danger-box {
+    border-color: rgba(239, 68, 68, 0.35);
   }
   .staff-card-header {
     display: flex;

@@ -5,8 +5,8 @@ import { reports, votes, users } from '../../lib/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { avatarUrl } from '../../lib/auth';
 import { relativeAge, kindLabel, categoryLabel, platformLabel, statusLabel } from '../../lib/format';
-import { computeBadges, type UserStats } from '../../lib/badges';
-import { levelOf } from '../../lib/staff';
+import { computeBadges, type UserStats, ALL_BADGES } from '../../lib/badges';
+import { levelOf, LEVEL_LABELS } from '../../lib/staff';
 
 export const prerender = false;
 
@@ -46,7 +46,14 @@ const totalVotesReceived = userReports.reduce((sum, r) => sum + r.votes, 0);
 const hasExtensionFix = userReports.some((r) => r.kind === 'extension' && r.status === 'fixed');
 const hasTopSuggestion = userReports.some((r) => r.kind === 'suggestion' && r.votes >= 20);
 const staffLevel = await levelOf(targetId);
-const isStaff = staffLevel !== 'none';
+const isStaff = staffLevel !== 'user';
+
+// Sub-counts
+const bugReportsCount = userReports.filter((r) => r.kind === 'bug').length;
+const suggestionReportsCount = userReports.filter((r) => r.kind === 'suggestion').length;
+const extensionReportsCount = userReports.filter((r) => r.kind === 'extension').length;
+const fixRate = reportsCount > 0 ? Math.round((fixedCount / reportsCount) * 100) : 0;
+const avgVotes = reportsCount > 0 ? (totalVotesReceived / reportsCount).toFixed(1) : '0';
 
 const stats: UserStats = {
   reportsCount,
@@ -59,308 +66,840 @@ const stats: UserStats = {
 };
 
 const badges = computeBadges(stats);
+const earnedBadgeIds = new Set(badges.map((b) => b.id));
+const allBadgesList = Object.values(ALL_BADGES);
+
 const isDiscordLinked = userRow.discordLinked !== false && !userRow.discordId.startsWith('tg:');
 const isTelegramLinked = !!userRow.telegramId;
 const avatar =
   userRow.telegramPhotoUrl ||
-  avatarUrl({ id: userRow.discordId, avatarHash: userRow.avatarHash }, 80);
+  avatarUrl({ id: userRow.discordId, avatarHash: userRow.avatarHash }, 128);
+
+const initial = (userRow.username || '?')[0].toUpperCase();
 
 Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, stale-while-revalidate=300');
 ---
 
-<Base title={`${userRow.username} · Contributor Profile`} narrow>
-  <header class="profile-head">
-    <div class="avatar-wrap">
-      {avatar ? (
-        <img class="avatar" src={avatar} alt="" width="80" height="80" />
-      ) : (
-        <div class="avatar avatar-blank" />
-      )}
-    </div>
-    <div class="profile-meta">
-      <div class="profile-name-row">
-        <h1 class="username">{userRow.username}</h1>
-        {isStaff && <span class="staff-tag">{staffLevel}</span>}
-      </div>
-      <div class="platform-chips">
-        {isDiscordLinked && (
-          <a
-            href={`https://discord.com/users/${userRow.discordUserId || userRow.discordId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="chip chip-discord"
-            title="Open Discord profile"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
-            </svg>
-            <span>@{userRow.username}</span>
-          </a>
+<Base title={`${userRow.username} · Contributor Profile`}>
+  <!-- Contributor Profile Hero Header -->
+  <header class="profile-hero">
+    <div class="hero-glow" aria-hidden="true"></div>
+    <div class="hero-body">
+      <div class="avatar-container">
+        {avatar ? (
+          <img class="hero-avatar" src={avatar} alt={userRow.username} width="88" height="88" />
+        ) : (
+          <div class="hero-avatar hero-avatar-fallback">{initial}</div>
         )}
-        {isTelegramLinked && (
-          <a
-            href={userRow.telegramUsername ? `https://t.me/${userRow.telegramUsername}` : undefined}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="chip chip-telegram"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+        {isStaff && (
+          <div class="avatar-staff-indicator" title={`Verified ${LEVEL_LABELS[staffLevel]}`}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z" />
             </svg>
-            <span>{userRow.telegramUsername ? `@${userRow.telegramUsername}` : 'Telegram'}</span>
-          </a>
+          </div>
         )}
       </div>
-      <p class="account-age">Member on AnymeX Desk · Joined {relativeAge(userRow.firstSeen)} ago</p>
+
+      <div class="hero-info">
+        <div class="hero-title-row">
+          <h1 class="hero-username">{userRow.username}</h1>
+          {isStaff ? (
+            <span class={`staff-pill staff-${staffLevel}`}>
+              {LEVEL_LABELS[staffLevel]}
+            </span>
+          ) : (
+            <span class="staff-pill staff-community">Contributor</span>
+          )}
+        </div>
+
+        <div class="hero-meta-row">
+          {isDiscordLinked && (
+            <a
+              href={`https://discord.com/users/${userRow.discordUserId || userRow.discordId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="profile-link-chip discord-chip"
+              title="Open Discord Profile"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+              </svg>
+              <span>@{userRow.username}</span>
+            </a>
+          )}
+          {isTelegramLinked && (
+            <a
+              href={userRow.telegramUsername ? `https://t.me/${userRow.telegramUsername}` : undefined}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="profile-link-chip telegram-chip"
+              title="Open Telegram Profile"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+              </svg>
+              <span>{userRow.telegramUsername ? `@${userRow.telegramUsername}` : 'Telegram'}</span>
+            </a>
+          )}
+          <span class="hero-tenure">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            <span>Joined {relativeAge(userRow.firstSeen)} ago</span>
+          </span>
+        </div>
+      </div>
     </div>
   </header>
 
-  {/* ── Badges & Achievements ── */}
-  <section class="block">
-    <h2 class="section-title">Badges &amp; Achievements ({badges.length})</h2>
-    {badges.length === 0 ? (
-      <p class="empty-line">No badges earned yet. Filing reports and voting helps earn contributor achievements.</p>
-    ) : (
-      <div class="badges-grid">
-        {badges.map((b) => (
-          <div class="badge-card" style={`--badge-color: ${b.color};`}>
-            <div class="badge-icon-box">
-              {b.iconType === 'bug' && (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>
-                </svg>
-              )}
-              {b.iconType === 'idea' && (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>
-                </svg>
-              )}
-              {b.iconType === 'puzzle' && (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M12 2v6"/><path d="m19 13-4-4"/><path d="M10 2v6"/><path d="m5 13 4-4"/><path d="M7 16a6 6 0 0 0 12 0l-2-2H9l-2 2z"/><path d="M12 22v-4"/>
-                </svg>
-              )}
-              {b.iconType === 'flame' && (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
-                </svg>
-              )}
-              {b.iconType === 'shield' && (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>
-                </svg>
-              )}
-            </div>
-            <div class="badge-info">
-              <span class="badge-name">{b.name}</span>
-              <span class="badge-desc">{b.description}</span>
-            </div>
-          </div>
-        ))}
+  <!-- 4 High-Impact KPI Metric Cards -->
+  <section class="kpi-grid" aria-label="Contribution metrics">
+    <div class="kpi-card kpi-blue">
+      <div class="kpi-header">
+        <span class="kpi-label">Reports Filed</span>
+        <span class="kpi-icon-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+          </svg>
+        </span>
       </div>
-    )}
-  </section>
+      <div class="kpi-value num">{reportsCount}</div>
+      <div class="kpi-sub">Total issues &amp; ideas</div>
+    </div>
 
-  {/* ── Activity Metrics ── */}
-  <section class="block">
-    <h2 class="section-title">Contribution Metrics</h2>
-    <div class="stats-row">
-      <div class="stat-pill">
-        <span class="stat-n">{reportsCount}</span>
-        <span class="stat-l">Reports Filed</span>
+    <div class="kpi-card kpi-green">
+      <div class="kpi-header">
+        <span class="kpi-label">Bugs Resolved</span>
+        <span class="kpi-icon-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </span>
       </div>
-      <div class="stat-pill">
-        <span class="stat-n">{fixedCount}</span>
-        <span class="stat-l">Bugs Resolved</span>
+      <div class="kpi-value num">{fixedCount}</div>
+      <div class="kpi-sub">{fixRate}% resolution rate</div>
+    </div>
+
+    <div class="kpi-card kpi-amber">
+      <div class="kpi-header">
+        <span class="kpi-label">Votes Received</span>
+        <span class="kpi-icon-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          </svg>
+        </span>
       </div>
-      <div class="stat-pill">
-        <span class="stat-n">{totalVotesReceived}</span>
-        <span class="stat-l">Votes Received</span>
+      <div class="kpi-value num">{totalVotesReceived}</div>
+      <div class="kpi-sub">~{avgVotes} votes per report</div>
+    </div>
+
+    <div class="kpi-card kpi-purple">
+      <div class="kpi-header">
+        <span class="kpi-label">Votes Cast</span>
+        <span class="kpi-icon-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 19V5" />
+            <polyline points="5 12 12 5 19 12" />
+          </svg>
+        </span>
       </div>
-      <div class="stat-pill">
-        <span class="stat-n">{votesGivenCount}</span>
-        <span class="stat-l">Votes Cast</span>
-      </div>
+      <div class="kpi-value num">{votesGivenCount}</div>
+      <div class="kpi-sub">Community engagement</div>
     </div>
   </section>
 
-  {/* ── Reports Filed by User ── */}
-  <section class="block">
-    <h2 class="section-title">Reports Filed ({userReports.length})</h2>
-    {userReports.length === 0 ? (
-      <p class="empty-line">No reports filed yet.</p>
-    ) : (
-      <ol class="report-list">
-        {userReports.map((r) => (
-          <li class="report-item">
-            <div class="report-main">
-              <a href={`/report/${r.id}`} class="report-title">
-                #{r.id} {r.title}
-              </a>
-              <div class="report-meta">
-                <span class="tag">{kindLabel(r.kind)}</span>
-                <span class="tag">{categoryLabel(r.category)}</span>
-                <span class="tag">{platformLabel(r.platform)}</span>
-                <span class="report-status tag">{statusLabel(r.status)}</span>
-                <span class="report-age">{relativeAge(r.createdAt)} ago</span>
+  <!-- Interactive Profile Tabs Navigation -->
+  <nav class="profile-tabs-nav" aria-label="Profile sections">
+    <button type="button" class="profile-tab-btn active" data-tab-target="reports" role="tab" aria-selected="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+      </svg>
+      <span>Reports Filed</span>
+      <span class="tab-count">{userReports.length}</span>
+    </button>
+
+    <button type="button" class="profile-tab-btn" data-tab-target="badges" role="tab" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="8" r="7" />
+        <polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88" />
+      </svg>
+      <span>Badges &amp; Achievements</span>
+      <span class="tab-count">{badges.length}</span>
+    </button>
+
+    <button type="button" class="profile-tab-btn" data-tab-target="overview" role="tab" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="18" y1="20" x2="18" y2="10" />
+        <line x1="12" y1="20" x2="12" y2="4" />
+        <line x1="6" y1="20" x2="6" y2="14" />
+      </svg>
+      <span>Overview &amp; Stats</span>
+    </button>
+  </nav>
+
+  <!-- TAB 1: REPORTS FILED -->
+  <div class="profile-tab-pane active" id="pane-reports" data-tab-pane="reports">
+    <div class="tab-pane-content">
+      <div class="reports-toolbar">
+        <div class="reports-kind-filters" role="group" aria-label="Filter reports by kind">
+          <button type="button" class="report-filter-chip active" data-kind-filter="all">
+            All ({userReports.length})
+          </button>
+          <button type="button" class="report-filter-chip" data-kind-filter="bug">
+            Bugs ({bugReportsCount})
+          </button>
+          <button type="button" class="report-filter-chip" data-kind-filter="suggestion">
+            Suggestions ({suggestionReportsCount})
+          </button>
+          <button type="button" class="report-filter-chip" data-kind-filter="extension">
+            Extensions ({extensionReportsCount})
+          </button>
+        </div>
+
+        <div class="report-search-wrap">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="search"
+            id="user-reports-search"
+            class="report-search-input"
+            placeholder="Search reports..."
+            autocomplete="off"
+          />
+        </div>
+      </div>
+
+      {userReports.length === 0 ? (
+        <div class="empty-state-card">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          <h3>No reports filed yet</h3>
+          <p>This contributor hasn't submitted any bug reports or suggestions so far.</p>
+        </div>
+      ) : (
+        <>
+          <p class="empty-line" id="reports-empty-search" hidden style="display: none; padding: var(--space-4); text-align: center;">
+            No reports match the current filter or search criteria.
+          </p>
+          <ol class="user-report-list" id="user-reports-list">
+            {userReports.map((r) => (
+              <li
+                class="user-report-card"
+                data-kind={r.kind}
+                data-search={`${r.title} ${r.category} ${r.platform} ${r.status}`.toLowerCase()}
+              >
+                <div class="user-report-main">
+                  <div class="report-header-line">
+                    <span class={`kind-tag kind-${r.kind}`}>{kindLabel(r.kind)}</span>
+                    <a href={`/report/${r.id}`} class="user-report-title">
+                      <span class="report-num">#{r.id}</span> {r.title}
+                    </a>
+                  </div>
+                  <div class="user-report-tags">
+                    <span class="tag-meta">{categoryLabel(r.category)}</span>
+                    <span class="tag-meta">{platformLabel(r.platform)}</span>
+                    <span class={`status-badge status-${r.status}`}>{statusLabel(r.status)}</span>
+                    <span class="report-time">Filed {relativeAge(r.createdAt)} ago</span>
+                    {r.commentCount > 0 && (
+                      <span class="report-comment-count" title={`${r.commentCount} comments`}>
+                        💬 {r.commentCount}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div class="user-report-vote-box" title={`${r.votes} upvotes`}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 4l-8 8h6v8h4v-8h6z" />
+                  </svg>
+                  <span class="num">{r.votes}</span>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+    </div>
+  </div>
+
+  <!-- TAB 2: BADGES & ACHIEVEMENTS -->
+  <div class="profile-tab-pane" id="pane-badges" data-tab-pane="badges" hidden>
+    <div class="tab-pane-content">
+      <div class="badges-showcase-header">
+        <div>
+          <h3>Contributor Achievements</h3>
+          <p class="section-subtext">Badges are awarded automatically based on report activity, helpfulness, and community support.</p>
+        </div>
+        <div class="badges-progress-pill">
+          <span>{badges.length} of {allBadgesList.length} Unlocked</span>
+        </div>
+      </div>
+
+      <div class="badges-grid">
+        {allBadgesList.map((b) => {
+          const unlocked = earnedBadgeIds.has(b.id);
+          return (
+            <div class:list={['badge-card', { 'is-unlocked': unlocked, 'is-locked': !unlocked }]} style={`--badge-color: ${b.color};`}>
+              <div class="badge-icon-box">
+                {b.iconType === 'bug' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>
+                  </svg>
+                )}
+                {b.iconType === 'idea' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>
+                  </svg>
+                )}
+                {b.iconType === 'puzzle' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 2v6"/><path d="m19 13-4-4"/><path d="M10 2v6"/><path d="m5 13 4-4"/><path d="M7 16a6 6 0 0 0 12 0l-2-2H9l-2 2z"/><path d="M12 22v-4"/>
+                  </svg>
+                )}
+                {b.iconType === 'flame' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
+                  </svg>
+                )}
+                {b.iconType === 'shield' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>
+                  </svg>
+                )}
+              </div>
+              <div class="badge-info">
+                <div class="badge-title-row">
+                  <span class="badge-name">{b.name}</span>
+                  {unlocked ? (
+                    <span class="badge-status-pill unlocked">Unlocked</span>
+                  ) : (
+                    <span class="badge-status-pill locked">Locked</span>
+                  )}
+                </div>
+                <p class="badge-desc">{b.description}</p>
               </div>
             </div>
-            <div class="report-votes num">▲ {r.votes}</div>
-          </li>
-        ))}
-      </ol>
-    )}
-  </section>
+          );
+        })}
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 3: OVERVIEW & STATS -->
+  <div class="profile-tab-pane" id="pane-overview" data-tab-pane="overview" hidden>
+    <div class="tab-pane-content">
+      <div class="overview-grid">
+        <!-- Distribution Panel -->
+        <div class="overview-panel">
+          <h3>Submission Breakdown</h3>
+          <p class="section-subtext">Distribution of contributions across tracker categories.</p>
+          <div class="distribution-bars">
+            <div class="dist-row">
+              <span class="dist-label">Bugs ({bugReportsCount})</span>
+              <div class="dist-bar-track">
+                <div
+                  class="dist-bar-fill bug"
+                  style={`width: ${reportsCount > 0 ? (bugReportsCount / reportsCount) * 100 : 0}%`}
+                ></div>
+              </div>
+              <span class="dist-pct num">
+                {reportsCount > 0 ? Math.round((bugReportsCount / reportsCount) * 100) : 0}%
+              </span>
+            </div>
+
+            <div class="dist-row">
+              <span class="dist-label">Suggestions ({suggestionReportsCount})</span>
+              <div class="dist-bar-track">
+                <div
+                  class="dist-bar-fill suggestion"
+                  style={`width: ${reportsCount > 0 ? (suggestionReportsCount / reportsCount) * 100 : 0}%`}
+                ></div>
+              </div>
+              <span class="dist-pct num">
+                {reportsCount > 0 ? Math.round((suggestionReportsCount / reportsCount) * 100) : 0}%
+              </span>
+            </div>
+
+            <div class="dist-row">
+              <span class="dist-label">Extensions ({extensionReportsCount})</span>
+              <div class="dist-bar-track">
+                <div
+                  class="dist-bar-fill extension"
+                  style={`width: ${reportsCount > 0 ? (extensionReportsCount / reportsCount) * 100 : 0}%`}
+                ></div>
+              </div>
+              <span class="dist-pct num">
+                {reportsCount > 0 ? Math.round((extensionReportsCount / reportsCount) * 100) : 0}%
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Resolution & Quality Panel -->
+        <div class="overview-panel">
+          <h3>Resolution &amp; Quality</h3>
+          <p class="section-subtext">Key metrics demonstrating the impact of filed reports.</p>
+          <div class="metrics-summary-list">
+            <div class="metric-summary-row">
+              <div class="metric-summary-info">
+                <span class="metric-title">Resolution Rate</span>
+                <span class="metric-desc">Percentage of filed reports marked as fixed</span>
+              </div>
+              <span class="metric-highlight green num">{fixRate}%</span>
+            </div>
+
+            <div class="metric-summary-row">
+              <div class="metric-summary-info">
+                <span class="metric-title">Total Community Upvotes</span>
+                <span class="metric-desc">Total endorsement received on reports</span>
+              </div>
+              <span class="metric-highlight amber num">{totalVotesReceived}</span>
+            </div>
+
+            <div class="metric-summary-row">
+              <div class="metric-summary-info">
+                <span class="metric-title">Average Vote Impact</span>
+                <span class="metric-desc">Average upvotes generated per report</span>
+              </div>
+              <span class="metric-highlight blue num">{avgVotes}</span>
+            </div>
+
+            <div class="metric-summary-row">
+              <div class="metric-summary-info">
+                <span class="metric-title">Community Support Given</span>
+                <span class="metric-desc">Reports upvoted to help prioritize bugs</span>
+              </div>
+              <span class="metric-highlight purple num">{votesGivenCount}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </Base>
 
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    // 1. Tab Switching
+    const tabBtns = document.querySelectorAll('.profile-tab-btn');
+    const tabPanes = document.querySelectorAll('.profile-tab-pane');
+
+    function switchTab(tabId: string) {
+      tabBtns.forEach(btn => {
+        const isTarget = btn.getAttribute('data-tab-target') === tabId;
+        btn.classList.toggle('active', isTarget);
+        btn.setAttribute('aria-selected', isTarget ? 'true' : 'false');
+      });
+
+      tabPanes.forEach(pane => {
+        const isTarget = pane.getAttribute('data-tab-pane') === tabId;
+        pane.classList.toggle('active', isTarget);
+        pane.hidden = !isTarget;
+      });
+
+      if (history.replaceState) {
+        history.replaceState(null, '', `#${tabId}`);
+      }
+    }
+
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-tab-target');
+        if (target) switchTab(target);
+      });
+    });
+
+    // Check URL Hash on load
+    const hash = window.location.hash.replace('#', '');
+    if (hash && ['reports', 'badges', 'overview'].includes(hash)) {
+      switchTab(hash);
+    }
+
+    // 2. Report Filtering & Search
+    const searchInput = document.getElementById('user-reports-search') as HTMLInputElement | null;
+    const kindChips = document.querySelectorAll('[data-kind-filter]');
+    const reportCards = document.querySelectorAll('#user-reports-list .user-report-card');
+    const emptySearch = document.getElementById('reports-empty-search');
+    let currentKind = 'all';
+
+    function applyReportFilters() {
+      const q = searchInput?.value.trim().toLowerCase() || '';
+      let visible = 0;
+
+      reportCards.forEach(card => {
+        const el = card as HTMLElement;
+        const kind = el.getAttribute('data-kind');
+        const text = el.getAttribute('data-search') || '';
+
+        const matchKind = currentKind === 'all' || kind === currentKind;
+        const matchSearch = !q || text.includes(q);
+        const isVisible = matchKind && matchSearch;
+
+        el.hidden = !isVisible;
+        el.style.display = isVisible ? '' : 'none';
+        if (isVisible) visible++;
+      });
+
+      if (emptySearch) {
+        emptySearch.hidden = visible > 0;
+        emptySearch.style.display = visible > 0 ? 'none' : 'block';
+      }
+    }
+
+    if (searchInput) {
+      searchInput.addEventListener('input', applyReportFilters);
+    }
+
+    kindChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        kindChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        currentKind = chip.getAttribute('data-kind-filter') || 'all';
+        applyReportFilters();
+      });
+    });
+  });
+</script>
+
 <style>
-  .profile-head {
+  /* ── Hero Profile Card ── */
+  .profile-hero {
+    position: relative;
+    padding: var(--space-6);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    overflow: hidden;
+    margin-block-end: var(--space-6);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  }
+  .hero-glow {
+    position: absolute;
+    top: -50px;
+    right: -50px;
+    width: 250px;
+    height: 250px;
+    background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(99, 102, 241, 0) 70%);
+    pointer-events: none;
+  }
+  .hero-body {
     display: flex;
     align-items: center;
-    gap: var(--space-4);
-    padding-block-end: var(--space-5);
-    border-block-end: 1px solid var(--border-subtle);
+    gap: var(--space-5);
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
   }
-  .avatar-wrap { flex-shrink: 0; }
-  .avatar {
-    width: 80px;
-    height: 80px;
-    border-radius: var(--radius-full);
-    border: 2px solid var(--border-default);
+  .avatar-container {
+    position: relative;
+    flex-shrink: 0;
+  }
+  .hero-avatar {
+    inline-size: 88px;
+    block-size: 88px;
+    border-radius: 9999px;
+    border: 3px solid var(--border-default);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    object-fit: cover;
     display: block;
   }
-  .avatar-blank { background: var(--surface-raised); }
-  .profile-meta { display: flex; flex-direction: column; gap: 4px; }
-  .profile-name-row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-  .username { font-size: var(--text-xl); font-weight: var(--weight-bold); }
-  .staff-tag {
-    font-size: 0.72rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 2px 6px;
-    border-radius: var(--radius-sm);
-    background: rgba(88, 101, 242, 0.2);
-    color: #5865F2;
-    border: 1px solid rgba(88, 101, 242, 0.4);
-  }
-  .platform-chips {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin-block: 2px;
-  }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 0.78rem;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 9999px;
-    text-decoration: none;
-  }
-  .chip-discord {
-    background: rgba(88, 101, 242, 0.15);
-    color: #8ea1e1;
-    border: 1px solid rgba(88, 101, 242, 0.3);
-    transition: filter 0.15s ease;
-  }
-  .chip-discord:hover {
-    filter: brightness(1.2);
-    text-decoration: underline;
-  }
-  .chip-telegram {
-    background: rgba(36, 161, 222, 0.15);
-    color: #55b7ea;
-    border: 1px solid rgba(36, 161, 222, 0.3);
-    transition: filter 0.15s ease;
-  }
-  .chip-telegram:hover {
-    filter: brightness(1.2);
-    text-decoration: underline;
-  }
-  .account-age { font-size: var(--text-xs); color: var(--text-tertiary); margin-block-start: 2px; }
-
-  .block { margin-block-start: var(--space-6); }
-  .section-title {
-    font-size: var(--text-md);
-    font-weight: var(--weight-semi);
-    margin-block-end: var(--space-3);
-  }
-
-  /* ── Badges ── */
-  .badges-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: var(--space-3);
-  }
-  .badge-card {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-3);
-    padding: var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-inline-start: 3px solid var(--badge-color);
-    border-radius: var(--radius-md);
-    background: var(--surface-raised);
-  }
-  .badge-icon-box {
+  .hero-avatar-fallback {
+    background: var(--surface-sunken);
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
-    border-radius: var(--radius-md);
-    background: color-mix(in oklab, var(--badge-color) 14%, transparent);
-    color: var(--badge-color);
-    border: 1px solid color-mix(in oklab, var(--badge-color) 28%, transparent);
-    flex-shrink: 0;
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-bold);
+    color: var(--text-secondary);
   }
-  .badge-info { display: flex; flex-direction: column; gap: 2px; }
-  .badge-name {
-    font-size: var(--text-sm);
-    font-weight: var(--weight-semi);
-    color: var(--text-primary);
+  .avatar-staff-indicator {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    background: #6366f1;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid var(--surface-raised);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
   }
-  .badge-desc {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    line-height: var(--leading-snug);
-  }
-
-  /* ── Stats Row ── */
-  .stats-row {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: var(--space-3);
-  }
-  .stat-pill {
-    padding: var(--space-3);
-    background: var(--surface-raised);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+  .hero-info {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-2);
+    min-inline-size: 0;
   }
-  .stat-n {
-    font-family: var(--font-data);
-    font-size: var(--text-lg);
+  .hero-title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .hero-username {
+    font-size: var(--text-2xl);
     font-weight: var(--weight-bold);
-    color: var(--signal-ink);
+    letter-spacing: var(--track-tight);
+    color: var(--text-primary);
   }
-  .stat-l {
+  .staff-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semi);
+    text-transform: uppercase;
+    letter-spacing: var(--track-wider);
+  }
+  .staff-owner {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+  }
+  .staff-admin {
+    background: rgba(99, 102, 241, 0.15);
+    color: #818cf8;
+    border: 1px solid rgba(99, 102, 241, 0.4);
+  }
+  .staff-mod {
+    background: rgba(6, 182, 212, 0.15);
+    color: #22d3ee;
+    border: 1px solid rgba(6, 182, 212, 0.4);
+  }
+  .staff-community {
+    background: var(--surface-sunken);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-subtle);
+  }
+  .hero-meta-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .profile-link-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 9999px;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    text-decoration: none;
+    transition: all 0.15s ease;
+  }
+  .discord-chip {
+    background: rgba(88, 101, 242, 0.12);
+    color: #8ea1e1;
+    border: 1px solid rgba(88, 101, 242, 0.3);
+  }
+  .discord-chip:hover {
+    background: rgba(88, 101, 242, 0.22);
+    color: #a5b4fc;
+  }
+  .telegram-chip {
+    background: rgba(36, 161, 222, 0.12);
+    color: #55b7ea;
+    border: 1px solid rgba(36, 161, 222, 0.3);
+  }
+  .telegram-chip:hover {
+    background: rgba(36, 161, 222, 0.22);
+    color: #7dd3fc;
+  }
+  .hero-tenure {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+  }
+
+  /* ── 4 KPI Metric Cards ── */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-4);
+    margin-block-end: var(--space-6);
+  }
+  .kpi-card {
+    padding: var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    transition: transform 0.15s ease, border-color 0.15s ease;
+  }
+  .kpi-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-default);
+  }
+  .kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+  .kpi-blue::before { background: #6366f1; }
+  .kpi-green::before { background: #10b981; }
+  .kpi-amber::before { background: #f59e0b; }
+  .kpi-purple::before { background: #8b5cf6; }
+
+  .kpi-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .kpi-label {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semi);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: var(--track-wider);
+  }
+  .kpi-icon-badge {
+    color: var(--text-muted);
+  }
+  .kpi-value {
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-bold);
+    color: var(--text-primary);
+    line-height: 1.1;
+    margin-block: 2px;
+  }
+  .kpi-sub {
     font-size: var(--text-xs);
     color: var(--text-muted);
   }
 
-  /* ── Reports list ── */
-  .report-list {
+  /* ── Tabbed Interface ── */
+  .profile-tabs-nav {
+    display: flex;
+    gap: var(--space-2);
+    border-block-end: 1px solid var(--border-subtle);
+    margin-block-end: var(--space-5);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .profile-tabs-nav::-webkit-scrollbar { display: none; }
+  .profile-tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background: none;
+    border: none;
+    border-block-end: 2px solid transparent;
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+  .profile-tab-btn:hover {
+    color: var(--text-primary);
+  }
+  .profile-tab-btn.active {
+    color: var(--signal-ink);
+    border-block-end-color: var(--signal);
+    font-weight: var(--weight-semi);
+  }
+  .tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-family: var(--font-data);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+  }
+  .profile-tab-pane {
+    display: none;
+  }
+  .profile-tab-pane.active {
+    display: block;
+  }
+
+  /* ── Reports List View ── */
+  .reports-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-block-end: var(--space-4);
+  }
+  .reports-kind-filters {
+    display: flex;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+  .report-filter-chip {
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+  .report-filter-chip:hover {
+    color: var(--text-primary);
+    border-color: var(--border-default);
+  }
+  .report-filter-chip.active {
+    background: var(--surface-hover);
+    border-color: var(--signal);
+    color: var(--text-primary);
+    font-weight: var(--weight-medium);
+  }
+  .report-search-wrap {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 4px var(--space-3);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+    min-inline-size: 220px;
+    max-inline-size: 320px;
+    flex: 1;
+  }
+  .report-search-wrap svg {
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+  .report-search-input {
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: var(--text-xs);
+    inline-size: 100%;
+    outline: none;
+  }
+  .user-report-list {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
@@ -368,39 +907,364 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, st
     padding: 0;
     list-style: none;
   }
-  .report-item {
+  .user-report-card {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--space-3);
-    padding: var(--space-3);
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
     background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
+    transition: border-color 0.15s ease;
   }
-  .report-main { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
-  .report-title {
+  .user-report-card:hover {
+    border-color: var(--border-default);
+  }
+  .user-report-main {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+  .report-header-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .kind-tag {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    letter-spacing: 0.05em;
+  }
+  .kind-bug {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+  .kind-suggestion {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+  .kind-extension {
+    background: rgba(99, 102, 241, 0.15);
+    color: #818cf8;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+  }
+  .user-report-title {
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
     color: var(--text-primary);
     text-decoration: none;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
-  .report-title:hover { color: var(--signal-ink); text-decoration: underline; }
-  .report-meta { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
-  .report-status { border-color: var(--border-strong); }
-  .report-age { font-size: var(--text-xs); color: var(--text-muted); }
-  .report-votes {
-    font-size: var(--text-sm);
-    font-weight: var(--weight-semi);
+  .user-report-title:hover {
+    color: var(--signal-ink);
+    text-decoration: underline;
+  }
+  .report-num {
+    color: var(--text-muted);
+    font-family: var(--font-data);
+  }
+  .user-report-tags {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    font-size: var(--text-xs);
+  }
+  .tag-meta {
+    color: var(--text-secondary);
+    background: var(--surface-sunken);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+  }
+  .status-badge {
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    font-weight: var(--weight-medium);
+    border: 1px solid var(--border-subtle);
+  }
+  .status-fixed {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.3);
+  }
+  .status-in_progress {
+    background: rgba(6, 182, 212, 0.15);
+    color: #22d3ee;
+    border-color: rgba(6, 182, 212, 0.3);
+  }
+  .status-open {
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+  }
+  .report-time {
+    color: var(--text-muted);
+  }
+  .report-comment-count {
+    color: var(--text-tertiary);
+    font-size: 0.75rem;
+  }
+  .user-report-vote-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 10px;
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
     color: var(--signal-ink);
     flex-shrink: 0;
+    min-inline-size: 44px;
   }
-  .empty-line { color: var(--text-muted); font-size: var(--text-sm); }
+  .user-report-vote-box svg {
+    margin-block-end: 1px;
+  }
 
-  @media (max-width: 640px) {
-    .stats-row { grid-template-columns: 1fr 1fr; }
+  /* ── Badges Tab ── */
+  .badges-showcase-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-4);
+    margin-block-end: var(--space-4);
+    flex-wrap: wrap;
+  }
+  .badges-showcase-header h3 {
+    font-size: var(--text-md);
+    font-weight: var(--weight-semi);
+    margin-block-end: 2px;
+  }
+  .section-subtext {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+  }
+  .badges-progress-pill {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
+  }
+  .badges-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--space-3);
+  }
+  .badge-card {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border-subtle);
+    border-inline-start: 3px solid var(--badge-color);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    transition: all 0.15s ease;
+  }
+  .badge-card.is-locked {
+    opacity: 0.55;
+    filter: grayscale(0.6);
+    border-inline-start-color: var(--border-default);
+  }
+  .badge-icon-box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-md);
+    background: color-mix(in oklab, var(--badge-color) 14%, transparent);
+    color: var(--badge-color);
+    border: 1px solid color-mix(in oklab, var(--badge-color) 28%, transparent);
+    flex-shrink: 0;
+  }
+  .badge-card.is-locked .badge-icon-box {
+    background: var(--surface-sunken);
+    color: var(--text-muted);
+    border-color: var(--border-subtle);
+  }
+  .badge-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+  }
+  .badge-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .badge-name {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semi);
+    color: var(--text-primary);
+  }
+  .badge-status-pill {
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+  }
+  .badge-status-pill.unlocked {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+  }
+  .badge-status-pill.locked {
+    background: var(--surface-sunken);
+    color: var(--text-muted);
+  }
+  .badge-desc {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    line-height: var(--leading-snug);
+  }
+
+  /* ── Overview & Stats Tab ── */
+  .overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: var(--space-4);
+  }
+  .overview-panel {
+    padding: var(--space-5);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
+  .overview-panel h3 {
+    font-size: var(--text-md);
+    margin-block-end: 2px;
+  }
+  .distribution-bars {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-block-start: var(--space-4);
+  }
+  .dist-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-size: var(--text-xs);
+  }
+  .dist-label {
+    inline-size: 110px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .dist-bar-track {
+    flex: 1;
+    block-size: 8px;
+    background: var(--surface-sunken);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .dist-bar-fill {
+    block-size: 100%;
+    border-radius: 999px;
+    transition: width 0.3s ease;
+  }
+  .dist-bar-fill.bug { background: #f87171; }
+  .dist-bar-fill.suggestion { background: #fbbf24; }
+  .dist-bar-fill.extension { background: #818cf8; }
+  .dist-pct {
+    inline-size: 36px;
+    text-align: right;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+
+  .metrics-summary-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-block-start: var(--space-4);
+  }
+  .metric-summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-block-end: var(--space-2);
+    border-block-end: 1px solid var(--border-subtle);
+  }
+  .metric-summary-row:last-child {
+    border-block-end: none;
+    padding-block-end: 0;
+  }
+  .metric-summary-info {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .metric-title {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-primary);
+  }
+  .metric-desc {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+  }
+  .metric-highlight {
+    font-size: var(--text-lg);
+    font-weight: var(--weight-bold);
+  }
+  .metric-highlight.green { color: #34d399; }
+  .metric-highlight.amber { color: #fbbf24; }
+  .metric-highlight.blue { color: #818cf8; }
+  .metric-highlight.purple { color: #c084fc; }
+
+  /* Empty State */
+  .empty-state-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: var(--space-10) var(--space-4);
+    background: var(--surface-sunken);
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-tertiary);
+  }
+  .empty-state-card svg {
+    color: var(--text-muted);
+    margin-block-end: var(--space-2);
+  }
+  .empty-state-card h3 {
+    font-size: var(--text-md);
+    color: var(--text-secondary);
+    margin-block-end: 2px;
+  }
+  .empty-state-card p {
+    font-size: var(--text-xs);
+    max-inline-size: 38ch;
+  }
+
+  @media (max-width: 800px) {
+    .kpi-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  @media (max-width: 500px) {
+    .kpi-grid {
+      grid-template-columns: 1fr;
+    }
+    .hero-body {
+      flex-direction: column;
+      align-items: flex-start;
+    }
   }
 </style>
