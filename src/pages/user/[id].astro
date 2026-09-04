@@ -11,7 +11,7 @@ import { levelOf } from '../../lib/staff';
 export const prerender = false;
 
 const targetId = String(Astro.params.id ?? '').trim();
-if (!/^\d{17,20}$/.test(targetId)) return Astro.rewrite('/404');
+if (!/^(tg:\d+|\d{17,20})$/.test(targetId)) return Astro.rewrite('/404');
 
 const [userRow] = await db().select().from(users).where(eq(users.discordId, targetId));
 if (!userRow) return Astro.rewrite('/404');
@@ -59,7 +59,11 @@ const stats: UserStats = {
 };
 
 const badges = computeBadges(stats);
-const avatar = avatarUrl({ id: userRow.discordId, avatarHash: userRow.avatarHash }, 80);
+const isDiscordLinked = userRow.discordLinked !== false && !userRow.discordId.startsWith('tg:');
+const isTelegramLinked = !!userRow.telegramId;
+const avatar =
+  userRow.telegramPhotoUrl ||
+  avatarUrl({ id: userRow.discordId, avatarHash: userRow.avatarHash }, 80);
 
 Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, stale-while-revalidate=300');
 ---
@@ -74,9 +78,34 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, st
       )}
     </div>
     <div class="profile-meta">
-      <h1 class="username">{userRow.username}</h1>
-      <p class="discord-id num">ID: {userRow.discordId}</p>
-      <p class="account-age">Member on AnymeX Desk</p>
+      <div class="profile-name-row">
+        <h1 class="username">{userRow.username}</h1>
+        {isStaff && <span class="staff-tag">{staffLevel}</span>}
+      </div>
+      <div class="platform-chips">
+        {isDiscordLinked && (
+          <span class="chip chip-discord">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+            </svg>
+            <span>Discord</span>
+          </span>
+        )}
+        {isTelegramLinked && (
+          <a
+            href={userRow.telegramUsername ? `https://t.me/${userRow.telegramUsername}` : undefined}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="chip chip-telegram"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+            </svg>
+            <span>{userRow.telegramUsername ? `@${userRow.telegramUsername}` : 'Telegram'}</span>
+          </a>
+        )}
+      </div>
+      <p class="account-age">Member on AnymeX Desk · Joined {relativeAge(userRow.firstSeen)} ago</p>
     </div>
   </header>
 
@@ -169,9 +198,55 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, st
     display: block;
   }
   .avatar-blank { background: var(--surface-raised); }
-  .profile-meta { display: flex; flex-direction: column; gap: 2px; }
+  .profile-meta { display: flex; flex-direction: column; gap: 4px; }
+  .profile-name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
   .username { font-size: var(--text-xl); font-weight: var(--weight-bold); }
-  .discord-id { font-size: var(--text-xs); color: var(--text-muted); }
+  .staff-tag {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background: rgba(88, 101, 242, 0.2);
+    color: #5865F2;
+    border: 1px solid rgba(88, 101, 242, 0.4);
+  }
+  .platform-chips {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-block: 2px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    text-decoration: none;
+  }
+  .chip-discord {
+    background: rgba(88, 101, 242, 0.15);
+    color: #8ea1e1;
+    border: 1px solid rgba(88, 101, 242, 0.3);
+  }
+  .chip-telegram {
+    background: rgba(36, 161, 222, 0.15);
+    color: #55b7ea;
+    border: 1px solid rgba(36, 161, 222, 0.3);
+    transition: filter 0.15s ease;
+  }
+  .chip-telegram:hover {
+    filter: brightness(1.2);
+    text-decoration: underline;
+  }
   .account-age { font-size: var(--text-xs); color: var(--text-tertiary); margin-block-start: 2px; }
 
   .block { margin-block-start: var(--space-6); }
