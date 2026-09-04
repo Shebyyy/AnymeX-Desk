@@ -27,6 +27,17 @@ import { sql } from 'drizzle-orm';
 
 export const prerender = false;
 
+// JSON helper for the AJAX (accept: application/json) paths below. The original
+// code called `json(...)` in three places without ever defining it, which
+// crashed every dedup-join / sign-in-required / banned AJAX response with
+// "json is not defined". Mirrors the helper in upload.ts and comments.ts.
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
 const user = await currentUser(Astro);
 
 let error: string | null = null;
