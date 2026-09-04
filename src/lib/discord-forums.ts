@@ -739,7 +739,13 @@ export function resolveDiscordAvatarUrl(
   const snowflake = author.discordId || author.id;
   if (snowflake && author.avatarHash) {
     const ext = author.avatarHash.startsWith('a_') ? 'gif' : 'png';
-    return `https://cdn.discordapp.com/avatars/${snowflake}/${author.avatarHash}.${ext}?size=${size}`;
+    // No ?size= query param: Discord's webhook avatar_url fetcher has
+    // historically been flaky with query-stringed CDN URLs (it would
+    // silently fall back to the webhook's default avatar). The base
+    // cdn.discordapp.com/avatars/<id>/<hash>.<ext> URL serves the full
+    // image; Discord downscales it on its end. Keep size for callers
+    // that render the URL directly on the site (see avatarUrl in auth.ts).
+    return `https://cdn.discordapp.com/avatars/${snowflake}/${author.avatarHash}.${ext}`;
   }
   if (snowflake) {
     try {
@@ -884,10 +890,13 @@ export async function syncCommentToDiscord(
             username: author.username.slice(0, 80),
             avatar_url: avatar,
             content: finalContent.slice(0, 2000),
-            message_reference: messageReference,
+            // Note: Discord webhooks do NOT support message_reference. Including
+            // it here silently dropped the avatar_url override in forum-thread
+            // contexts, which was the "username shows but avatar doesn't" bug.
+            // Replies are handled by the bot fallback path below if the webhook
+            // fails, and Discord renders the @mention inline anyway.
             allowed_mentions: {
               parse: ['users'],
-              replied_user: true,
             },
           }),
         );
@@ -916,10 +925,9 @@ export async function syncCommentToDiscord(
               username: author.username.slice(0, 80),
               avatar_url: avatar,
               content: finalContent.slice(0, 2000),
-              message_reference: messageReference,
+              // Webhooks don't support message_reference; see comment above.
               allowed_mentions: {
                 parse: ['users'],
-                replied_user: true,
               },
             }),
           },
