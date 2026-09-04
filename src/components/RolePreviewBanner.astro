@@ -1,0 +1,160 @@
+---
+import { LEVEL_LABELS, RANK, type Level } from '../lib/levels';
+
+interface Props {
+  realLevel: Level;
+  effectiveLevel: Level;
+}
+
+const { realLevel, effectiveLevel } = Astro.props;
+
+// Roles allowed for this user: strictly realLevel and below
+const ALL_ROLES: Level[] = ['owner', 'admin', 'mod', 'user'];
+const allowedRoles = ALL_ROLES.filter((r) => RANK[r] <= RANK[realLevel]);
+---
+
+<div class="role-preview-banner" role="region" aria-label="Role preview banner">
+  <div class="preview-shell">
+    <div class="preview-info">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+      <span>
+        Preview Mode: Viewing as <b>{LEVEL_LABELS[effectiveLevel]}</b>
+      </span>
+      <span class="preview-subtext">
+        (Authentic rank: {LEVEL_LABELS[realLevel]})
+      </span>
+    </div>
+
+    <div class="preview-actions">
+      <!-- Quick Role Switcher -->
+      <form method="POST" action="/api/view-as" class="preview-switch-form">
+        <label for="preview-role-select" class="sr-only">Switch preview role</label>
+        <select
+          id="preview-role-select"
+          name="role"
+          class="preview-select"
+          onchange="this.form.submit()"
+        >
+          {allowedRoles.map((r) => (
+            <option value={r === realLevel ? 'clear' : r} selected={r === effectiveLevel}>
+              {r === realLevel ? `${LEVEL_LABELS[r]} (Real)` : `View as ${LEVEL_LABELS[r]}`}
+            </option>
+          ))}
+        </select>
+      </form>
+
+      <!-- Exit Button -->
+      <form method="POST" action="/api/view-as">
+        <input type="hidden" name="role" value="clear" />
+        <button type="submit" class="exit-preview-btn">
+          <span>Exit Preview</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<style>
+  .role-preview-banner {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    background: #1c1917;
+    border-block-end: 1px solid #f59e0b55;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    font-size: var(--text-xs);
+    color: #fef3c7;
+    animation: bannerSlideDown 0.2s ease-out;
+  }
+  @keyframes bannerSlideDown {
+    from { transform: translateY(-100%); }
+    to { transform: translateY(0); }
+  }
+
+  .preview-shell {
+    max-inline-size: var(--measure);
+    margin-inline: auto;
+    padding: var(--space-2) var(--space-4);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .preview-info {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-weight: var(--weight-medium);
+  }
+  .preview-info svg {
+    color: #f59e0b;
+    flex-shrink: 0;
+  }
+  .preview-subtext {
+    color: #d97706;
+    font-size: 0.72rem;
+  }
+
+  .preview-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .preview-select {
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid #f59e0b44;
+    background: #292524;
+    color: #fef3c7;
+    font-size: var(--text-xs);
+    cursor: pointer;
+    outline: none;
+    font-weight: var(--weight-medium);
+  }
+  .preview-select:focus {
+    border-color: #f59e0b;
+  }
+
+  .exit-preview-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    background: #f59e0b;
+    color: #1c1917;
+    font-weight: var(--weight-semi);
+    font-size: var(--text-xs);
+    border: none;
+    cursor: pointer;
+    transition: filter 0.15s ease;
+  }
+  .exit-preview-btn:hover {
+    filter: brightness(1.1);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
+  }
+
+  @media (max-width: 640px) {
+    .preview-subtext { display: none; }
+  }
+</style>

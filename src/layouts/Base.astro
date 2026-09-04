@@ -4,6 +4,9 @@ import '../styles/tokens.css';
 import '../styles/base.css';
 import Header from '../components/Header.astro';
 import PreferencesModal from '../components/PreferencesModal.astro';
+import RolePreviewBanner from '../components/RolePreviewBanner.astro';
+import { currentUser } from '../lib/auth';
+import { effectiveStaffLevel } from '../lib/staff';
 
 interface Props {
   title: string;
@@ -17,6 +20,9 @@ const {
   description = 'AnymeX bug and suggestion tracker. Vote on what matters most.',
   narrow = false,
 } = Astro.props;
+
+const baseUser = await currentUser(Astro);
+const staffPreview = baseUser ? await effectiveStaffLevel(Astro, baseUser.id) : null;
 
 const reportIdMatch = Astro.url.pathname.match(/^\/report\/(\d+)$/);
 const ogImage = reportIdMatch
@@ -75,6 +81,9 @@ const ogImage = reportIdMatch
   </head>
 
   <body>
+    {staffPreview?.isPreview && (
+      <RolePreviewBanner realLevel={staffPreview.realLevel} effectiveLevel={staffPreview.effectiveLevel} />
+    )}
     <a class="skip-link" href="#main">Skip to content</a>
     <Header />
     <main id="main" class:list={['shell', { prose: narrow }]}>

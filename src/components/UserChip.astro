@@ -1,11 +1,14 @@
 ---
 import { atLeast } from '../lib/levels';
 import { avatarUrl, currentUser } from '../lib/auth';
+import { effectiveStaffLevel } from '../lib/staff';
 import { safeReturnTo } from '../lib/redirect';
 
 const user = await currentUser(Astro);
+const staffInfo = user ? await effectiveStaffLevel(Astro, user.id) : null;
+const effectiveLevel = staffInfo ? staffInfo.effectiveLevel : (user ? user.level : 'user');
 const avatar = user ? avatarUrl(user, 48) : null;
-const staff = user ? atLeast(user.level, 'mod') : false;
+const staff = user ? atLeast(effectiveLevel, 'mod') : false;
 
 const here = (() => {
   const ref = Astro.request.headers.get('referer');

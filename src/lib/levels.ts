@@ -7,7 +7,7 @@ import type { StaffLevel } from './db/schema';
  */
 export type Level = 'user' | StaffLevel | 'owner';
 
-const RANK: Record<Level, number> = { user: 0, mod: 1, admin: 2, owner: 3 };
+export const RANK: Record<Level, number> = { user: 0, mod: 1, admin: 2, owner: 3 };
 
 export const atLeast = (level: Level, needed: Level) => RANK[level] >= RANK[needed];
 

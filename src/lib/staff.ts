@@ -3,12 +3,12 @@ import type { APIContext, AstroGlobal } from 'astro';
 import { eq, sql } from 'drizzle-orm';
 import { db } from './db/client';
 import { audit, users, type StaffLevel } from './db/schema';
-import { atLeast, combine as combineLevels, type Level } from './levels';
+import { atLeast, combine as combineLevels, type Level, RANK } from './levels';
 import { currentUser, type SessionUser } from './auth';
 import { readSetting } from './settings';
 import { send, GREEN, RED } from './webhook';
 
-export { atLeast, combine, LEVEL_LABELS, type Level } from './levels';
+export { atLeast, combine, LEVEL_LABELS, type Level, RANK } from './levels';
 
 /**
  * Who may do what.
@@ -36,25 +36,60 @@ export async function levelOf(discordId: string): Promise<Level> {
 export interface StaffContext {
   user: SessionUser;
   level: Level;
+  realLevel: Level;
+  isPreview: boolean;
+}
+
+/**
+ * Returns the effective staff level, accounting for View-as-Role preview mode.
+ * Strictly enforces that a simulated role must be <= the user's authentic role.
+ */
+export async function effectiveStaffLevel(
+  ctx: APIContext | AstroGlobal,
+  userId: string,
+): Promise<{ realLevel: Level; effectiveLevel: Level; isPreview: boolean }> {
+  const realLevel = await levelOf(userId);
+  if (realLevel === 'user') {
+    return { realLevel: 'user', effectiveLevel: 'user', isPreview: false };
+  }
+
+  const cookieVal = ctx.cookies?.get('anymex_view_as')?.value as Level | undefined;
+  if (cookieVal && cookieVal in RANK && RANK[cookieVal] <= RANK[realLevel] && cookieVal !== realLevel) {
+    return { realLevel, effectiveLevel: cookieVal, isPreview: true };
+  }
+
+  return { realLevel, effectiveLevel: realLevel, isPreview: false };
 }
 
 /**
  * Gate for a page or route. Returns the caller when they clear `needed`, or a
  * Response to return as-is — 404 rather than 403 for a non-staff visitor,
  * since the existence of the dashboard is not their business.
+ *
+ * When allowPreviewSim is true, authentic staff simulating a lower role
+ * are passed through so the destination can render a simulated experience.
  */
 export async function requireStaff(
   ctx: APIContext | AstroGlobal,
   needed: Level = 'mod',
+  allowPreviewSim = false,
 ): Promise<StaffContext | Response> {
   const user = await currentUser(ctx);
   if (!user) {
     const to = new URL(ctx.request.url).pathname;
     return ctx.redirect(`/auth/discord?next=${encodeURIComponent(to)}`, 302);
   }
-  const level = await levelOf(user.id);
-  if (!atLeast(level, needed)) return new Response('Not found', { status: 404 });
-  return { user, level };
+  const { realLevel, effectiveLevel, isPreview } = await effectiveStaffLevel(ctx, user.id);
+
+  if (!atLeast(realLevel, needed)) {
+    return new Response('Not found', { status: 404 });
+  }
+
+  if (!atLeast(effectiveLevel, needed) && !allowPreviewSim) {
+    return new Response('Not found', { status: 404 });
+  }
+
+  return { user, level: effectiveLevel, realLevel, isPreview };
 }
 
 export const isResponse = (v: unknown): v is Response => v instanceof Response;
