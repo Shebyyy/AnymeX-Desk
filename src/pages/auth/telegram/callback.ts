@@ -2,7 +2,7 @@ import type { APIRoute } from 'astro';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../../../lib/db/client';
 import { users } from '../../../lib/db/schema';
-import { buildTelegramSessionUser, canWriteNow, currentUser } from '../../../lib/auth';
+import { buildTelegramSessionUser, canWriteNow, currentUser, mergeUserAccounts } from '../../../lib/auth';
 import { readConfig, readSetting } from '../../../lib/settings';
 import { verifyTelegramAuth } from '../../../lib/telegram-auth';
 import { safeReturnTo } from '../../../lib/redirect';
@@ -58,11 +58,38 @@ export const GET: APIRoute = async (ctx) => {
     if (loggedInUser) {
       // Check if this telegramId is already linked to ANOTHER account
       const [conflict] = await d
-        .select({ discordId: users.discordId })
+        .select({
+          discordId: users.discordId,
+          discordLinked: users.discordLinked,
+        })
         .from(users)
         .where(eq(users.telegramId, telegramId));
 
       if (conflict && conflict.discordId !== loggedInUser.id) {
+        // Can we merge?
+        // If conflict is a temporary tg:... placeholder without Discord linked:
+        if (conflict.discordId.startsWith('tg:') && !conflict.discordLinked) {
+          await mergeUserAccounts(conflict.discordId, loggedInUser.id, {
+            telegramId,
+            telegramUsername: rawParams.username || null,
+            telegramPhotoUrl: rawParams.photo_url || null,
+          });
+
+          loggedInUser.telegramId = telegramId;
+          loggedInUser.telegramUsername = rawParams.username || null;
+          await ctx.session?.set('user', loggedInUser);
+
+          ctx.cookies.set('signed_in', '1', {
+            path: '/',
+            httpOnly: false,
+            secure: ctx.url.protocol === 'https:',
+            sameSite: 'lax',
+            maxAge: 60 * 60 * 24 * 30,
+          });
+
+          return ctx.redirect('/me?telegram=linked', 302);
+        }
+
         return ctx.redirect('/me?telegram=already_linked_to_other_account', 302);
       }
 

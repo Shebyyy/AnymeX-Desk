@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { eq, sql } from 'drizzle-orm';
-import { buildSessionUser, canWriteNow, currentUser, exchangeCode } from '../../lib/auth';
+import { buildSessionUser, canWriteNow, currentUser, exchangeCode, mergeUserAccounts } from '../../lib/auth';
 import { db } from '../../lib/db/client';
 import { users } from '../../lib/db/schema';
 import { safeReturnTo } from '../../lib/redirect';
@@ -13,7 +13,9 @@ export const GET: APIRoute = async (ctx) => {
   const state = ctx.url.searchParams.get('state');
   const expected = await ctx.session?.get('oauth_state');
   // Re-checked on the way out as well: the session is ours, but a value that
-  // only gets validated on the way in is one refactor away from not being.
+  // matches an in-flight state is one *we* put there, so an attacker who
+  // forged an authorization response can't complete the handshake unless
+  // they can guess a 128-bit secret.
   const next = safeReturnTo(await ctx.session?.get('oauth_next'), ctx.url.origin);
 
   // CSRF: the state must round-trip through our own session.
@@ -36,11 +38,49 @@ export const GET: APIRoute = async (ctx) => {
 
       // Check if this Discord account is already linked to ANOTHER user
       const [conflict] = await db()
-        .select({ discordId: users.discordId })
+        .select({
+          discordId: users.discordId,
+          telegramId: users.telegramId,
+          username: users.username,
+        })
         .from(users)
         .where(eq(users.discordId, me.id));
 
       if (conflict && conflict.discordId !== loggedInUser.id) {
+        // Can we merge?
+        // If current session is a Telegram-native user ('tg:...'), and the target Discord account
+        // has no other Telegram account attached (or shares the same telegramId):
+        if (
+          loggedInUser.id.startsWith('tg:') &&
+          (!conflict.telegramId || conflict.telegramId === loggedInUser.telegramId)
+        ) {
+          const [tgUserRow] = await db()
+            .select()
+            .from(users)
+            .where(eq(users.discordId, loggedInUser.id));
+
+          await mergeUserAccounts(loggedInUser.id, conflict.discordId, {
+            telegramId: tgUserRow?.telegramId || loggedInUser.telegramId,
+            telegramUsername: tgUserRow?.telegramUsername || loggedInUser.telegramUsername,
+            telegramPhotoUrl: tgUserRow?.telegramPhotoUrl || null,
+          });
+
+          // Switch active session to the primary Discord user
+          const sessionUser = await buildSessionUser(access_token);
+          await ctx.session?.regenerate();
+          await ctx.session?.set('user', sessionUser);
+
+          ctx.cookies.set('signed_in', '1', {
+            path: '/',
+            httpOnly: false,
+            secure: ctx.url.protocol === 'https:',
+            sameSite: 'lax',
+            maxAge: 60 * 60 * 24 * 30,
+          });
+
+          return ctx.redirect('/me?discord=linked', 302);
+        }
+
         return ctx.redirect('/me?discord=already_linked_to_other_account', 302);
       }
 
