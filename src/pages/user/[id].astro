@@ -3,10 +3,12 @@ import Base from '../../layouts/Base.astro';
 import { db } from '../../lib/db/client';
 import { reports, votes, users } from '../../lib/db/schema';
 import { eq, sql } from 'drizzle-orm';
-import { avatarUrl } from '../../lib/auth';
+import { avatarUrl, currentUser } from '../../lib/auth';
 import { relativeAge, kindLabel, categoryLabel, platformLabel, statusLabel } from '../../lib/format';
 import { computeBadges, type UserStats, ALL_BADGES } from '../../lib/badges';
 import { levelOf, LEVEL_LABELS } from '../../lib/staff';
+import { atLeast } from '../../lib/levels';
+import { getPresence } from '../../lib/presence';
 
 export const prerender = false;
 
@@ -77,6 +79,13 @@ const avatar =
 
 const initial = (userRow.username || '?')[0].toUpperCase();
 
+const viewer = await currentUser(Astro);
+const viewerLevel = viewer ? await levelOf(viewer.id) : 'user';
+const isViewerStaff = atLeast(viewerLevel, 'mod');
+const isSelf = !!(viewer && (viewer.id === targetId || (userRow.telegramId && viewer.telegramId === userRow.telegramId)));
+const canViewPresence = isViewerStaff || isSelf;
+const presence = canViewPresence ? getPresence(userRow.lastSeen, userRow.lastLogin) : null;
+
 Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, stale-while-revalidate=300');
 ---
 
@@ -86,11 +95,19 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, st
     <div class="hero-glow" aria-hidden="true"></div>
     <div class="hero-body">
       <div class="avatar-container">
-        {avatar ? (
-          <img class="hero-avatar" src={avatar} alt={userRow.username} width="88" height="88" />
-        ) : (
-          <div class="hero-avatar hero-avatar-fallback">{initial}</div>
-        )}
+        <div class="avatar-presence-wrap">
+          {avatar ? (
+            <img class="hero-avatar" src={avatar} alt={userRow.username} width="88" height="88" />
+          ) : (
+            <div class="hero-avatar hero-avatar-fallback">{initial}</div>
+          )}
+          {presence && (
+            <span
+              class:list={['presence-cutout-dot', `presence-${presence.status}`]}
+              title={isViewerStaff ? `Staff Telemetry: ${presence.label}` : presence.label}
+            ></span>
+          )}
+        </div>
         {isStaff && (
           <div class="avatar-staff-indicator" title={`Verified ${LEVEL_LABELS[staffLevel]}`}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -140,6 +157,15 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, st
               </svg>
               <span>{userRow.telegramUsername ? `@${userRow.telegramUsername}` : 'Telegram'}</span>
             </a>
+          )}
+          {presence && (
+            <span class="profile-link-chip presence-chip" title={isViewerStaff ? 'Telemetry visible to Staff only' : 'Your live presence'}>
+              <span class:list={['presence-inline-dot', `dot-${presence.status}`]}></span>
+              <span>{presence.label}</span>
+              {isViewerStaff && !isSelf && (
+                <span class="staff-tag-mini">Staff View</span>
+              )}
+            </span>
           )}
           <span class="hero-tenure">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1265,5 +1291,68 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, st
       flex-direction: column;
       align-items: flex-start;
     }
+  }
+
+  /* Presence Indicator & Cutout Dot */
+  .avatar-presence-wrap {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+  }
+  .presence-cutout-dot {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    border: 3px solid var(--surface-base);
+    box-sizing: border-box;
+  }
+  .presence-cutout-dot.presence-online {
+    background: #10b981;
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+  }
+  .presence-cutout-dot.presence-away {
+    background: #f59e0b;
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+  }
+  .presence-cutout-dot.presence-offline {
+    background: #64748b;
+  }
+
+  .presence-inline-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+  .presence-inline-dot.dot-online {
+    background: #10b981;
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+  }
+  .presence-inline-dot.dot-away {
+    background: #f59e0b;
+    box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+  }
+  .presence-inline-dot.dot-offline {
+    background: #64748b;
+  }
+
+  .presence-chip {
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+  }
+  .staff-tag-mini {
+    font-size: 0.65rem;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.15);
+    color: #818cf8;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    font-weight: var(--weight-semi);
+    text-transform: uppercase;
   }
 </style>

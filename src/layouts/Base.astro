@@ -123,5 +123,22 @@ const ogImage = reportIdMatch
       }
     </style>
 
+    {baseUser && (
+      <script is:inline>
+        (function() {
+          function pingPresence() {
+            if (document.visibilityState === 'visible') {
+              fetch('/api/presence', { method: 'POST', keepalive: true }).catch(function() {});
+            }
+          }
+          // Initial ping
+          pingPresence();
+          // Heartbeat every 2 minutes
+          setInterval(pingPresence, 120000);
+          // Ping when user returns to the tab
+          window.addEventListener('focus', pingPresence);
+        })();
+      </script>
+    )}
   </body>
 </html>

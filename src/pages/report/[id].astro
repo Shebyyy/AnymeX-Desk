@@ -20,6 +20,7 @@ import { readSetting } from '../../lib/settings';
 import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } from '../../lib/format';
 import { prepareCommentBody } from '../../lib/richtext';
 import { fetchLinkPreviews } from '../../lib/link-preview';
+import { getPresence } from '../../lib/presence';
 import { env } from 'cloudflare:workers';
 
 export const prerender = false;
@@ -304,6 +305,8 @@ const [user, reporter, reportAttachments, reportComments, commentAttachments, cu
       userId: comments.userId,
       username: users.username,
       avatarHash: users.avatarHash,
+      lastSeen: users.lastSeen,
+      lastLogin: users.lastLogin,
       replyToId: comments.replyToId,
     })
     .from(comments)
@@ -416,6 +419,7 @@ const allPreviewUrls = [
 const linkPreviews = allPreviewUrls.length ? await fetchLinkPreviews(allPreviewUrls) : new Map();
 
 const canModerate = user ? atLeast(await levelOf(user.id), 'mod') : false;
+const reporterPresence = canModerate && reporter ? getPresence(reporter.lastSeen, reporter.lastLogin) : null;
 const mine = user
   ? (
       await db()
@@ -501,10 +505,20 @@ Astro.response.headers.set(
           <span class="filed-by">
             {(() => {
               const a = reporter ? avatarUrl({ id: reporter.discordId, avatarHash: reporter.avatarHash }, 20) : null;
-              return a ? (
-                <img class="avatar" src={a} alt="" width="20" height="20" />
-              ) : (
-                <span class="avatar avatar-blank" aria-hidden="true" />
+              return (
+                <div class:list={[{ 'avatar-presence-wrap': canModerate && reporterPresence }]}>
+                  {a ? (
+                    <img class="avatar" src={a} alt="" width="20" height="20" />
+                  ) : (
+                    <span class="avatar avatar-blank" aria-hidden="true" />
+                  )}
+                  {canModerate && reporterPresence && (
+                    <span
+                      class:list={['presence-cutout-dot', `presence-${reporterPresence.status}`]}
+                      title={`Staff telemetry: ${reporterPresence.label}`}
+                    ></span>
+                  )}
+                </div>
               );
             })()}
             {report.reporterId ? (
@@ -667,6 +681,7 @@ Astro.response.headers.set(
         )}
         {orderedComments.map(({ comment: c, depth }) => {
           const avatar = avatarUrl({ id: c.userId, avatarHash: c.avatarHash }, 24);
+          const commentPresence = canModerate ? getPresence(c.lastSeen, c.lastLogin) : null;
           const cAtts = attByComment.get(c.id) ?? [];
           const replyToUsername = c.replyToId != null
             ? reportComments.find((p) => p.id === c.replyToId)?.username ?? null
@@ -681,11 +696,19 @@ Astro.response.headers.set(
             >              <div class="comment-header">
                 <div class="comment-author">
                   <a href={`/user/${c.userId}`} class="comment-author-link" title={`View ${c.username}'s profile`}>
-                    {avatar ? (
-                      <img class="avatar" src={avatar} alt="" width="24" height="24" />
-                    ) : (
-                      <span class="avatar avatar-blank" aria-hidden="true" />
-                    )}
+                    <div class:list={[{ 'avatar-presence-wrap': canModerate && commentPresence }]}>
+                      {avatar ? (
+                        <img class="avatar" src={avatar} alt="" width="24" height="24" />
+                      ) : (
+                        <span class="avatar avatar-blank" aria-hidden="true" />
+                      )}
+                      {canModerate && commentPresence && (
+                        <span
+                          class:list={['presence-cutout-dot', `presence-${commentPresence.status}`]}
+                          title={`Staff telemetry: ${commentPresence.label}`}
+                        ></span>
+                      )}
+                    </div>
                     <span class="comment-username">{c.username}</span>
                   </a>
                   <span class="comment-time">{relativeAge(c.createdAt)} ago</span>
@@ -1964,5 +1987,35 @@ Astro.response.headers.set(
   }
   .status-updated-flash {
     animation: statusFlash 0.8s ease-in-out;
+  }
+
+  /* Presence Cutout Dots */
+  .avatar-presence-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .presence-cutout-dot {
+    position: absolute;
+    bottom: -1px;
+    right: -1px;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    border: 1.5px solid var(--surface-raised);
+    box-sizing: border-box;
+  }
+  .presence-cutout-dot.presence-online {
+    background: #10b981;
+    box-shadow: 0 0 5px rgba(16, 185, 129, 0.5);
+  }
+  .presence-cutout-dot.presence-away {
+    background: #f59e0b;
+    box-shadow: 0 0 5px rgba(245, 158, 11, 0.5);
+  }
+  .presence-cutout-dot.presence-offline {
+    background: #64748b;
   }
 </style>

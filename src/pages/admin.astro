@@ -11,6 +11,7 @@ import { isOwner, isResponse, levelOf, logAction, requireStaff, setManualLevel }
 import { testWebhook } from '../lib/webhook';
 import { ensureForumTags, syncExistingReports } from '../lib/discord-forums';
 import { relativeAge } from '../lib/format';
+import { getPresence, type PresenceInfo } from '../lib/presence';
 
 export const prerender = false;
 
@@ -435,6 +436,7 @@ const [cfg, rawStaff, blocked, log, allLabels, allUsersList] = await Promise.all
       discordLevel: users.discordLevel,
       manualLevel: users.manualLevel,
       lastLogin: users.lastLogin,
+      lastSeen: users.lastSeen,
       telegramId: users.telegramId,
       telegramUsername: users.telegramUsername,
       telegramPhotoUrl: users.telegramPhotoUrl,
@@ -468,6 +470,7 @@ const [cfg, rawStaff, blocked, log, allLabels, allUsersList] = await Promise.all
       banned: users.banned,
       firstSeen: users.firstSeen,
       lastLogin: users.lastLogin,
+      lastSeen: users.lastSeen,
       accountCreatedAt: users.accountCreatedAt,
     })
     .from(users)
@@ -483,26 +486,66 @@ const fmtDate = (timestamp: number | null) => {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
-const dualLinkedUsersCount = allUsersList.filter(
-  (u) => !u.discordId.startsWith('tg:') && u.discordLinked !== false && !!u.telegramId
-).length;
-
-const discordOnlyUsersCount = allUsersList.filter(
-  (u) => !u.discordId.startsWith('tg:') && u.discordLinked !== false && !u.telegramId
-).length;
-
-const telegramOnlyUsersCount = allUsersList.filter(
-  (u) => !!u.telegramId && (u.discordId.startsWith('tg:') || u.discordLinked === false)
-).length;
-
-const bannedUsersCount = allUsersList.filter((u) => u.banned).length;
-
-const staffUsersCount = allUsersList.filter(
-  (u) =>
+const userRecordsWithPresence = allUsersList.map((u) => {
+  const isTargetOwner =
     isOwner(u.discordId) ||
-    (ownerDiscordId && (u.discordId === ownerDiscordId || u.telegramId === ownerDiscordId)) ||
-    u.discordLevel ||
-    u.manualLevel
+    (ownerDiscordId && (u.discordId === ownerDiscordId || u.telegramId === ownerDiscordId));
+  const effectiveRole = isTargetOwner ? 'owner' : combine(u.discordLevel, u.manualLevel);
+  const presence = getPresence(u.lastSeen, u.lastLogin);
+  const hasDiscord = !u.discordId.startsWith('tg:') && u.discordLinked !== false;
+  const hasTelegram = !!u.telegramId;
+  const isDual = hasDiscord && hasTelegram;
+  const platform = isDual ? 'dual' : hasDiscord ? 'discord' : 'telegram';
+  const avatar = avatarUrl({ id: u.discordId, avatarHash: u.avatarHash }, 40) || u.telegramPhotoUrl;
+  const initial = (u.username || '?')[0].toUpperCase();
+  const searchText = `${u.username} ${u.discordId} ${u.telegramUsername || ''} ${u.telegramId || ''}`.toLowerCase();
+
+  return {
+    ...u,
+    isOwnerUserRecord: isTargetOwner,
+    effectiveRole,
+    presence,
+    hasDiscord,
+    hasTelegram,
+    isDual,
+    platform,
+    avatar,
+    initial,
+    searchText,
+  };
+});
+
+// Hoisted Categories:
+const hoistedOwners = userRecordsWithPresence.filter((u) => u.effectiveRole === 'owner');
+const hoistedAdmins = userRecordsWithPresence.filter((u) => u.effectiveRole === 'admin');
+const hoistedMods = userRecordsWithPresence.filter((u) => u.effectiveRole === 'mod');
+const hoistedBanned = userRecordsWithPresence.filter((u) => u.banned);
+const hoistedOnlineMembers = userRecordsWithPresence.filter(
+  (u) => u.effectiveRole === 'user' && !u.banned && u.presence.status !== 'offline'
+);
+const hoistedOfflineMembers = userRecordsWithPresence.filter(
+  (u) => u.effectiveRole === 'user' && !u.banned && u.presence.status === 'offline'
+);
+
+const hoistedSections = [
+  { id: 'owners', title: 'Owners', icon: 'crown', users: hoistedOwners },
+  { id: 'admins', title: 'Administrators', icon: 'shield', users: hoistedAdmins },
+  { id: 'mods', title: 'Moderators', icon: 'hammer', users: hoistedMods },
+  { id: 'online', title: 'Online Members', icon: 'pulse', users: hoistedOnlineMembers },
+  { id: 'offline', title: 'Offline Members', icon: 'moon', users: hoistedOfflineMembers },
+  { id: 'banned', title: 'Banned Accounts', icon: 'ban', users: hoistedBanned },
+];
+
+const totalOnlineUsersCount = userRecordsWithPresence.filter((u) => u.presence.status === 'online').length;
+const totalAwayUsersCount = userRecordsWithPresence.filter((u) => u.presence.status === 'away').length;
+
+const dualLinkedUsersCount = userRecordsWithPresence.filter((u) => u.isDual).length;
+const discordOnlyUsersCount = userRecordsWithPresence.filter((u) => u.hasDiscord && !u.hasTelegram).length;
+const telegramOnlyUsersCount = userRecordsWithPresence.filter((u) => u.hasTelegram && !u.hasDiscord).length;
+const bannedUsersCount = userRecordsWithPresence.filter((u) => u.banned).length;
+
+const staffUsersCount = userRecordsWithPresence.filter(
+  (u) => u.isOwnerUserRecord || u.discordLevel || u.manualLevel
 ).length;
 
 let staffList = [...rawStaff];
@@ -514,6 +557,7 @@ if (ownerDiscordId && !staffList.some((s) => s.discordId === ownerDiscordId)) {
     discordLevel: null,
     manualLevel: 'owner' as any,
     lastLogin: user.id === ownerDiscordId ? Math.floor(Date.now() / 1000) : null,
+    lastSeen: user.id === ownerDiscordId ? Math.floor(Date.now() / 1000) : null,
   });
 }
 
@@ -851,7 +895,12 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
                   </button>
                 ) : (
                   <span class="admin-notice-hint">
-                    ℹ️ Only the Owner can appoint Administrators.
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align: -2px; margin-inline-end: 4px;">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                    Only the Owner can appoint Administrators.
                   </span>
                 )}
               </div>
@@ -903,6 +952,7 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
               const isTargetOwner = isOwner(s.discordId);
               const isTargetAdmin = eff === 'admin';
               const isTargetMod = eff === 'mod';
+              const presence = getPresence(s.lastSeen, s.lastLogin);
               const avatar = avatarUrl({ id: s.discordId, avatarHash: s.avatarHash }, 64);
               const initial = (s.username || '?')[0].toUpperCase();
 
@@ -914,27 +964,31 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
                 >
                   <div class="staff-card-header">
                     <div class="staff-identity">
-                      <div class="staff-avatar-wrap">
+                      <div class:list={['staff-avatar-wrap', 'presence-wrap', presence.status]}>
                         {avatar ? (
                           <img class="staff-avatar" src={avatar} alt={s.username} width="38" height="38" loading="lazy" />
                         ) : (
                           <div class="staff-avatar-fallback">{initial}</div>
                         )}
+                        <span class:list={['presence-dot', presence.status]} title={`${presence.label} (${presence.relativeText})`}></span>
                       </div>
                       <div class="staff-who">
                         <span class="staff-name">{s.username}</span>
-                        <button
-                          type="button"
-                          class="staff-id-copy-btn"
-                          data-copy-id={s.discordId}
-                          title="Click to copy Discord ID"
-                        >
-                          <span class="staff-id num">{s.discordId}</span>
-                          <svg class="copy-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                          </svg>
-                        </button>
+                        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                          <button
+                            type="button"
+                            class="staff-id-copy-btn"
+                            data-copy-id={s.discordId}
+                            title="Click to copy Discord ID"
+                          >
+                            <span class="staff-id num">{s.discordId}</span>
+                            <svg class="copy-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                            </svg>
+                          </button>
+                          <span class="presence-badge-text">{presence.relativeText}</span>
+                        </div>
                       </div>
                     </div>
                     <span class={`role-badge role-${eff}`}>{LEVEL_LABELS[eff]}</span>
@@ -1051,7 +1105,11 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
             <code>{cfg.admin_role_ids || 'None configured'}</code>
           </div>
           <p class="field-hint" style="margin-block-start: var(--space-2);">
-            🔒 Discord staff role mapping can only be configured by the Owner.
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align: -2px; margin-inline-end: 4px;">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+            Discord staff role mapping can only be configured by the Owner.
           </p>
         </div>
       )}
@@ -1065,16 +1123,67 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
         <div>
           <h2>Registered Users Directory</h2>
           <p class="panel-sub">
-            All users signed in via Discord or Telegram. Banning or appointing staff applies across all linked identities simultaneously.
+            All users signed in via Discord or Telegram. Live presence and last-seen telemetry are visible to staff only.
           </p>
+        </div>
+
+        <!-- View Mode Switchers -->
+        <div class="user-view-switchers" role="tablist" aria-label="Directory view mode">
+          <button
+            type="button"
+            class="view-switch-btn active"
+            id="view-mode-hoisted"
+            data-view-mode="hoisted"
+            role="tab"
+            aria-selected="true"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="3" y1="9" x2="21" y2="9" />
+              <line x1="9" y1="21" x2="9" y2="9" />
+            </svg>
+            <span>Discord Hoisted</span>
+          </button>
+          <button
+            type="button"
+            class="view-switch-btn"
+            id="view-mode-table"
+            data-view-mode="table"
+            role="tab"
+            aria-selected="false"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="8" y1="6" x2="21" y2="6" />
+              <line x1="8" y1="12" x2="21" y2="12" />
+              <line x1="8" y1="18" x2="21" y2="18" />
+              <line x1="3" y1="6" x2="3.01" y2="6" />
+              <line x1="3" y1="12" x2="3.01" y2="12" />
+              <line x1="3" y1="18" x2="3.01" y2="18" />
+            </svg>
+            <span>Detailed Table</span>
+          </button>
         </div>
       </div>
 
-      <!-- User Directory Platform KPI Cards -->
+      <!-- User Directory Platform & Telemetry KPI Cards -->
       <div class="user-stats-grid">
         <div class="stat-card">
           <div class="stat-num">{allUsersList.length}</div>
           <div class="stat-label">Total Registered</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num stat-highlight" style="color: #10b981;">
+            <span class="presence-inline-dot dot-online" style="margin-inline-end: 4px;"></span>
+            {totalOnlineUsersCount}
+          </div>
+          <div class="stat-label">Online Now</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num" style="color: #f59e0b;">
+            <span class="presence-inline-dot dot-away" style="margin-inline-end: 4px;"></span>
+            {totalAwayUsersCount}
+          </div>
+          <div class="stat-label">Idle / Away</div>
         </div>
         <div class="stat-card">
           <div class="stat-num stat-highlight">{dualLinkedUsersCount}</div>
@@ -1105,7 +1214,7 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
             type="search"
             class="staff-search-input"
             id="users-dir-search"
-            placeholder="Search by username, Discord ID, Telegram @handle, or Telegram ID..."
+            placeholder="Search users by name, Discord ID, Telegram @handle, or Telegram ID..."
             autocomplete="off"
           />
         </div>
@@ -1113,6 +1222,9 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
         <div class="staff-filter-chips" role="group" aria-label="Filter users by platform or role">
           <button type="button" class="chip active" data-user-filter="all">
             All ({allUsersList.length})
+          </button>
+          <button type="button" class="chip" data-user-filter="online">
+            Online ({totalOnlineUsersCount + totalAwayUsersCount})
           </button>
           <button type="button" class="chip" data-user-filter="dual">
             Dual Linked ({dualLinkedUsersCount})
@@ -1132,118 +1244,261 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
         </div>
       </div>
 
-      <!-- Users Directory Table -->
-      <div class="users-table-container">
+      <!-- 1. DISCORD HOISTED DIRECTORY VIEW -->
+      <div id="discord-hoisted-view" class="discord-hoisted-container">
+        {hoistedSections.map((sec) => (
+          <div class="hoisted-group" data-hoist-group={sec.id}>
+            <button
+              type="button"
+              class="hoisted-header"
+              data-hoist-toggle={sec.id}
+              aria-expanded="true"
+              aria-controls={`hoist-list-${sec.id}`}
+            >
+              <div class="hoisted-title-wrap">
+                {sec.icon === 'crown' && (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hoisted-cat-icon cat-owner" aria-hidden="true">
+                    <path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14" />
+                  </svg>
+                )}
+                {sec.icon === 'shield' && (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hoisted-cat-icon cat-admin" aria-hidden="true">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  </svg>
+                )}
+                {sec.icon === 'hammer' && (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hoisted-cat-icon cat-mod" aria-hidden="true">
+                    <path d="m15 12-8.5 8.5c-.83.83-2.17.83-3 0 0 0 0 0 0 0a2.12 2.12 0 0 1 0-3L12 9" />
+                    <path d="M17.64 15 22 10.64" />
+                    <path d="m20.91 3.26-6.36 6.36" />
+                    <path d="m13.41 4.34 2.83-2.83a2 2 0 0 1 2.83 0l1.41 1.41a2 2 0 0 1 0 2.83l-2.83 2.83" />
+                  </svg>
+                )}
+                {sec.icon === 'pulse' && (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hoisted-cat-icon cat-online" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10" />
+                    <circle cx="12" cy="12" r="4" fill="#10b981" />
+                  </svg>
+                )}
+                {sec.icon === 'moon' && (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hoisted-cat-icon cat-offline" aria-hidden="true">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                  </svg>
+                )}
+                {sec.icon === 'ban' && (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hoisted-cat-icon cat-banned" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                  </svg>
+                )}
+                <span class="hoisted-title">{sec.title}</span>
+                <span class="hoisted-count" data-hoist-counter={sec.id}>{sec.users.length}</span>
+              </div>
+              <svg class="hoisted-caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+
+            <ul class="hoisted-list" id={`hoist-list-${sec.id}`}>
+              {sec.users.map((u) => (
+                <li
+                  class="discord-member-card"
+                  data-search={u.searchText}
+                  data-platform={u.platform}
+                  data-role={u.effectiveRole}
+                  data-banned={u.banned ? 'true' : 'false'}
+                  data-presence={u.presence.status}
+                >
+                  <div class="discord-member-left">
+                    <div class="avatar-presence-wrap">
+                      {u.avatar ? (
+                        <img class="discord-member-avatar" src={u.avatar} alt="" width="42" height="42" loading="lazy" />
+                      ) : (
+                        <div class="discord-member-avatar-fallback">{u.initial}</div>
+                      )}
+                      <span
+                        class:list={['presence-cutout-dot', `presence-${u.presence.status}`]}
+                        title={u.presence.label}
+                      ></span>
+                    </div>
+
+                    <div class="discord-member-info">
+                      <div class="discord-member-name-row">
+                        <a href={`/user/${u.discordId}`} class:list={['discord-member-name', `role-${u.effectiveRole}`]}>
+                          {u.username}
+                        </a>
+                        {u.banned ? (
+                          <span class="role-badge role-banned">Banned</span>
+                        ) : (
+                          <span class={`role-badge role-${u.effectiveRole}`}>
+                            {LEVEL_LABELS[u.effectiveRole]}
+                          </span>
+                        )}
+                      </div>
+
+                      <div class="discord-member-sub-row">
+                        {u.hasDiscord && (
+                          <span class="service-tag discord" title={`Discord ID: ${u.discordId}`}>
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                              <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994.021-.041.001-.09-.041-.106a13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028z" />
+                            </svg>
+                            <span class="num">{u.discordId.slice(-4)}</span>
+                          </span>
+                        )}
+                        {u.hasTelegram && (
+                          <span class="service-tag telegram" title={`Telegram: @${u.telegramUsername || u.telegramId}`}>
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
+                            </svg>
+                            <span>{u.telegramUsername ? `@${u.telegramUsername}` : u.telegramId}</span>
+                          </span>
+                        )}
+                        {u.isDual && <span class="badge-mini-gold">Dual Linked</span>}
+                        <span class="discord-member-presence-text" title={`Last active telemetry: ${u.presence.label}`}>
+                          <span class:list={['presence-inline-dot', `dot-${u.presence.status}`]}></span>
+                          <span>{u.presence.label}</span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="discord-member-actions">
+                    <a href={`/user/${u.discordId}`} class="btn btn-ghost btn-sm" title="View contributor profile">
+                      Profile
+                    </a>
+                    {!isModUser && !u.isOwnerUserRecord && u.discordId !== user.id && (
+                      <form method="POST" style="display: inline-block;">
+                        <input type="hidden" name="intent" value="block" />
+                        <input type="hidden" name="tab" value="users" />
+                        <input type="hidden" name="discord_id" value={u.discordId} />
+                        <input type="hidden" name="blocked" value={u.banned ? '0' : '1'} />
+                        <button
+                          type="submit"
+                          class:list={['btn', 'btn-sm', u.banned ? 'btn-ghost' : 'danger-btn']}
+                          onclick={`return confirm('${u.banned ? "Unblock" : "Block"} ${u.username} across all linked accounts?');`}
+                        >
+                          {u.banned ? 'Unblock' : 'Block'}
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <!-- 2. DETAILED TABLE VIEW (Hidden by default, switchable) -->
+      <div id="users-table-view" class="users-table-container" hidden>
         <table class="users-table" id="users-directory-table">
           <thead>
             <tr>
               <th scope="col">User</th>
               <th scope="col">Connected Accounts</th>
               <th scope="col">Access Role</th>
-              <th scope="col">Joined / Seen</th>
+              <th scope="col">Presence / Activity</th>
               <th scope="col" class="num">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {allUsersList.map((u) => {
-              const isOwnerUserRecord = isOwner(u.discordId) || (ownerDiscordId && (u.discordId === ownerDiscordId || u.telegramId === ownerDiscordId));
-              const effectiveRole = isOwnerUserRecord ? 'owner' : combine(u.discordLevel, u.manualLevel);
-              const isBanned = !!u.banned;
-              const hasDiscord = !u.discordId.startsWith('tg:') && u.discordLinked !== false;
-              const hasTelegram = !!u.telegramId;
-              const isDual = hasDiscord && hasTelegram;
-              const platform = isDual ? 'dual' : hasDiscord ? 'discord' : 'telegram';
-              const avatar = avatarUrl({ id: u.discordId, avatarHash: u.avatarHash }, 40) || u.telegramPhotoUrl;
-              const initial = (u.username || '?')[0].toUpperCase();
-              const searchText = `${u.username} ${u.discordId} ${u.telegramUsername || ''} ${u.telegramId || ''}`.toLowerCase();
-
-              return (
-                <tr
-                  class="user-dir-row"
-                  data-search={searchText}
-                  data-platform={platform}
-                  data-role={effectiveRole}
-                  data-banned={isBanned ? 'true' : 'false'}
-                >
-                  <td>
-                    <div class="user-identity-cell">
+            {userRecordsWithPresence.map((u) => (
+              <tr
+                class="user-dir-row"
+                data-search={u.searchText}
+                data-platform={u.platform}
+                data-role={u.effectiveRole}
+                data-banned={u.banned ? 'true' : 'false'}
+                data-presence={u.presence.status}
+              >
+                <td>
+                  <div class="user-identity-cell">
+                    <div class="avatar-presence-wrap">
                       <div class="user-cell-avatar">
-                        {avatar ? <img src={avatar} alt="" width="32" height="32" loading="lazy" /> : <span>{initial}</span>}
+                        {u.avatar ? <img src={u.avatar} alt="" width="32" height="32" loading="lazy" /> : <span>{u.initial}</span>}
                       </div>
-                      <div class="user-cell-meta">
-                        <a href={`/user/${u.discordId}`} class="user-cell-name">
-                          {u.username}
-                        </a>
-                        <span class="user-cell-id num">{u.discordId}</span>
-                      </div>
+                      <span class:list={['presence-cutout-dot', `presence-${u.presence.status}`]} title={u.presence.label}></span>
                     </div>
-                  </td>
-                  <td>
-                    <div class="user-accounts-cell">
-                      {hasDiscord && (
-                        <span class="service-tag discord" title={`Discord ID: ${u.discordId}`}>
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994.021-.041.001-.09-.041-.106a13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028z" />
-                          </svg>
-                          <span class="num">{u.discordId.slice(-4)}</span>
-                        </span>
-                      )}
-                      {hasTelegram && (
-                        <span class="service-tag telegram" title={`Telegram: @${u.telegramUsername || u.telegramId}`}>
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
-                          </svg>
-                          <span>{u.telegramUsername ? `@${u.telegramUsername}` : u.telegramId}</span>
-                        </span>
-                      )}
-                      {isDual && <span class="badge-mini-gold">Dual Linked</span>}
-                    </div>
-                  </td>
-                  <td>
-                    <div class="user-role-cell">
-                      {isBanned ? (
-                        <span class="role-badge role-banned">Banned</span>
-                      ) : (
-                        <span class={`role-badge role-${effectiveRole}`}>
-                          {LEVEL_LABELS[effectiveRole]}
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    <div class="user-seen-cell">
-                      <span class="seen-label">Seen: {fmtDate(u.lastLogin)}</span>
-                      <span class="joined-label">Joined: {fmtDate(u.firstSeen)}</span>
-                    </div>
-                  </td>
-                  <td class="num">
-                    <div class="user-actions-cell">
-                      <a href={`/user/${u.discordId}`} class="btn btn-ghost btn-sm" title="View contributor profile">
-                        Profile
+                    <div class="user-cell-meta">
+                      <a href={`/user/${u.discordId}`} class="user-cell-name">
+                        {u.username}
                       </a>
-                      {!isModUser && !isOwnerUserRecord && u.discordId !== user.id && (
-                        <form method="POST" style="display: inline-block;">
-                          <input type="hidden" name="intent" value="block" />
-                          <input type="hidden" name="tab" value="users" />
-                          <input type="hidden" name="discord_id" value={u.discordId} />
-                          <input type="hidden" name="blocked" value={isBanned ? '0' : '1'} />
-                          <button
-                            type="submit"
-                            class:list={['btn', 'btn-sm', isBanned ? 'btn-ghost' : 'danger-btn']}
-                            onclick={`return confirm('${isBanned ? "Unblock" : "Block"} ${u.username} across all linked accounts?');`}
-                          >
-                            {isBanned ? 'Unblock' : 'Block'}
-                          </button>
-                        </form>
-                      )}
+                      <span class="user-cell-id num">{u.discordId}</span>
                     </div>
-                  </td>
-                </tr>
-              );
-            })}
+                  </div>
+                </td>
+                <td>
+                  <div class="user-accounts-cell">
+                    {u.hasDiscord && (
+                      <span class="service-tag discord" title={`Discord ID: ${u.discordId}`}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994.021-.041.001-.09-.041-.106a13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028z" />
+                        </svg>
+                        <span class="num">{u.discordId.slice(-4)}</span>
+                      </span>
+                    )}
+                    {u.hasTelegram && (
+                      <span class="service-tag telegram" title={`Telegram: @${u.telegramUsername || u.telegramId}`}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
+                        </svg>
+                        <span>{u.telegramUsername ? `@${u.telegramUsername}` : u.telegramId}</span>
+                      </span>
+                    )}
+                    {u.isDual && <span class="badge-mini-gold">Dual Linked</span>}
+                  </div>
+                </td>
+                <td>
+                  <div class="user-role-cell">
+                    {u.banned ? (
+                      <span class="role-badge role-banned">Banned</span>
+                    ) : (
+                      <span class={`role-badge role-${u.effectiveRole}`}>
+                        {LEVEL_LABELS[u.effectiveRole]}
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td>
+                  <div class="user-seen-cell">
+                    <span class="discord-member-presence-text" title={`Last active telemetry: ${u.presence.label}`}>
+                      <span class:list={['presence-inline-dot', `dot-${u.presence.status}`]}></span>
+                      <span>{u.presence.label}</span>
+                    </span>
+                    <span class="joined-label">Joined: {fmtDate(u.firstSeen)}</span>
+                  </div>
+                </td>
+                <td class="num">
+                  <div class="user-actions-cell">
+                    <a href={`/user/${u.discordId}`} class="btn btn-ghost btn-sm" title="View contributor profile">
+                      Profile
+                    </a>
+                    {!isModUser && !u.isOwnerUserRecord && u.discordId !== user.id && (
+                      <form method="POST" style="display: inline-block;">
+                        <input type="hidden" name="intent" value="block" />
+                        <input type="hidden" name="tab" value="users" />
+                        <input type="hidden" name="discord_id" value={u.discordId} />
+                        <input type="hidden" name="blocked" value={u.banned ? '0' : '1'} />
+                        <button
+                          type="submit"
+                          class:list={['btn', 'btn-sm', u.banned ? 'btn-ghost' : 'danger-btn']}
+                          onclick={`return confirm('${u.banned ? "Unblock" : "Block"} ${u.username} across all linked accounts?');`}
+                        >
+                          {u.banned ? 'Unblock' : 'Block'}
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
+
+      <p class="empty-line" id="users-empty-search" hidden style="display: none;">
+        No users match your filter or search query.
+      </p>
     </section>
   </div>
 
@@ -2093,23 +2348,80 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
       });
     }
 
-    // 8. Users Directory Live Search & Filter
+    // 8. Users Directory View Switcher (Discord Hoisted vs Detailed Table)
+    const btnHoisted = document.getElementById('view-mode-hoisted');
+    const btnTable = document.getElementById('view-mode-table');
+    const viewHoisted = document.getElementById('discord-hoisted-view');
+    const viewTable = document.getElementById('users-table-view');
+
+    function setUsersViewMode(mode) {
+      const isHoisted = mode === 'hoisted';
+      if (btnHoisted) {
+        btnHoisted.classList.toggle('active', isHoisted);
+        btnHoisted.setAttribute('aria-selected', isHoisted ? 'true' : 'false');
+      }
+      if (btnTable) {
+        btnTable.classList.toggle('active', !isHoisted);
+        btnTable.setAttribute('aria-selected', !isHoisted ? 'true' : 'false');
+      }
+      if (viewHoisted) {
+        viewHoisted.hidden = !isHoisted;
+        viewHoisted.style.display = isHoisted ? '' : 'none';
+      }
+      if (viewTable) {
+        viewTable.hidden = isHoisted;
+        viewTable.style.display = !isHoisted ? '' : 'none';
+      }
+      try {
+        localStorage.setItem('admin_users_view_mode', mode);
+      } catch (e) {}
+    }
+
+    if (btnHoisted) btnHoisted.addEventListener('click', () => setUsersViewMode('hoisted'));
+    if (btnTable) btnTable.addEventListener('click', () => setUsersViewMode('table'));
+
+    // Restore saved view mode (default hoisted)
+    try {
+      const savedMode = localStorage.getItem('admin_users_view_mode');
+      if (savedMode === 'table') setUsersViewMode('table');
+    } catch (e) {}
+
+    // 9. Hoisted Category Collapsing
+    document.querySelectorAll('[data-hoist-toggle]').forEach(header => {
+      header.addEventListener('click', () => {
+        const groupId = header.getAttribute('data-hoist-toggle');
+        const list = document.getElementById(`hoist-list-${groupId}`);
+        if (!list) return;
+        const expanded = header.getAttribute('aria-expanded') === 'true';
+        header.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+        list.hidden = expanded;
+        list.style.display = expanded ? 'none' : '';
+      });
+    });
+
+    // 10. Users Directory Live Search & Filter across BOTH Hoisted and Table Views
     const usersSearchInput = document.getElementById('users-dir-search');
     const userFilterChips = document.querySelectorAll('[data-user-filter]');
     const userRows = document.querySelectorAll('.user-dir-row');
+    const hoistedGroups = document.querySelectorAll('.hoisted-group');
+    const usersEmptyMsg = document.getElementById('users-empty-search');
     let currentUserFilter = 'all';
 
     function applyUserFilters() {
       const q = (usersSearchInput ? usersSearchInput.value : '').trim().toLowerCase();
+      let totalVisible = 0;
 
+      // Filter table rows
       userRows.forEach(row => {
         const text = (row.getAttribute('data-search') || '').toLowerCase();
         const platform = row.getAttribute('data-platform') || '';
         const role = row.getAttribute('data-role') || '';
         const isBanned = row.getAttribute('data-banned') === 'true';
+        const presence = row.getAttribute('data-presence') || '';
 
         let matchesFilter = true;
-        if (currentUserFilter === 'dual') matchesFilter = platform === 'dual';
+        if (currentUserFilter === 'online') matchesFilter = presence !== 'offline';
+        else if (currentUserFilter === 'dual') matchesFilter = platform === 'dual';
         else if (currentUserFilter === 'discord') matchesFilter = platform === 'discord' || platform === 'dual';
         else if (currentUserFilter === 'telegram') matchesFilter = platform === 'telegram' || platform === 'dual';
         else if (currentUserFilter === 'staff') matchesFilter = role === 'owner' || role === 'admin' || role === 'mod';
@@ -2121,6 +2433,48 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
         row.hidden = !visible;
         row.style.display = visible ? '' : 'none';
       });
+
+      // Filter hoisted member cards & update category counts
+      hoistedGroups.forEach(group => {
+        const groupId = group.getAttribute('data-hoist-group');
+        const cards = group.querySelectorAll('.discord-member-card');
+        const counter = group.querySelector(`[data-hoist-counter="${groupId}"]`);
+        let groupVisible = 0;
+
+        cards.forEach(card => {
+          const text = (card.getAttribute('data-search') || '').toLowerCase();
+          const platform = card.getAttribute('data-platform') || '';
+          const role = card.getAttribute('data-role') || '';
+          const isBanned = card.getAttribute('data-banned') === 'true';
+          const presence = card.getAttribute('data-presence') || '';
+
+          let matchesFilter = true;
+          if (currentUserFilter === 'online') matchesFilter = presence !== 'offline';
+          else if (currentUserFilter === 'dual') matchesFilter = platform === 'dual';
+          else if (currentUserFilter === 'discord') matchesFilter = platform === 'discord' || platform === 'dual';
+          else if (currentUserFilter === 'telegram') matchesFilter = platform === 'telegram' || platform === 'dual';
+          else if (currentUserFilter === 'staff') matchesFilter = role === 'owner' || role === 'admin' || role === 'mod';
+          else if (currentUserFilter === 'banned') matchesFilter = isBanned;
+
+          const matchesSearch = !q || text.includes(q);
+          const visible = matchesFilter && matchesSearch;
+
+          card.hidden = !visible;
+          card.style.display = visible ? '' : 'none';
+          if (visible) {
+            groupVisible++;
+            totalVisible++;
+          }
+        });
+
+        if (counter) counter.textContent = groupVisible;
+        group.style.display = groupVisible > 0 ? '' : 'none';
+      });
+
+      if (usersEmptyMsg) {
+        usersEmptyMsg.hidden = totalVisible > 0;
+        usersEmptyMsg.style.display = totalVisible > 0 ? 'none' : 'block';
+      }
     }
 
     if (usersSearchInput) {
@@ -3051,5 +3405,242 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
   .mini-tag.tg {
     background: rgba(36, 161, 222, 0.2);
     color: #38bdf8;
+  }
+
+  /* Users Directory View Switcher */
+  .user-view-switchers {
+    display: inline-flex;
+    align-items: center;
+    background: var(--surface-sunken);
+    padding: 3px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    gap: 2px;
+  }
+  .view-switch-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .view-switch-btn:hover {
+    color: var(--text-primary);
+  }
+  .view-switch-btn.active {
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  }
+
+  /* Presence Cutout Dots & Indicators */
+  .avatar-presence-wrap {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+  }
+  .presence-cutout-dot {
+    position: absolute;
+    bottom: -1px;
+    right: -1px;
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    border: 2px solid var(--surface-raised);
+    box-sizing: border-box;
+  }
+  .presence-cutout-dot.presence-online {
+    background: #10b981;
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+  }
+  .presence-cutout-dot.presence-away {
+    background: #f59e0b;
+    box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+  }
+  .presence-cutout-dot.presence-offline {
+    background: #64748b;
+  }
+
+  .presence-inline-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+  .presence-inline-dot.dot-online {
+    background: #10b981;
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+  }
+  .presence-inline-dot.dot-away {
+    background: #f59e0b;
+    box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+  }
+  .presence-inline-dot.dot-offline {
+    background: #64748b;
+  }
+
+  /* Discord Hoisted View */
+  .discord-hoisted-container {
+    margin-block-start: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .hoisted-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .hoisted-header {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: transparent;
+    border: none;
+    padding: var(--space-2) var(--space-1);
+    cursor: pointer;
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semi);
+    text-transform: uppercase;
+    letter-spacing: var(--track-wider);
+    transition: color 0.15s ease;
+  }
+  .hoisted-header:hover {
+    color: var(--text-primary);
+  }
+  .hoisted-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .hoisted-cat-icon {
+    flex-shrink: 0;
+  }
+  .hoisted-cat-icon.cat-owner { color: #eab308; }
+  .hoisted-cat-icon.cat-admin { color: #818cf8; }
+  .hoisted-cat-icon.cat-mod { color: #34d399; }
+  .hoisted-cat-icon.cat-online { color: #10b981; }
+  .hoisted-cat-icon.cat-offline { color: #64748b; }
+  .hoisted-cat-icon.cat-banned { color: var(--dead); }
+
+  .hoisted-count {
+    font-family: var(--font-data);
+    font-size: 0.7rem;
+    padding: 1px 6px;
+    background: var(--surface-sunken);
+    border-radius: 999px;
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+  }
+  .hoisted-caret {
+    color: var(--text-tertiary);
+    transition: transform 0.2s ease;
+  }
+  .hoisted-header[aria-expanded="false"] .hoisted-caret {
+    transform: rotate(-90deg);
+  }
+
+  .hoisted-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  /* Discord Member Card */
+  .discord-member-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .discord-member-card:hover {
+    background: var(--surface-hover);
+    border-color: var(--border-strong);
+  }
+  .discord-member-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+  .discord-member-avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 999px;
+    object-fit: cover;
+  }
+  .discord-member-avatar-fallback {
+    width: 42px;
+    height: 42px;
+    border-radius: 999px;
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: var(--weight-bold);
+    font-size: var(--text-sm);
+  }
+  .discord-member-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+  .discord-member-name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .discord-member-name {
+    font-weight: var(--weight-medium);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+    text-decoration: none;
+  }
+  .discord-member-name:hover {
+    text-decoration: underline;
+  }
+  .discord-member-name.role-owner { color: #eab308; }
+  .discord-member-name.role-admin { color: #818cf8; }
+  .discord-member-name.role-mod { color: #34d399; }
+  .discord-member-sub-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+  }
+  .discord-member-presence-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+  }
+  .discord-member-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
   }
 </style>
