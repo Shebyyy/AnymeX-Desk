@@ -152,7 +152,6 @@ export default defineConfig({
     csp: {
       directives: [
         "default-src 'self'",
-        "script-src 'self' https://telegram.org https://oauth.telegram.org",
         "frame-src 'self' https://oauth.telegram.org https://telegram.org",
         "img-src 'self' https://cdn.discordapp.com https://t.me https://*.telegram.org https://telegram.org data:",
         "connect-src 'self' https://oauth.telegram.org",
@@ -163,6 +162,12 @@ export default defineConfig({
         "base-uri 'none'",
         "object-src 'none'",
       ],
+      scriptDirective: {
+        resources: [
+          "https://telegram.org",
+          "https://oauth.telegram.org",
+        ],
+      },
     },
   },
 
