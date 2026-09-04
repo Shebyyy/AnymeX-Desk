@@ -537,7 +537,13 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
   </form>
 
   <script>
-    const form = document.querySelector('form')!;
+    // Select the report form specifically. The header renders a search form
+    // and a logout form BEFORE the report form in the DOM, so
+    // document.querySelector('form') returns the search form — and attaching
+    // the submit handler to that meant the report form submitted natively,
+    // created the report, redirected, and never called /upload. That was the
+    // "report created but attachment not uploaded" bug.
+    const form = (document.getElementById('submit-btn') as HTMLButtonElement)?.closest('form')!;
     const fileInput = document.getElementById('file-input') as HTMLInputElement;
     const fileList = document.getElementById('file-list');
     const submitBtn = document.getElementById('submit-btn') as HTMLButtonElement;
