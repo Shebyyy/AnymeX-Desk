@@ -114,15 +114,27 @@ export function prepareCommentBody(body: string): RichBody {
     return `\u0000${store.length - 1}\u0000`;
   };
 
-  // 1. Fenced Code Blocks (```lang\n...```) — protected first
-  let working = body.replace(/```([a-zA-Z0-9_-]+)?\n?([\s\S]*?)```/g, (_m, lang: string | undefined, code: string) => {
+  // 1. Fenced Code Blocks (```lang\n...```) — protected first.
+  //
+  // Require a newline after the opening fence (or end-of-string). Without that,
+  // `` ` ```code``` ` `` (triple backticks with NO newline) was matching as a
+  // fenced block with the first word as the "language" and an empty body — so
+  // "```code```" rendered as an empty <pre class="language-code"> instead of
+  // inline code like Discord does. The `\n` (or `$`) anchor is what makes a
+  // fence a fence.
+  let working = body.replace(/```([a-zA-Z0-9_-]+)?(?:\n|$)([\s\S]*?)```/g, (_m, lang: string | undefined, code: string) => {
     const cls = lang ? ` class="language-${escapeHtml(lang.toLowerCase())}"` : '';
     const trimmed = code.replace(/\n$/, '');
     return stash(`<pre class="md-codeblock"><code${cls}>${escapeHtml(trimmed)}</code></pre>`);
   });
 
-  // 2. Inline code spans (`code`)
-  working = working.replace(/`([^`\n]+)`/g, (_m, code: string) => stash(`<code class="md-code">${escapeHtml(code)}</code>`));
+  // 2. Inline code spans (`code`).
+  //
+  // Also handle triple-backtick "inline" usage like `` ```code``` `` — Discord
+  // renders that as inline code containing the word with the backticks stripped.
+  // Now that fenced blocks require a newline (above), `` ```code``` `` falls
+  // through to here. Match 1-3 backticks wrapping non-backtick content.
+  working = working.replace(/`{1,3}([^`\n]+?)`{1,3}/g, (_m, code: string) => stash(`<code class="md-code">${escapeHtml(code)}</code>`));
 
   // 3. Discord Custom Emojis (<:name:id> or <a:name:id>)
   working = working.replace(DISCORD_EMOJI_RE, (_m, isAnim: string | undefined, name: string, id: string) => {
@@ -289,7 +301,28 @@ export function prepareCommentBody(body: string): RichBody {
 
     const flushParagraph = () => {
       if (paragraphBuf.length) {
-        out.push(`<p>${paragraphBuf.map(renderInline).join('<br />')}</p>`);
+        // A stashed block-level token (e.g. \u00000\u0000 -> <pre>...</pre>)
+        // must not be wrapped in a <p> — that's invalid HTML (<pre> is a
+        // block element) and browsers aggressively close the <p> before it,
+        // producing stray </p> tags. Split the buffer on those tokens and
+        // emit each chunk as its own <p>, with block tokens emitted raw.
+        const buf = paragraphBuf.map(renderInline).join('<br />');
+        // \u0000N\u0000 tokens split the buffer; emit text between them as <p>
+        // and the tokens themselves unwrapped.
+        const parts = buf.split(/(\u0000\d+\u0000)/);
+        let inP = false;
+        let html = '';
+        for (const part of parts) {
+          if (/^\u0000\d+\u0000$/.test(part)) {
+            if (inP) { html += '</p>'; inP = false; }
+            html += part; // block token — restored later, no <p> wrapper
+          } else if (part) {
+            if (!inP) { html += '<p>'; inP = true; }
+            html += part;
+          }
+        }
+        if (inP) html += '</p>';
+        if (html) out.push(html);
         paragraphBuf = [];
       }
     };
