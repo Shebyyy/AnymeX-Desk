@@ -101,6 +101,12 @@ export function prepareCommentBody(body: string): RichBody {
   const previewUrls: string[] = [];
   const seenPreview = new Set<string>();
 
+  // Normalize CRLF / lone CR to LF. Without this, block-level regexes that use
+  // ^ and $ anchors (headers, quotes, subtext, lists) silently fail when the
+  // body comes from a browser textarea that submitted with \r\n line endings
+  // — every block element would be mis-rendered as a single paragraph.
+  body = body.replace(/\r\n?/g, '\n');
+
   // Stashed raw HTML tokens
   const store: string[] = [];
   const stash = (html: string): string => {
