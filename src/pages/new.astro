@@ -117,8 +117,8 @@ if (Astro.request.method === 'POST') {
   } else if (await overFilingLimit(user.id)) {
     error = FILING_COOLDOWN_MESSAGE;
   } else {
-    // Check dedup.
-    const dup = await findDuplicate(kind, category, platform, normalizeTitle(title));
+    // Check dedup. findDuplicate normalizes the title internally.
+    const dup = await findDuplicate(kind, category, platform, title);
     if (dup) {
       await ensureVote(dup.id, user.id);
       const log = logAction(
@@ -142,7 +142,10 @@ if (Astro.request.method === 'POST') {
         category,
         platform,
         appVersion: appVersion || null,
-        title: normalizeTitle(title),
+        // Keep the user's original casing/punctuation for display; the
+        // normalized copy drives the dedup index (see reports_dedup).
+        title: title,
+        titleNormalized: normalizeTitle(title),
         body: body || null,
         stepsToReproduce: kind === 'bug' ? (stepsToReproduce || null) : null,
         testedNativeApp: kind === 'extension' ? testedNativeApp : null,
@@ -498,7 +501,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     <section class="step">
       <h2 class="step-h"><span class="step-n">{kindLocked ? 4 : 5}</span> Attachments</h2>
       <p class="field-hint">
-        Images (JPG, PNG, WebP, GIF) up to 5 MB · Videos (MP4, WebM) up to 50 MB. You can also add more after submitting.
+        Any file type is accepted — images (JPG, PNG, WebP, GIF, HEIC, AVIF) up to 5 MB, videos (MP4, WebM) up to 50 MB, other files up to 50 MB. Up to 10 attachments per report. You can also add more after submitting.
         {shown.kind === 'extension' && ' A screenshot from the native app alongside one from AnymeX helps a lot.'}
       </p>
       <div class="upload-area" id="upload-area">
@@ -510,7 +513,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           </svg>
           <span>Click to select files or drag &amp; drop</span>
         </label>
-        <input id="file-input" type="file" name="files" accept="image/*,video/mp4,video/webm" multiple class="sr-only" />
+        <input id="file-input" type="file" name="files" multiple class="sr-only" />
         <div class="file-list" id="file-list"></div>
       </div>
     </section>
@@ -617,7 +620,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     // File selection handling
     fileInput?.addEventListener('change', () => {
       for (const f of Array.from(fileInput.files ?? [])) {
-        if (selectedFiles.length >= 5) break;
+        if (selectedFiles.length >= 10) break;
         if (!selectedFiles.find(x => x.name === f.name && x.size === f.size)) {
           selectedFiles.push(f);
         }
@@ -634,7 +637,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       e.preventDefault();
       dropzone.classList.remove('drag-over');
       for (const f of Array.from(e.dataTransfer.files)) {
-        if (selectedFiles.length >= 5) break;
+        if (selectedFiles.length >= 10) break;
         if (!selectedFiles.find(x => x.name === f.name && x.size === f.size)) {
           selectedFiles.push(f);
         }
@@ -699,7 +702,11 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           return;
         }
 
-        // Upload selected files
+        // Upload selected files. We must check each /upload response — the
+        // server rejects unsupported MIME types, oversized files, etc., and
+        // swallowing those errors here is what made attachments silently fail
+        // to appear on the report. Surface every failure so the user knows.
+        const failed: { name: string; reason: string }[] = [];
         if (selectedFiles.length > 0) {
           submitBtn.textContent = `Uploading ${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''}…`;
           let uploaded = 0;
@@ -707,10 +714,41 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
             const uploadFd = new FormData();
             uploadFd.append('file', file);
             uploadFd.append('reportId', String(data.id));
-            await fetch('/upload', { method: 'POST', body: uploadFd });
+            try {
+              const upRes = await fetch('/upload', { method: 'POST', body: uploadFd });
+              if (!upRes.ok) {
+                let reason = upRes.statusText || `error ${upRes.status}`;
+                try {
+                  const body = await upRes.json();
+                  if (body?.error) reason = body.error;
+                } catch { /* not JSON */ }
+                // 401 means the session expired mid-flow — send to login.
+                if (upRes.status === 401) {
+                  window.location.href = `/auth/login?next=/report/${data.id}`;
+                  return;
+                }
+                failed.push({ name: file.name, reason });
+              }
+            } catch (err) {
+              failed.push({ name: file.name, reason: 'network error' });
+            }
             uploaded++;
             submitBtn.textContent = `Uploading ${uploaded}/${selectedFiles.length}…`;
           }
+        }
+
+        if (failed.length > 0) {
+          const allFailed = failed.length === selectedFiles.length;
+          const msg = (allFailed ? 'No attachments were uploaded.\n\n' : `${failed.length} attachment(s) failed to upload.\n\n`)
+            + failed.map((f) => `• ${f.name}: ${f.reason}`).join('\n')
+            + '\n\nYour report was still created. Open it and attach the files in a follow-up comment, or retry from the report page — any file type is accepted.';
+          // Re-enable the submit button so the user can recover, then send
+          // them to the report (it already exists) so nothing is lost.
+          submitBtn.disabled = false;
+          submitBtn.textContent = submitBtn.dataset.label ?? 'Submit';
+          alert(msg);
+          window.location.href = `/report/${data.id}?filed=1`;
+          return;
         }
 
         window.location.href = `/report/${data.id}?filed=1`;

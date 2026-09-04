@@ -6,10 +6,10 @@ import { db } from '../lib/db/client';
 import {
   attachments,
   IMAGE_MIMES,
+  MAX_ATTACHMENTS_PER_REPORT,
+  MAX_FILE_SIZE,
   MAX_IMAGE_SIZE,
-  MAX_IMAGES,
   MAX_VIDEO_SIZE,
-  MAX_VIDEOS,
   reports,
   VIDEO_MIMES,
 } from '../lib/db/schema';
@@ -18,8 +18,6 @@ import { syncAttachmentToDiscord } from '../lib/discord-forums';
 
 export const prerender = false;
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB for other files
-
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -27,12 +25,37 @@ function json(data: unknown, status = 200) {
   });
 }
 
-/** Classify file type and get limits. For comment attachments, allows any file. */
-function classify(mime: string, isCommentAttachment: boolean) {
+/**
+ * Classify a file and pick its size limit.
+ *
+ * Any file type is accepted for both report-level and comment attachments —
+ * the `fileType` tag only decides how the gallery renders it (inline image,
+ * inline video, or a download link). A PDF or a .zip lands as `file`, a .png
+ * lands as `image`, a .mp4 lands as `video`, and all of them insert a row.
+ */
+function classify(mime: string) {
   if (IMAGE_MIMES.has(mime)) return { fileType: 'image' as const, maxSize: MAX_IMAGE_SIZE };
   if (VIDEO_MIMES.has(mime)) return { fileType: 'video' as const, maxSize: MAX_VIDEO_SIZE };
-  if (isCommentAttachment) return { fileType: 'file' as const, maxSize: MAX_FILE_SIZE };
-  return null; // reject unknown types for report-level uploads
+  return { fileType: 'file' as const, maxSize: MAX_FILE_SIZE };
+}
+
+/**
+ * Some browsers (and some drag-and-drop paths) hand us an empty or generic
+ * `application/octet-stream` MIME even for a plain `.png` / `.mp4`. Fall back
+ * to the filename extension so legitimate uploads aren't silently rejected.
+ */
+const EXT_MIME: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+  gif: 'image/gif', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif',
+  apng: 'image/png',
+  mp4: 'video/mp4', webm: 'video/webm', m4v: 'video/mp4',
+};
+
+function resolveMime(file: File): string {
+  const declared = file.type?.trim();
+  if (declared && declared !== 'application/octet-stream') return declared;
+  const ext = (file.name.split('.').pop() ?? '').toLowerCase();
+  return EXT_MIME[ext] ?? declared ?? 'application/octet-stream';
 }
 
 export const POST: APIRoute = async (ctx) => {
@@ -51,31 +74,28 @@ export const POST: APIRoute = async (ctx) => {
   if (!isReportId(reportId)) return json({ error: 'invalid report id' }, 400);
   if (!file) return json({ error: 'no file' }, 400);
 
-  /* ── Validate MIME type & size ────────────────────────────────────── */
- const mime = file.type || 'application/octet-stream';
-  const classified = classify(mime, isCommentAttachment);
-  if (!classified) return json({ error: 'unsupported file type' }, 400);
-
-  const { fileType, maxSize } = classified;
+  /* ── Validate size ─────────────────────────────────────────────────── */
+ const mime = resolveMime(file);
+  const { fileType, maxSize } = classify(mime);
   if (file.size > maxSize) {
-    const label = fileType === 'image' ? '5 MB' : fileType === 'video' ? '50 MB' : '10 MB';
+    const label =
+      fileType === 'image' ? '5 MB' :
+      fileType === 'video' ? '50 MB' :
+      `${Math.round(MAX_FILE_SIZE / (1024 * 1024))} MB`;
     return json({ error: `file too large (max ${label})` }, 400);
   }
 
   /* ── Check attachment count limit (report-level only) ─────────────── */
   if (!isCommentAttachment) {
-    const maxCount = fileType === 'image' ? MAX_IMAGES : MAX_VIDEOS;
     const [existing] = await db()
       .select({ n: count() })
       .from(attachments)
       .where(and(
         eq(attachments.reportId, reportId),
-        eq(attachments.fileType, fileType),
         isNull(attachments.commentId),
       ));
-    if ((existing?.n ?? 0) >= maxCount) {
-      const label = fileType === 'image' ? 'images' : 'videos';
-      return json({ error: `max ${maxCount} ${label} per report` }, 400);
+    if ((existing?.n ?? 0) >= MAX_ATTACHMENTS_PER_REPORT) {
+      return json({ error: `max ${MAX_ATTACHMENTS_PER_REPORT} attachments per report` }, 400);
     }
   }
 

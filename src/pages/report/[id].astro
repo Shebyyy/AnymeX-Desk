@@ -655,7 +655,7 @@ Astro.response.headers.set(
                     class="gallery-img"
                   />
                 </a>
-              ) : (
+              ) : att.fileType === 'video' ? (
                 <video
                   controls
                   preload="metadata"
@@ -665,6 +665,13 @@ Astro.response.headers.set(
                   <source src={resolveAttUrl(att.filePath)} type={att.mimeType} />
                   Your browser does not support the video element.
                 </video>
+              ) : (
+                <a href={resolveAttUrl(att.filePath)} class="gallery-file" download={att.fileName}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  <span>{att.fileName} ({(att.fileSize / 1024).toFixed(0)} KB)</span>
+                </a>
               )}
               <span class="gallery-label">
                 {att.fileName} ({(att.fileSize / 1024).toFixed(0)} KB)
@@ -1611,6 +1618,21 @@ Astro.response.headers.set(
     max-height: 300px;
     display: block;
   }
+  .gallery-file {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-height: 140px;
+    padding: var(--space-4);
+    color: var(--text-secondary);
+    text-decoration: none;
+    text-align: center;
+    font-size: var(--text-sm);
+  }
+  .gallery-file:hover { color: var(--text-primary); background: var(--surface-hover); }
+  .gallery-file svg { color: var(--text-tertiary); }
   .gallery-label {
     display: block;
     padding: var(--space-2);

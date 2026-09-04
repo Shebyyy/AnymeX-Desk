@@ -199,6 +199,13 @@ export const reports = sqliteTable(
     appVersion: text('app_version'),
 
     title: text('title').notNull(),
+    /**
+     * Lowercased, punctuation-stripped, whitespace-collapsed copy of `title`.
+     * Backs the dedup unique index so the original title keeps its casing and
+     * punctuation for display while two reports that differ only by case or
+     * trailing punctuation still collide as duplicates. See `normalizeTitle`.
+     */
+    titleNormalized: text('title_normalized').notNull().default(''),
     body: text('body'),
 
     /** For bugs: steps to reproduce the issue. */
@@ -257,10 +264,11 @@ export const reports = sqliteTable(
   (t) => [
     /**
      * Dedup: one open report per kind + category + platform + normalized title.
-     * The title_hash is a lowercased, trimmed version stored at insert time.
+     * The normalized title is stored at insert time in `titleNormalized`,
+     * so the original `title` keeps its casing/punctuation for display.
      */
     uniqueIndex('reports_dedup')
-      .on(t.kind, t.category, t.platform, t.title)
+      .on(t.kind, t.category, t.platform, t.titleNormalized)
       .where(sql`status IN ('open', 'confirmed', 'in_progress')`),
 
     /** Board query index: matches the board's filter + sort order. */
@@ -560,6 +568,9 @@ export const IMAGE_MIMES = new Set([
   'image/png',
   'image/webp',
   'image/gif',
+  'image/avif',
+  'image/heic',
+  'image/heif',
 ]);
 
 /** Valid video MIME types. */
@@ -572,7 +583,20 @@ export const VIDEO_MIMES = new Set([
 export const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 /** Max video size: 50MB. */
 export const MAX_VIDEO_SIZE = 50 * 1024 * 1024;
+/**
+ * Max size for any other file type (PDFs, logs, zips, etc.). Matches the video
+ * cap so accepting arbitrary file types doesn't hand the report gallery a
+ * stricter budget than it had before — a single 50 MB upload is plenty for a
+ * bug-report attachment and stays well under the Worker's request budget.
+ */
+export const MAX_FILE_SIZE = 50 * 1024 * 1024;
 /** Max images per report. */
 export const MAX_IMAGES = 5;
 /** Max videos per report. */
 export const MAX_VIDEOS = 1;
+/**
+ * Total attachments per report across every file type — images, videos, and
+ * generic files all count against this single bucket. Prevents a report from
+ * accumulating an unbounded gallery while still leaving plenty of room.
+ */
+export const MAX_ATTACHMENTS_PER_REPORT = 10;

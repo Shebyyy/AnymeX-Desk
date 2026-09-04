@@ -68,8 +68,9 @@ export interface DedupHit {
 /**
  * Check whether an open report already covers this issue.
  *
- * The unique index is (kind, category, platform, title) for open statuses,
- * so we look for a match on those four columns.
+ * The unique index is (kind, category, platform, title_normalized) for open
+ * statuses, so we look for a match on those four columns. `title` passed in is
+ * the raw user input; we normalize it the same way inserts do.
  */
 export async function findDuplicate(
   kind: string,
@@ -86,7 +87,7 @@ export async function findDuplicate(
         eq(reports.kind, kind),
         eq(reports.category, category),
         eq(reports.platform, platform),
-        eq(reports.title, normalized),
+        eq(reports.titleNormalized, normalized),
         inArray(reports.status, [...OPEN_STATUSES]),
       ),
     );
