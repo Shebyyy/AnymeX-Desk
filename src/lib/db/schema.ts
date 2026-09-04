@@ -75,6 +75,7 @@ export const PLATFORMS = ['android', 'ios', 'windows', 'macos', 'linux', 'all'] 
 
 export const STATUSES = [
   'open',
+  'under_review',
   'confirmed',
   'in_progress',
   'fixed',
@@ -83,7 +84,7 @@ export const STATUSES = [
 ] as const;
 
 /** Statuses that still count as live demand — the dedupe window. */
-export const OPEN_STATUSES = ['open', 'confirmed', 'in_progress'] as const;
+export const OPEN_STATUSES = ['open', 'under_review', 'confirmed', 'in_progress'] as const;
 
 /** Closed without a fix. */
 export const OTHER_STATUSES = ['wont_fix', 'duplicate'] as const;
@@ -129,6 +130,7 @@ export const PLATFORM_LABELS: Record<string, string> = {
 
 export const STATUS_LABELS: Record<string, string> = {
   open: 'Open',
+  under_review: 'Under Review',
   confirmed: 'Confirmed',
   in_progress: 'In Progress',
   fixed: 'Fixed',

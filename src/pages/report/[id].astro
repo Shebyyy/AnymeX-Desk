@@ -522,17 +522,7 @@ Astro.response.headers.set(
       <div>
         <dt class="label">Status</dt>
         <dd class="status" data-status={report.status}>
-          {report.kind === 'suggestion'
-            ? report.status === 'fixed'
-              ? 'Completed'
-              : report.status === 'open'
-                ? 'Under Review'
-                : report.status === 'confirmed'
-                  ? 'Planned'
-                  : report.status === 'wont_fix'
-                    ? 'Declined'
-                    : statusLabel(report.status)
-            : statusLabel(report.status)}
+          {statusLabel(report.status, report.kind)}
         </dd>
       </div>
       {report.statusNote && (
@@ -935,7 +925,7 @@ Astro.response.headers.set(
             <div class="mod-row">
               {STATUSES.filter((st) => st !== report.status).map((st) => (
                 <button class="btn" type="submit" name="status" value={st}>
-                  {statusLabel(st)}
+                  {statusLabel(st, report.kind)}
                 </button>
               ))}
             </div>

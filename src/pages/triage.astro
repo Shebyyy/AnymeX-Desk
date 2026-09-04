@@ -156,6 +156,7 @@ const queue = await db().all(sql`
             />
             <div class="btn-row">
               {([
+                ['under_review', 'Review', 'btn-review'],
                 ['confirmed', 'Confirm', 'btn-confirm'],
                 ['in_progress', 'In Progress', 'btn-wip'],
                 ['wont_fix', "Won't Fix", 'btn-dead'],
@@ -285,6 +286,7 @@ const queue = await db().all(sql`
 
   .btn-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
   .btn-sm { font-size: var(--text-xs); padding: 4px 10px; }
+  .btn-review { background: var(--signal-fill); border-color: var(--signal); color: var(--signal-ink); }
   .btn-confirm { background: var(--live-fill); border-color: var(--live); color: var(--live); }
   .btn-confirm:hover { background: var(--live); color: #fff; }
   .btn-wip { background: var(--signal-fill); border-color: var(--signal); color: var(--signal-ink); }

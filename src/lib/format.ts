@@ -58,8 +58,17 @@ export function fixedLabel(
   return `${statusLabel(status)} ${relativeAge(statusChangedAt, now)} ago`;
 }
 
-/** Display label for a report status. */
-export function statusLabel(status: string): string {
+/** Display label for a report status, tailored to kind if provided. */
+export function statusLabel(status: string, kind?: string): string {
+  if (kind === 'suggestion') {
+    if (status === 'open') return 'Open';
+    if (status === 'under_review') return 'Under Review';
+    if (status === 'confirmed') return 'Planned';
+    if (status === 'in_progress') return 'In Progress';
+    if (status === 'fixed') return 'Completed';
+    if (status === 'wont_fix') return 'Declined';
+    if (status === 'duplicate') return 'Duplicate';
+  }
   return STATUS_LABELS[status] ?? status;
 }
 

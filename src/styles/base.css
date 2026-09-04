@@ -266,6 +266,7 @@
     background: currentColor;
   }
   .status[data-status='fixed']       { color: var(--live); }
+  .status[data-status='under_review'] { color: var(--signal-ink); }
   .status[data-status='in_progress'] { color: var(--signal-ink); }
   .status[data-status='dead']        { color: var(--dead); }
   .status[data-status='wont_fix']    { color: var(--text-muted); }

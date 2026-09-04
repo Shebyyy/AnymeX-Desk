@@ -272,8 +272,10 @@ export const POST: APIRoute = async (ctx) => {
         const name = String(rawName).toLowerCase().trim();
         if (name === 'fixed' || name === 'completed' || name === 'resolved') newStatus = 'fixed';
         else if (name === 'in progress' || name === 'in-progress') newStatus = 'in_progress';
-        else if (name === 'planned' || name === 'confirmed') newStatus = 'confirmed';
-        else if (name === 'open' || name === 'under review') newStatus = 'open';
+        else if (name === 'planned') newStatus = 'confirmed';
+        else if (name === 'under review' || name === 'under-review') newStatus = 'under_review';
+        else if (name === 'open') newStatus = 'open';
+        else if (name === 'confirmed') newStatus = 'confirmed';
         else if (name === "won't fix" || name === 'wont fix' || name === 'declined') newStatus = 'wont_fix';
         else if (name === 'duplicate') newStatus = 'duplicate';
       }

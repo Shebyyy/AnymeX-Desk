@@ -50,7 +50,8 @@ export const BUG_STATUS_TAGS_DEF: DiscordTag[] = [
 
 /** Standard status tags to populate on Suggestion channels */
 export const SUGGESTION_STATUS_TAGS_DEF: DiscordTag[] = [
-  { name: 'Under Review', moderated: false, emoji_name: '🔍' },
+  { name: 'Open', moderated: false, emoji_name: '💡' },
+  { name: 'Under Review', moderated: true, emoji_name: '🔍' },
   { name: 'Planned', moderated: true, emoji_name: '💡' },
   { name: 'In Progress', moderated: true, emoji_name: '🟡' },
   { name: 'Completed', moderated: true, emoji_name: '✅' },
@@ -196,6 +197,8 @@ export function statusToTagName(status: Status, kind: Report['kind'] = 'bug'): s
   if (kind === 'suggestion') {
     switch (status) {
       case 'open':
+        return 'open';
+      case 'under_review':
         return 'under review';
       case 'confirmed':
         return 'planned';
@@ -282,8 +285,7 @@ export async function buildReportEmbed(report: Report, origin: string) {
   const displayStatus = isSuggestion
     ? report.status === 'fixed'
       ? 'Completed'
-      : report.status === 'open'
-        ? 'Under Review'
+      : report.status === 'open' ? 'Open' : report.status === 'under_review' ? 'Under Review'
         : report.status === 'confirmed'
           ? 'Planned'
           : report.status === 'wont_fix'
@@ -584,8 +586,7 @@ export async function updateForumStatus(
     const displayStatus = report.kind === 'suggestion'
       ? newStatus === 'fixed'
         ? 'Completed'
-        : newStatus === 'open'
-          ? 'Under Review'
+        : newStatus === 'open' ? 'Open' : newStatus === 'under_review' ? 'Under Review'
           : newStatus === 'confirmed'
             ? 'Planned'
             : newStatus === 'wont_fix'
@@ -1165,8 +1166,10 @@ export async function syncReportStatusFromDiscord(
 
       if (name === 'fixed' || name === 'completed') targetStatus = 'fixed';
       else if (name === 'in progress') targetStatus = 'in_progress';
-      else if (name === 'planned' || name === 'confirmed') targetStatus = 'confirmed';
-      else if (name === 'open' || name === 'under review') targetStatus = 'open';
+      else if (name === 'planned') targetStatus = 'confirmed';
+      else if (name === 'under review') targetStatus = 'under_review';
+      else if (name === 'open') targetStatus = 'open';
+      else if (name === 'confirmed') targetStatus = 'confirmed';
       else if (name === "won't fix" || name === 'declined') targetStatus = 'wont_fix';
       else if (name === 'duplicate') targetStatus = 'duplicate';
     }
