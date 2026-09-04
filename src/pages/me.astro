@@ -1,21 +1,22 @@
 ---
 import Base from '../layouts/Base.astro';
-import ReportRow from '../components/ReportRow.astro';
 import { avatarUrl, currentUser } from '../lib/auth';
 import { safeReturnTo } from '../lib/redirect';
 import { myBacked, myReports, myUpdates, markRead } from '../lib/notify';
-import { relativeAge, statusLabel, kindLabel, categoryLabel } from '../lib/format';
+import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } from '../lib/format';
 import { STATUSES, KINDS, KIND_LABELS, PLATFORMS, PLATFORM_LABELS, CATEGORY_LABELS,
   BUG_CATEGORIES, SUGGESTION_CATEGORIES, EXTENSION_SOURCES, subscriptions, users } from '../lib/db/schema';
 import { db } from '../lib/db/client';
 import { eq, and } from 'drizzle-orm';
+import { LEVEL_LABELS } from '../lib/levels';
 
 export const prerender = false;
 
 /**
- * Your corner of the board.
+ * Your personal hub on AnymeX Desk.
  *
- * Shows everything you filed, everything you voted on, and what has changed.
+ * Tabbed dashboard showing updates/notifications, filed reports,
+ * upvoted reports, subscriptions, and account preferences.
  */
 
 const user = await currentUser(Astro);
@@ -37,7 +38,7 @@ if (Astro.request.method === 'POST') {
     const category = String(form.get('category') ?? '').trim() || null;
     const platform = String(form.get('platform') ?? '').trim() || null;
     await db().insert(subscriptions).values({ userId: user.id, kind, category, platform });
-    return Astro.redirect('/me?subscribed=1', 303);
+    return Astro.redirect('/me?subscribed=1#subscriptions', 303);
   }
 
   if (intent === 'unsubscribe') {
@@ -45,7 +46,7 @@ if (Astro.request.method === 'POST') {
     if (Number.isSafeInteger(subId) && subId > 0) {
       await db().delete(subscriptions).where(and(eq(subscriptions.id, subId), eq(subscriptions.userId, user.id)));
     }
-    return Astro.redirect('/me?unsubscribed=1', 303);
+    return Astro.redirect('/me?unsubscribed=1#subscriptions', 303);
   }
 
   if (intent === 'update_notifications') {
@@ -55,7 +56,7 @@ if (Astro.request.method === 'POST') {
       .update(users)
       .set({ notifyTelegram, notifyDiscord })
       .where(eq(users.discordId, user.id));
-    return Astro.redirect('/me?prefs_saved=1', 303);
+    return Astro.redirect('/me?prefs_saved=1#account', 303);
   }
 
   const ids = String(form.get('ids') ?? '')
@@ -63,7 +64,7 @@ if (Astro.request.method === 'POST') {
     .map(Number)
     .filter((n) => Number.isSafeInteger(n) && n > 0);
   await markRead(user.id, ids);
-  return Astro.redirect('/me?read=1', 303);
+  return Astro.redirect('/me?read=1#notifications', 303);
 }
 
 const [updates, filed, backed, [dbUserRow]] = await Promise.all([
@@ -76,24 +77,25 @@ const [updates, filed, backed, [dbUserRow]] = await Promise.all([
     .where(eq(users.discordId, user.id)),
 ]);
 
-if (Astro.url.searchParams.has('read')) done = 'Marked as read.';
-if (Astro.url.searchParams.has('subscribed')) done = 'Subscription saved.';
+if (Astro.url.searchParams.has('read')) done = 'All notifications marked as read.';
+if (Astro.url.searchParams.has('subscribed')) done = 'Subscription added successfully.';
+if (Astro.url.searchParams.has('unsubscribed')) done = 'Subscription removed.';
 const tgParam = Astro.url.searchParams.get('telegram');
 if (tgParam === 'linked') done = 'Telegram account linked successfully!';
 if (tgParam === 'unlinked') done = 'Telegram account unlinked.';
 if (tgParam === 'cannot_unlink_primary') error = 'Cannot unlink Telegram: it is your only login method.';
 if (tgParam === 'already_linked_to_other_account') error = 'That Telegram account is already linked to another user.';
-if (tgParam?.startsWith('invalid_signature')) error = 'Failed to verify Telegram login signature. Please ensure the Telegram Bot Token in /admin is valid.';
+if (tgParam?.startsWith('invalid_signature')) error = 'Failed to verify Telegram login signature.';
 if (tgParam === 'not_configured') error = 'Telegram bot is not configured yet. Please configure it in /admin.';
-if (tgParam === 'missing_params') error = 'Telegram authorization was missing required parameters. Please try again.';
-if (tgParam === 'failed') error = 'An error occurred while linking Telegram. Please try again.';
+if (tgParam === 'missing_params') error = 'Telegram authorization was missing required parameters.';
+if (tgParam === 'failed') error = 'An error occurred while linking Telegram.';
 
 const dcParam = Astro.url.searchParams.get('discord');
 if (dcParam === 'linked') done = 'Discord account linked successfully!';
 if (dcParam === 'unlinked') done = 'Discord account unlinked.';
 if (dcParam === 'cannot_unlink_primary') error = 'Cannot unlink Discord: it is your only login method.';
 if (dcParam === 'already_linked_to_other_account') error = 'That Discord account is already linked to another user.';
-if (dcParam === 'failed') error = 'An error occurred while linking Discord. Please try again.';
+if (dcParam === 'failed') error = 'An error occurred while linking Discord.';
 
 if (Astro.url.searchParams.has('prefs_saved')) done = 'Notification preferences updated.';
 
@@ -106,36 +108,98 @@ const discordAvatar = isDiscordLinked && dbUserRow?.avatarHash && !dbUserRow.ava
   : null;
 
 const telegramAvatar = isTelegramLinked ? dbUserRow?.telegramPhotoUrl : null;
-const activeAvatar = avatarUrl(user, 64) || discordAvatar || telegramAvatar;
+const activeAvatar = avatarUrl(user, 80) || discordAvatar || telegramAvatar;
+const initial = (user.username || '?')[0].toUpperCase();
 
 const unread = updates.filter((u) => u.readAt === null);
 
 const WHAT_HAPPENED = {
-  status_changed: 'moved to',
-  comment: 'got a comment on',
-  duplicate: 'was merged into',
-  mentioned: 'was mentioned in',
-  subscription_match: 'matched subscription on',
+  status_changed: 'status moved to',
+  comment: 'new comment on',
+  duplicate: 'merged into',
+  mentioned: 'mentioned in',
+  subscription_match: 'matched alert on',
 } as const;
 
 const mySubs = await db().select().from(subscriptions).where(eq(subscriptions.userId, user.id));
 
+// Breakdown counts for filter chips
+const bugReportsCount = filed.filter((r) => r.kind === 'bug').length;
+const suggestionReportsCount = filed.filter((r) => r.kind === 'suggestion').length;
+const extensionReportsCount = filed.filter((r) => r.kind === 'extension').length;
+
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 ---
 
-<Base title="Your reports" narrow>
-  <header class="head">
-    <div class="user-profile-header">
-      {activeAvatar ? (
-        <img class="profile-header-avatar" src={activeAvatar} alt="" width="48" height="48" />
-      ) : (
-        <div class="profile-header-avatar-blank"></div>
-      )}
-      <div>
-        <h1>Your reports</h1>
-        <p class="sub">
-          Signed in as <b>{user.username}</b> (<a href={`/user/${user.id}`} style="color: var(--signal-ink); text-decoration: underline;">view public profile</a>).
-        </p>
+<Base title="Your Reports & Activity">
+  <!-- Contributor Hero Profile Card -->
+  <header class="me-hero">
+    <div class="me-hero-glow" aria-hidden="true"></div>
+    <div class="me-hero-body">
+      <div class="me-avatar-wrap">
+        {activeAvatar ? (
+          <img class="me-avatar" src={activeAvatar} alt={user.username} width="72" height="72" />
+        ) : (
+          <div class="me-avatar me-avatar-fallback">{initial}</div>
+        )}
+      </div>
+
+      <div class="me-hero-info">
+        <div class="me-title-row">
+          <h1 class="me-username">{user.username}</h1>
+          <span class={`staff-pill staff-${user.level}`}>
+            {LEVEL_LABELS[user.level] || 'Contributor'}
+          </span>
+        </div>
+
+        <div class="me-meta-row">
+          {isDiscordLinked && (
+            <span class="me-service-chip discord">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+              </svg>
+              <span>Discord Connected</span>
+            </span>
+          )}
+          {isTelegramLinked && (
+            <span class="me-service-chip telegram">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+              </svg>
+              <span>Telegram Connected</span>
+            </span>
+          )}
+          <a href={`/user/${user.id}`} class="btn btn-ghost btn-sm me-public-profile-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+            <span>Public Profile</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Quick KPI Counters -->
+      <div class="me-kpi-bar">
+        <div class="me-kpi-item">
+          <span class="me-kpi-val num">{filed.length}</span>
+          <span class="me-kpi-lbl">Filed</span>
+        </div>
+        <div class="me-kpi-item">
+          <span class="me-kpi-val num">{backed.length}</span>
+          <span class="me-kpi-lbl">Upvoted</span>
+        </div>
+        <div class="me-kpi-item">
+          <span class="me-kpi-val num">{mySubs.length}</span>
+          <span class="me-kpi-lbl">Alerts</span>
+        </div>
+        <div class="me-kpi-item">
+          <span class:list={['me-kpi-val', 'num', { 'has-unread': unread.length > 0 }]}>
+            {unread.length}
+          </span>
+          <span class="me-kpi-lbl">Unread</span>
+        </div>
       </div>
     </div>
   </header>
@@ -143,27 +207,90 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
   {done && <p class="flash" role="status">{done}</p>}
   {error && <p class="flash flash-err" role="alert">{error}</p>}
 
-  <section class="block">
-    <div class="block-head">
-      <h2>Updates</h2>
-      {
-        unread.length > 0 && (
+  <!-- Tab Navigation Bar -->
+  <nav class="me-tabs-nav" aria-label="Personal dashboard sections">
+    <button type="button" class="me-tab-btn active" data-me-tab="notifications" role="tab" aria-selected="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+      </svg>
+      <span>Activity &amp; Updates</span>
+      {unread.length > 0 ? (
+        <span class="tab-badge warn">{unread.length}</span>
+      ) : (
+        <span class="tab-badge">{updates.length}</span>
+      )}
+    </button>
+
+    <button type="button" class="me-tab-btn" data-me-tab="reports" role="tab" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+      </svg>
+      <span>My Reports</span>
+      <span class="tab-badge">{filed.length}</span>
+    </button>
+
+    <button type="button" class="me-tab-btn" data-me-tab="upvoted" role="tab" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 19V5" />
+        <polyline points="5 12 12 5 19 12" />
+      </svg>
+      <span>Upvoted</span>
+      <span class="tab-badge">{backed.length}</span>
+    </button>
+
+    <button type="button" class="me-tab-btn" data-me-tab="subscriptions" role="tab" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 11a9 9 0 0 1 9 9" />
+        <path d="M4 4a16 16 0 0 1 16 16" />
+        <circle cx="5" cy="19" r="1" />
+      </svg>
+      <span>Subscriptions</span>
+      <span class="tab-badge">{mySubs.length}</span>
+    </button>
+
+    <button type="button" class="me-tab-btn" data-me-tab="account" role="tab" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+      <span>Account &amp; Settings</span>
+    </button>
+  </nav>
+
+  <!-- TAB 1: NOTIFICATIONS & ACTIVITY -->
+  <div class="me-tab-pane active" id="pane-notifications" data-me-pane="notifications">
+    <section class="panel">
+      <div class="panel-header-with-action">
+        <div>
+          <h2>Notifications &amp; Activity</h2>
+          <p class="panel-sub">Recent status changes, developer replies, and mentions on reports you follow.</p>
+        </div>
+        {unread.length > 0 && (
           <form method="POST">
             <input type="hidden" name="ids" value={unread.map((u) => u.id).join(',')} />
-            <button class="btn btn-ghost" type="submit">
-              Mark {unread.length} as read
+            <button class="btn btn-ghost btn-sm" type="submit">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span>Mark all ({unread.length}) as read</span>
             </button>
           </form>
-        )
-      }
-    </div>
-    {
-      updates.length === 0 ? (
-        <p class="empty-line">
-          Nothing yet. When a report you filed or voted on is updated, it turns up here.
-        </p>
+        )}
+      </div>
+
+      {updates.length === 0 ? (
+        <div class="me-empty-card">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+            <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+          </svg>
+          <h3>You're completely caught up!</h3>
+          <p>When a report you filed, upvoted, or subscribed to is updated, notifications will appear here.</p>
+        </div>
       ) : (
-        <ol class="updates">
+        <ol class="updates-feed">
           {updates.map((u) => {
             const note = (() => {
               if (u.kind !== 'status_changed' || !u.detail) return null;
@@ -174,611 +301,1354 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
               const rest = u.detail.slice(idx + 1).trim();
               return rest || null;
             })();
+
             return (
-            <li class:list={['update', { fresh: u.readAt === null }]}>
-              <a href={`/report/${u.reportId}`}>
-                <span class="u-what">
-                  {u.readAt === null && <b class="u-new">New</b>}
-                  <b class="u-src">{u.reportTitle}</b>
-                  <span class="u-mid">
-                    {WHAT_HAPPENED[u.kind as keyof typeof WHAT_HAPPENED] ?? u.kind} {statusLabel(u.reportStatus)}
-                  </span>
-                  {note && <span class="u-note"> — {note}</span>}
-                </span>
-                <span class="u-meta">
-                  <span class="u-title">
-                    {kindLabel(u.reportKind)} · {categoryLabel(u.reportCategory)}
-                  </span>
-                  <span>{relativeAge(u.createdAt)} ago</span>
-                </span>
-              </a>
-            </li>
-          )})}
+              <li class:list={['update-row', { 'is-unread': u.readAt === null }]}>
+                <a href={`/report/${u.reportId}`} class="update-link">
+                  <div class="update-indicator-col">
+                    {u.readAt === null ? (
+                      <span class="unread-dot" title="Unread notification" />
+                    ) : (
+                      <span class="read-dot" />
+                    )}
+                  </div>
+
+                  <div class="update-content">
+                    <div class="update-title-line">
+                      <span class="update-report-title">{u.reportTitle}</span>
+                      <span class="update-action">
+                        {WHAT_HAPPENED[u.kind as keyof typeof WHAT_HAPPENED] ?? u.kind}
+                      </span>
+                      <span class={`status-badge status-${u.reportStatus}`}>
+                        {statusLabel(u.reportStatus)}
+                      </span>
+                    </div>
+
+                    {note && <p class="update-note">💬 {note}</p>}
+
+                    <div class="update-meta-line">
+                      <span class="update-tag">{kindLabel(u.reportKind)}</span>
+                      <span class="update-tag">{categoryLabel(u.reportCategory)}</span>
+                      <span class="update-time">{relativeAge(u.createdAt)} ago</span>
+                    </div>
+                  </div>
+                </a>
+              </li>
+            );
+          })}
         </ol>
-      )
-    }
-  </section>
+      )}
+    </section>
+  </div>
 
-  <section class="block">
-    <h2>You filed</h2>
-    {
-      filed.length === 0 ? (
-        <p class="empty-line">
-          You haven't filed anything yet. <a href="/new">File a report</a>.
-        </p>
-      ) : (
-        <ol class="rows">
-          {filed.map((r) => (
-            <ReportRow report={r as never} mine={true} />
-          ))}
-        </ol>
-      )
-    }
-  </section>
-
-  <section class="block">
-    <h2>You voted on</h2>
-    {
-      backed.length === 0 ? (
-        <p class="empty-line">
-          Nothing yet. Tapping the count on any report adds you to it, which is
-          what moves it up the board.
-        </p>
-      ) : (
-        <ol class="rows">
-          {backed.map((r) => (
-            <ReportRow report={r as never} mine={true} />
-          ))}
-        </ol>
-      )
-    }
-  </section>
-
-  {/* ── Subscriptions ──────────────────────────────────────────────────── */}
-  <section class="block">
-    <div class="block-head">
-      <h2>Subscriptions</h2>
-    </div>
-    <p class="sub-desc">Get an in-app notification when a new report matches your filter.</p>
-
-    {mySubs.length > 0 && (
-      <ul class="sub-list">
-        {mySubs.map((s) => (
-          <li class="sub-item">
-            <span class="sub-tags">
-              {s.kind    && <span class="tag">{KIND_LABELS[s.kind] ?? s.kind}</span>}
-              {s.category && <span class="tag">{CATEGORY_LABELS[s.category] ?? s.category}</span>}
-              {s.platform && <span class="tag">{PLATFORM_LABELS[s.platform] ?? s.platform}</span>}
-              {!s.kind && !s.category && !s.platform && <span class="tag tag-all">All reports</span>}
-            </span>
-            <form method="POST" class="sub-remove">
-              <input type="hidden" name="intent" value="unsubscribe" />
-              <input type="hidden" name="subId" value={s.id} />
-              <button class="btn btn-ghost btn-sm" type="submit" aria-label="Remove subscription">Remove</button>
-            </form>
-          </li>
-        ))}
-      </ul>
-    )}
-
-    <details class="sub-add-details">
-      <summary class="sub-add-summary">+ Add subscription</summary>
-      <form method="POST" class="sub-add-form">
-        <input type="hidden" name="intent" value="subscribe" />
-        <div class="sub-add-row">
-          <div class="field">
-            <label class="label" for="sub-kind">Type</label>
-            <select id="sub-kind" name="kind" class="select">
-              <option value="">Any type</option>
-              {KINDS.map((k) => <option value={k}>{KIND_LABELS[k]}</option>)}
-            </select>
-          </div>
-          <div class="field">
-            <label class="label" for="sub-platform">Platform</label>
-            <select id="sub-platform" name="platform" class="select">
-              <option value="">Any platform</option>
-              {PLATFORMS.map((p) => <option value={p}>{PLATFORM_LABELS[p]}</option>)}
-            </select>
-          </div>
-          <div class="field">
-            <label class="label" for="sub-category">Category</label>
-            <select id="sub-category" name="category" class="select">
-              <option value="">Any category</option>
-              {[...BUG_CATEGORIES, ...SUGGESTION_CATEGORIES, ...EXTENSION_SOURCES].map((c) => (
-                <option value={c}>{CATEGORY_LABELS[c] ?? c}</option>
-              ))}
-            </select>
-          </div>
-          <button class="btn btn-primary sub-add-btn" type="submit">Subscribe</button>
+  <!-- TAB 2: MY REPORTS -->
+  <div class="me-tab-pane" id="pane-reports" data-me-pane="reports" hidden>
+    <section class="panel">
+      <div class="panel-header-with-action">
+        <div>
+          <h2>Reports You Filed</h2>
+          <p class="panel-sub">All bug reports, feature suggestions, and extension issues you have submitted.</p>
         </div>
-      </form>
-    </details>
-  </section>
+        <a href="/new" class="btn btn-primary btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span>File New Report</span>
+        </a>
+      </div>
 
-  {/* ─── Linked Accounts & Notification Channels ──────────────────── */}
-  <section class="block">
-    <div class="block-head">
-      <h2>Linked Accounts &amp; Notifications</h2>
-    </div>
-    <div class="accounts-card">
-      <div class="account-row">
-        <div class="account-info">
-          {discordAvatar ? (
-            <div class="account-avatar-wrapper">
-              <img class="account-avatar-img" src={discordAvatar} alt="" width="38" height="38" />
-              <span class="service-badge discord" title="Discord">
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                  <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
-                </svg>
-              </span>
-            </div>
-          ) : (
-            <div class="account-icon discord">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
-              </svg>
-            </div>
-          )}
-          <div>
-            <div class="account-name">Discord</div>
-            <div class="account-status">
-              {isDiscordLinked ? (
-                <span>Connected as <b>{dbUserRow?.username || user.username}</b></span>
-              ) : (
-                <span class="text-muted">Not connected</span>
-              )}
-            </div>
-          </div>
+      <!-- Filter & Search Toolbar -->
+      <div class="me-toolbar">
+        <div class="me-kind-filters" role="group" aria-label="Filter your reports by kind">
+          <button type="button" class="chip active" data-filed-filter="all">
+            All ({filed.length})
+          </button>
+          <button type="button" class="chip" data-filed-filter="bug">
+            Bugs ({bugReportsCount})
+          </button>
+          <button type="button" class="chip" data-filed-filter="suggestion">
+            Suggestions ({suggestionReportsCount})
+          </button>
+          <button type="button" class="chip" data-filed-filter="extension">
+            Extensions ({extensionReportsCount})
+          </button>
         </div>
-        <div class="account-action">
-          {isDiscordLinked ? (
-            isTelegramLinked && (
-              <form method="POST" action="/auth/discord/unlink">
-                <button type="submit" class="btn btn-ghost btn-sm">Unlink</button>
-              </form>
-            )
-          ) : (
-            <a href="/auth/discord?next=/me" class="btn btn-sm btn-discord">
-              Connect Discord
-            </a>
-          )}
+
+        <div class="me-search-box">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="search"
+            class="me-search-input"
+            id="filed-search-input"
+            placeholder="Filter your reports..."
+            autocomplete="off"
+          />
         </div>
       </div>
 
-      <div class="account-row">
-        <div class="account-info">
-          {telegramAvatar ? (
-            <div class="account-avatar-wrapper">
-              <img class="account-avatar-img" src={telegramAvatar} alt="" width="38" height="38" />
-              <span class="service-badge telegram" title="Telegram">
-                <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
-                </svg>
-              </span>
-            </div>
-          ) : (
-            <div class="account-icon telegram">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
-              </svg>
-            </div>
-          )}
-          <div>
-            <div class="account-name">Telegram</div>
-            <div class="account-status">
-              {isTelegramLinked ? (
-                <span>Connected as <b>@{dbUserRow?.telegramUsername || dbUserRow?.telegramId}</b></span>
-              ) : (
-                <span class="text-muted">Not connected</span>
-              )}
-            </div>
-          </div>
+      {filed.length === 0 ? (
+        <div class="me-empty-card">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          <h3>You haven't filed any reports yet</h3>
+          <p>Notice an issue or have an idea to improve AnymeX? Submit your feedback directly to the team.</p>
+          <a href="/new" class="btn btn-primary" style="margin-block-start: var(--space-3);">File a Report</a>
         </div>
-        <div class="account-action">
-          {isTelegramLinked ? (
-            isDiscordLinked && (
-              <form method="POST" action="/auth/telegram/unlink">
-                <button type="submit" class="btn btn-ghost btn-sm">Unlink</button>
-              </form>
-            )
-          ) : (
-            <a href="/auth/telegram?next=/me" class="btn btn-sm btn-telegram">
-              Connect Telegram
-            </a>
-          )}
+      ) : (
+        <>
+          <p class="empty-line" id="filed-empty-search" hidden style="display: none; padding: var(--space-4); text-align: center;">
+            No filed reports match the current filter or search criteria.
+          </p>
+          <ul class="me-reports-grid" id="filed-reports-grid">
+            {filed.map((r) => (
+              <li
+                class="me-report-card"
+                data-kind={r.kind}
+                data-search={`${r.title} ${r.category} ${r.platform} ${r.status}`.toLowerCase()}
+              >
+                <div class="me-report-main">
+                  <div class="me-report-header">
+                    <span class={`kind-tag kind-${r.kind}`}>{kindLabel(r.kind)}</span>
+                    <a href={`/report/${r.id}`} class="me-report-title">
+                      <span class="report-num">#{r.id}</span> {r.title}
+                    </a>
+                  </div>
+                  <div class="me-report-meta">
+                    <span class="tag-meta">{categoryLabel(r.category)}</span>
+                    <span class="tag-meta">{platformLabel(r.platform)}</span>
+                    <span class={`status-badge status-${r.status}`}>{statusLabel(r.status)}</span>
+                    <span class="me-time">Filed {relativeAge(r.createdAt)} ago</span>
+                    {r.commentCount > 0 && (
+                      <span class="me-comment-chip">💬 {r.commentCount}</span>
+                    )}
+                  </div>
+                </div>
+                <div class="me-vote-box" title={`${r.votes} upvotes`}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 4l-8 8h6v8h4v-8h6z" />
+                  </svg>
+                  <span class="num">{r.votes}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  </div>
+
+  <!-- TAB 3: UPVOTED REPORTS -->
+  <div class="me-tab-pane" id="pane-upvoted" data-me-pane="upvoted" hidden>
+    <section class="panel">
+      <div class="panel-header-with-action">
+        <div>
+          <h2>Reports You Upvoted</h2>
+          <p class="panel-sub">Community reports you have backed to help developers prioritize fixes and features.</p>
+        </div>
+        <a href="/" class="btn btn-ghost btn-sm">
+          <span>Explore Public Boards</span>
+        </a>
+      </div>
+
+      <div class="me-toolbar">
+        <div class="me-search-box" style="inline-size: 100%; max-inline-size: 380px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="search"
+            class="me-search-input"
+            id="backed-search-input"
+            placeholder="Search upvoted reports..."
+            autocomplete="off"
+          />
         </div>
       </div>
 
-      <hr class="accounts-divider" />
-
-      <form method="POST" class="notif-prefs-form">
-        <input type="hidden" name="intent" value="update_notifications" />
-        <h3 class="prefs-subtitle">DM Notification Preferences</h3>
-        <p class="prefs-hint">
-          Receive direct messages when someone replies to your comment, mentions you, or changes your report's status.
-        </p>
-
-        <div class="pref-checkbox-row">
-          <label class="pref-checkbox-label">
-            <input
-              type="checkbox"
-              name="notify_discord"
-              checked={dbUserRow?.notifyDiscord !== false}
-              disabled={!isDiscordLinked}
-            />
-            <span>Send Discord DMs {!isDiscordLinked && '(Connect Discord above first)'}</span>
-          </label>
+      {backed.length === 0 ? (
+        <div class="me-empty-card">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          </svg>
+          <h3>You haven't upvoted any reports yet</h3>
+          <p>Tapping the vote counter on any report in the community board backs the issue and increases its priority.</p>
+          <a href="/" class="btn btn-primary" style="margin-block-start: var(--space-3);">Explore Reports</a>
         </div>
+      ) : (
+        <>
+          <p class="empty-line" id="backed-empty-search" hidden style="display: none; padding: var(--space-4); text-align: center;">
+            No upvoted reports match your search.
+          </p>
+          <ul class="me-reports-grid" id="backed-reports-grid">
+            {backed.map((r) => (
+              <li
+                class="me-report-card"
+                data-search={`${r.title} ${r.category} ${r.platform} ${r.status}`.toLowerCase()}
+              >
+                <div class="me-report-main">
+                  <div class="me-report-header">
+                    <span class={`kind-tag kind-${r.kind}`}>{kindLabel(r.kind)}</span>
+                    <a href={`/report/${r.id}`} class="me-report-title">
+                      <span class="report-num">#{r.id}</span> {r.title}
+                    </a>
+                  </div>
+                  <div class="me-report-meta">
+                    <span class="tag-meta">{categoryLabel(r.category)}</span>
+                    <span class="tag-meta">{platformLabel(r.platform)}</span>
+                    <span class={`status-badge status-${r.status}`}>{statusLabel(r.status)}</span>
+                    <span class="me-time">Updated {relativeAge(r.createdAt)} ago</span>
+                    {r.commentCount > 0 && (
+                      <span class="me-comment-chip">💬 {r.commentCount}</span>
+                    )}
+                  </div>
+                </div>
+                <div class="me-vote-box backed-voted" title={`You backed this report with ${r.votes} votes`}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 4l-8 8h6v8h4v-8h6z" />
+                  </svg>
+                  <span class="num">{r.votes}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  </div>
 
-        <div class="pref-checkbox-row">
-          <label class="pref-checkbox-label">
-            <input
-              type="checkbox"
-              name="notify_telegram"
-              checked={dbUserRow?.notifyTelegram !== false}
-              disabled={!isTelegramLinked}
-            />
-            <span>Send Telegram DMs {!isTelegramLinked && '(Connect Telegram above first)'}</span>
-          </label>
+  <!-- TAB 4: SUBSCRIPTIONS -->
+  <div class="me-tab-pane" id="pane-subscriptions" data-me-pane="subscriptions" hidden>
+    <section class="panel">
+      <div class="panel-header-with-action">
+        <div>
+          <h2>Topic &amp; Alert Subscriptions</h2>
+          <p class="panel-sub">Get instant notifications when new reports matching specific types, categories, or platforms are submitted.</p>
         </div>
-
-        <button type="submit" class="btn btn-primary btn-sm" style="margin-block-start: var(--space-3);">
-          Save Notification Preferences
+        <button type="button" class="btn btn-primary btn-sm" id="toggle-add-sub-btn" aria-expanded="false" aria-controls="add-sub-drawer">
+          <svg class="toggle-icon-plus" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span>Add Subscription</span>
         </button>
-      </form>
-    </div>
-  </section>
+      </div>
 
-  {/* ─── Display & Appearance Preferences ──────────────────────────── */}
-  <section class="block">
-    <div class="block-head">
-      <h2>Display &amp; Appearance</h2>
+      <!-- Expandable Add Subscription Drawer -->
+      <div id="add-sub-drawer" class="add-sub-drawer" hidden>
+        <div class="add-box">
+          <div class="add-box-header">
+            <h3>Subscribe to Topic Alerts</h3>
+            <button type="button" class="btn btn-ghost btn-sm" id="close-add-sub-btn" aria-label="Cancel">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+              <span>Cancel</span>
+            </button>
+          </div>
+
+          <form method="POST" class="add">
+            <input type="hidden" name="intent" value="subscribe" />
+            <div class="sub-form-grid">
+              <div class="field">
+                <label class="label" for="sub-kind">Report Type</label>
+                <select id="sub-kind" name="kind" class="select">
+                  <option value="">Any Type</option>
+                  {KINDS.map((k) => <option value={k}>{KIND_LABELS[k]}</option>)}
+                </select>
+              </div>
+
+              <div class="field">
+                <label class="label" for="sub-platform">Platform</label>
+                <select id="sub-platform" name="platform" class="select">
+                  <option value="">Any Platform</option>
+                  {PLATFORMS.map((p) => <option value={p}>{PLATFORM_LABELS[p]}</option>)}
+                </select>
+              </div>
+
+              <div class="field">
+                <label class="label" for="sub-category">Category</label>
+                <select id="sub-category" name="category" class="select">
+                  <option value="">Any Category</option>
+                  {[...BUG_CATEGORIES, ...SUGGESTION_CATEGORIES, ...EXTENSION_SOURCES].map((c) => (
+                    <option value={c}>{CATEGORY_LABELS[c] ?? c}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div class="add-actions">
+              <button class="btn btn-primary" type="submit">Create Subscription</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Active Subscriptions List -->
+      {mySubs.length === 0 ? (
+        <div class="me-empty-card">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 11a9 9 0 0 1 9 9" />
+            <path d="M4 4a16 16 0 0 1 16 16" />
+            <circle cx="5" cy="19" r="1" />
+          </svg>
+          <h3>No active subscriptions</h3>
+          <p>Create a subscription above to get alerts whenever a new bug or suggestion is filed in your preferred area.</p>
+        </div>
+      ) : (
+        <ul class="sub-cards-grid">
+          {mySubs.map((s) => (
+            <li class="sub-card">
+              <div class="sub-tags-wrap">
+                {s.kind ? (
+                  <span class="kind-tag" style="font-size: 0.7rem;">{KIND_LABELS[s.kind] ?? s.kind}</span>
+                ) : (
+                  <span class="sub-tag-pill">Any Type</span>
+                )}
+                {s.category ? (
+                  <span class="sub-tag-pill accent">{CATEGORY_LABELS[s.category] ?? s.category}</span>
+                ) : (
+                  <span class="sub-tag-pill">Any Category</span>
+                )}
+                {s.platform ? (
+                  <span class="sub-tag-pill">{PLATFORM_LABELS[s.platform] ?? s.platform}</span>
+                ) : (
+                  <span class="sub-tag-pill">Any Platform</span>
+                )}
+              </div>
+              <form method="POST" class="sub-remove-form" onsubmit="return confirm('Remove this subscription?');">
+                <input type="hidden" name="intent" value="unsubscribe" />
+                <input type="hidden" name="subId" value={s.id} />
+                <button class="btn btn-ghost btn-sm danger" type="submit">
+                  <span>Remove</span>
+                </button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  </div>
+
+  <!-- TAB 5: ACCOUNT & PREFERENCES -->
+  <div class="me-tab-pane" id="pane-account" data-me-pane="account" hidden>
+    <div class="settings-grid">
+      <!-- Connected Accounts Card -->
+      <section class="panel">
+        <h2>Connected Accounts</h2>
+        <p class="panel-sub">Manage your Discord and Telegram login methods and integration status.</p>
+
+        <div class="account-rows-box">
+          <!-- Discord Row -->
+          <div class="account-row-item">
+            <div class="account-item-left">
+              {discordAvatar ? (
+                <img class="account-avatar" src={discordAvatar} alt="" width="40" height="40" />
+              ) : (
+                <div class="account-icon-badge discord">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+                  </svg>
+                </div>
+              )}
+              <div>
+                <div class="account-name">Discord</div>
+                <div class="account-status">
+                  {isDiscordLinked ? (
+                    <span>Connected as <b>{dbUserRow?.username || user.username}</b></span>
+                  ) : (
+                    <span class="text-muted">Not connected</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div class="account-action">
+              {isDiscordLinked ? (
+                isTelegramLinked && (
+                  <form method="POST" action="/auth/discord/unlink" onsubmit="return confirm('Unlink Discord from your account?');">
+                    <button type="submit" class="btn btn-ghost btn-sm danger">Unlink</button>
+                  </form>
+                )
+              ) : (
+                <a href="/auth/discord?next=/me" class="btn btn-sm btn-discord">
+                  Connect Discord
+                </a>
+              )}
+            </div>
+          </div>
+
+          <!-- Telegram Row -->
+          <div class="account-row-item">
+            <div class="account-item-left">
+              {telegramAvatar ? (
+                <img class="account-avatar" src={telegramAvatar} alt="" width="40" height="40" />
+              ) : (
+                <div class="account-icon-badge telegram">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+                  </svg>
+                </div>
+              )}
+              <div>
+                <div class="account-name">Telegram</div>
+                <div class="account-status">
+                  {isTelegramLinked ? (
+                    <span>Connected as <b>@{dbUserRow?.telegramUsername || dbUserRow?.telegramId}</b></span>
+                  ) : (
+                    <span class="text-muted">Not connected</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div class="account-action">
+              {isTelegramLinked ? (
+                isDiscordLinked && (
+                  <form method="POST" action="/auth/telegram/unlink" onsubmit="return confirm('Unlink Telegram from your account?');">
+                    <button type="submit" class="btn btn-ghost btn-sm danger">Unlink</button>
+                  </form>
+                )
+              ) : (
+                <a href="/auth/telegram?next=/me" class="btn btn-sm btn-telegram">
+                  Connect Telegram
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- DM Notification Preferences -->
+      <section class="panel">
+        <h2>DM Notification Preferences</h2>
+        <p class="panel-sub">Configure direct message alerts when developers reply to your reports or change their status.</p>
+
+        <form method="POST" class="add">
+          <input type="hidden" name="intent" value="update_notifications" />
+
+          <div class="pref-switch-card">
+            <label class="pref-switch-label">
+              <input
+                type="checkbox"
+                name="notify_discord"
+                checked={dbUserRow?.notifyDiscord !== false}
+                disabled={!isDiscordLinked}
+              />
+              <div class="pref-switch-info">
+                <span class="pref-switch-title">Discord DM Notifications</span>
+                <span class="pref-switch-sub">
+                  {isDiscordLinked
+                    ? 'Receive Discord DMs on status updates and comments'
+                    : 'Connect Discord above to enable Discord DM alerts'}
+                </span>
+              </div>
+            </label>
+          </div>
+
+          <div class="pref-switch-card">
+            <label class="pref-switch-label">
+              <input
+                type="checkbox"
+                name="notify_telegram"
+                checked={dbUserRow?.notifyTelegram !== false}
+                disabled={!isTelegramLinked}
+              />
+              <div class="pref-switch-info">
+                <span class="pref-switch-title">Telegram DM Notifications</span>
+                <span class="pref-switch-sub">
+                  {isTelegramLinked
+                    ? 'Receive Telegram DMs via the AnymeX notification bot'
+                    : 'Connect Telegram above to enable Telegram bot alerts'}
+                </span>
+              </div>
+            </label>
+          </div>
+
+          <div class="add-actions" style="margin-block-start: var(--space-2);">
+            <button type="submit" class="btn btn-primary">Save Preferences</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Appearance Customizer -->
+      <section class="panel">
+        <h2>Display &amp; Appearance</h2>
+        <p class="panel-sub">Customize your viewing experience across AnymeX Desk.</p>
+
+        <div class="appearance-card">
+          <p class="appearance-desc">
+            Personalize your theme (OLED true black, dark mode, light mode), brand accent colors, font size, and UI density.
+          </p>
+          <button type="button" class="btn btn-ghost" data-open-prefs style="margin-block-start: var(--space-3);">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+            <span>Open Appearance Customizer</span>
+          </button>
+        </div>
+      </section>
     </div>
-    <div class="prefs-card">
-      <p class="prefs-lede">
-        Customize your theme (OLED true black, light mode), accent colors, font size, and density across AnymeX Desk.
-      </p>
-      <button type="button" class="btn" data-open-prefs style="margin-block-start: var(--space-3);">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-        Customize Appearance
-      </button>
-    </div>
-  </section>
+  </div>
 </Base>
 
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    // 1. Tab Navigation
+    const tabBtns = document.querySelectorAll('[data-me-tab]');
+    const tabPanes = document.querySelectorAll('[data-me-pane]');
+
+    function switchTab(tabId) {
+      let matched = false;
+      tabPanes.forEach(pane => {
+        const isMatch = pane.getAttribute('data-me-pane') === tabId;
+        pane.classList.toggle('active', isMatch);
+        pane.hidden = !isMatch;
+        if (isMatch) matched = true;
+      });
+
+      if (!matched && tabPanes.length > 0) {
+        tabPanes[0].classList.add('active');
+        tabPanes[0].hidden = false;
+        tabId = tabPanes[0].getAttribute('data-me-pane');
+      }
+
+      tabBtns.forEach(btn => {
+        const isMatch = btn.getAttribute('data-me-tab') === tabId;
+        btn.classList.toggle('active', isMatch);
+        btn.setAttribute('aria-selected', isMatch ? 'true' : 'false');
+      });
+
+      try {
+        if (history.replaceState) {
+          history.replaceState(null, '', `#${tabId}`);
+        }
+      } catch (e) {}
+    }
+
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-me-tab');
+        if (target) switchTab(target);
+      });
+    });
+
+    // Check URL hash on load
+    const currentHash = (window.location.hash || '').replace('#', '');
+    if (currentHash && ['notifications', 'reports', 'upvoted', 'subscriptions', 'account'].includes(currentHash)) {
+      switchTab(currentHash);
+    }
+
+    // 2. Filter & Search My Reports
+    const filedSearchInput = document.getElementById('filed-search-input');
+    const filedKindChips = document.querySelectorAll('[data-filed-filter]');
+    const filedCards = document.querySelectorAll('#filed-reports-grid .me-report-card');
+    const filedEmptySearch = document.getElementById('filed-empty-search');
+    let currentFiledKind = 'all';
+
+    function applyFiledFilters() {
+      const q = (filedSearchInput && filedSearchInput.value ? filedSearchInput.value : '').trim().toLowerCase();
+      let visible = 0;
+
+      filedCards.forEach(card => {
+        const kind = card.getAttribute('data-kind');
+        const text = card.getAttribute('data-search') || '';
+
+        const matchKind = currentFiledKind === 'all' || kind === currentFiledKind;
+        const matchSearch = !q || text.includes(q);
+        const isVisible = matchKind && matchSearch;
+
+        card.hidden = !isVisible;
+        card.style.display = isVisible ? '' : 'none';
+        if (isVisible) visible++;
+      });
+
+      if (filedEmptySearch) {
+        filedEmptySearch.hidden = visible > 0;
+        filedEmptySearch.style.display = visible > 0 ? 'none' : 'block';
+      }
+    }
+
+    if (filedSearchInput) {
+      filedSearchInput.addEventListener('input', applyFiledFilters);
+    }
+
+    filedKindChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        filedKindChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        currentFiledKind = chip.getAttribute('data-filed-filter') || 'all';
+        applyFiledFilters();
+      });
+    });
+
+    // 3. Search Upvoted Reports
+    const backedSearchInput = document.getElementById('backed-search-input');
+    const backedCards = document.querySelectorAll('#backed-reports-grid .me-report-card');
+    const backedEmptySearch = document.getElementById('backed-empty-search');
+
+    function applyBackedFilters() {
+      const q = (backedSearchInput && backedSearchInput.value ? backedSearchInput.value : '').trim().toLowerCase();
+      let visible = 0;
+
+      backedCards.forEach(card => {
+        const text = card.getAttribute('data-search') || '';
+        const match = !q || text.includes(q);
+
+        card.hidden = !match;
+        card.style.display = match ? '' : 'none';
+        if (match) visible++;
+      });
+
+      if (backedEmptySearch) {
+        backedEmptySearch.hidden = visible > 0;
+        backedEmptySearch.style.display = visible > 0 ? 'none' : 'block';
+      }
+    }
+
+    if (backedSearchInput) {
+      backedSearchInput.addEventListener('input', applyBackedFilters);
+    }
+
+    // 4. Subscriptions Drawer Toggle
+    const toggleAddSubBtn = document.getElementById('toggle-add-sub-btn');
+    const closeAddSubBtn = document.getElementById('close-add-sub-btn');
+    const addSubDrawer = document.getElementById('add-sub-drawer');
+    const subKindSelect = document.getElementById('sub-kind');
+
+    function toggleSubDrawer(show) {
+      if (!addSubDrawer || !toggleAddSubBtn) return;
+      const isShowing = show !== undefined ? show : addSubDrawer.hidden;
+      addSubDrawer.hidden = !isShowing;
+      toggleAddSubBtn.classList.toggle('is-open', isShowing);
+      toggleAddSubBtn.setAttribute('aria-expanded', isShowing ? 'true' : 'false');
+      if (isShowing && subKindSelect) {
+        subKindSelect.focus();
+      }
+    }
+
+    if (toggleAddSubBtn) toggleAddSubBtn.addEventListener('click', () => toggleSubDrawer());
+    if (closeAddSubBtn) closeAddSubBtn.addEventListener('click', () => toggleSubDrawer(false));
+  });
+</script>
+
 <style>
-  .head {
-    padding-block-end: var(--space-4);
-    border-block-end: 1px solid var(--border-subtle);
+  /* ── Hero Profile Card ── */
+  .me-hero {
+    position: relative;
+    padding: var(--space-6);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    overflow: hidden;
+    margin-block-end: var(--space-6);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
   }
-  h1 {
-    font-size: var(--text-xl);
-    letter-spacing: var(--track-tight);
+  .me-hero-glow {
+    position: absolute;
+    top: -50px;
+    right: -50px;
+    width: 250px;
+    height: 250px;
+    background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(99, 102, 241, 0) 70%);
+    pointer-events: none;
   }
-  .user-profile-header {
+  .me-hero-body {
     display: flex;
     align-items: center;
-    gap: var(--space-4);
+    justify-content: space-between;
+    gap: var(--space-5);
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
   }
-  .profile-header-avatar {
-    inline-size: 48px;
-    block-size: 48px;
-    border-radius: 50%;
+  .me-avatar-wrap {
+    flex-shrink: 0;
+  }
+  .me-avatar {
+    inline-size: 72px;
+    block-size: 72px;
+    border-radius: 9999px;
+    border: 3px solid var(--border-default);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
     object-fit: cover;
-    border: 2px solid var(--border-default);
-    background: var(--bg-surface-elevated, #24262b);
-    flex-shrink: 0;
+    display: block;
   }
-  .profile-header-avatar-blank {
-    inline-size: 48px;
-    block-size: 48px;
-    border-radius: 50%;
-    background: var(--bg-surface-elevated, #24262b);
-    border: 2px solid var(--border-default);
-    flex-shrink: 0;
-  }
-  .sub {
-    max-inline-size: 62ch;
-    margin-block-start: var(--space-1);
-    font-size: var(--text-sm);
-    color: var(--text-tertiary);
-  }
-  .flash {
-    padding: var(--space-3);
-    margin-block-start: var(--space-4);
-    border: 1px solid var(--border-default);
-    border-inline-start: 2px solid var(--signal);
-    border-radius: var(--radius-md);
-    background: var(--signal-fill);
-    font-size: var(--text-sm);
-  }
-  .flash-err {
-    border-inline-start-color: var(--dead, #ed4245);
-    background: rgba(237, 66, 69, 0.1);
-    color: #ff7b72;
-  }
-
-  .block {
-    margin-block-start: var(--space-8);
-  }
-  .block-head {
+  .me-avatar-fallback {
+    background: var(--surface-sunken);
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-3);
-    flex-wrap: wrap;
-  }
-  h2 {
-    font-size: var(--text-lg);
-    letter-spacing: var(--track-tight);
-    margin-block-end: var(--space-2);
-  }
-
-  .updates {
-    display: grid;
-    gap: var(--space-px);
-  }
-  .update a {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-3);
-    flex-wrap: wrap;
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-raised);
-  }
-  .update a:hover { border-color: var(--border-strong); }
-  .fresh a { border-inline-start: 2px solid var(--signal); }
-  .u-new {
-    margin-inline-end: var(--space-2);
-    font-size: var(--text-xs);
-    letter-spacing: var(--track-wide);
-    text-transform: uppercase;
-    color: var(--signal-ink);
-  }
-  .u-src { font-weight: var(--weight-semi); }
-  .u-mid {
-    margin-inline-start: var(--space-1);
+    align-items: center;
+    justify-content: center;
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-bold);
     color: var(--text-secondary);
   }
-  .u-note { color: var(--text-tertiary); font-style: italic; }
-  .u-meta {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-3);
-    min-inline-size: 0;
-    font-size: var(--text-sm);
-    color: var(--text-tertiary);
-  }
-  .u-title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-inline-size: 28ch;
-  }
-
-  .foot-note {
-    margin-block-start: var(--space-8);
-    font-size: var(--text-sm);
-    color: var(--text-tertiary);
-  }
-  .foot-note a,
-  .empty-line a {
-    color: var(--signal-ink);
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-
-  @media (max-width: 640px) {
-    .u-title { max-inline-size: 100%; white-space: normal; }
-    .u-meta { flex-basis: 100%; }
-  }
-
-  /* ── Subscriptions ── */
-  .sub-desc {
-    font-size: var(--text-sm);
-    color: var(--text-tertiary);
-    margin-block-end: var(--space-3);
-  }
-  .sub-list {
+  .me-hero-info {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    margin-block-end: var(--space-3);
+    gap: var(--space-2);
+    min-inline-size: 0;
+    flex: 1;
   }
-  .sub-item {
+  .me-title-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-3);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-raised);
+    flex-wrap: wrap;
   }
-  .sub-tags {
+  .me-username {
+    font-size: var(--text-xl);
+    font-weight: var(--weight-bold);
+    letter-spacing: var(--track-tight);
+    color: var(--text-primary);
+  }
+  .staff-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semi);
+    text-transform: uppercase;
+    letter-spacing: var(--track-wider);
+  }
+  .staff-owner {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+  }
+  .staff-admin {
+    background: rgba(99, 102, 241, 0.15);
+    color: #818cf8;
+    border: 1px solid rgba(99, 102, 241, 0.4);
+  }
+  .staff-mod {
+    background: rgba(6, 182, 212, 0.15);
+    color: #22d3ee;
+    border: 1px solid rgba(6, 182, 212, 0.4);
+  }
+  .staff-user {
+    background: var(--surface-sunken);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-subtle);
+  }
+  .me-meta-row {
     display: flex;
+    align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
-    align-items: center;
   }
-  .tag {
-    padding-inline: var(--space-1);
+  .me-service-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+  }
+  .me-service-chip.discord {
+    background: rgba(88, 101, 242, 0.12);
+    color: #8ea1e1;
+    border: 1px solid rgba(88, 101, 242, 0.3);
+  }
+  .me-service-chip.telegram {
+    background: rgba(36, 161, 222, 0.12);
+    color: #55b7ea;
+    border: 1px solid rgba(36, 161, 222, 0.3);
+  }
+  .me-public-profile-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    text-decoration: none;
+    font-size: var(--text-xs);
+  }
+
+  /* KPI Bar */
+  .me-kpi-bar {
+    display: flex;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .me-kpi-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-inline-size: 64px;
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface-sunken);
     border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
+  .me-kpi-val {
+    font-size: var(--text-lg);
+    font-weight: var(--weight-bold);
+    color: var(--text-primary);
+  }
+  .me-kpi-val.has-unread {
+    color: var(--signal);
+  }
+  .me-kpi-lbl {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: var(--track-wider);
+  }
+
+  /* ── Tabs Navigation ── */
+  .me-tabs-nav {
+    display: flex;
+    gap: var(--space-2);
+    border-block-end: 1px solid var(--border-subtle);
+    margin-block-end: var(--space-5);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .me-tabs-nav::-webkit-scrollbar { display: none; }
+  .me-tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background: none;
+    border: none;
+    border-block-end: 2px solid transparent;
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+  .me-tab-btn:hover {
+    color: var(--text-primary);
+  }
+  .me-tab-btn.active {
+    color: var(--signal-ink);
+    border-block-end-color: var(--signal);
+    font-weight: var(--weight-semi);
+  }
+  .tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-family: var(--font-data);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+  }
+  .tab-badge.warn {
+    background: rgba(239, 68, 68, 0.18);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+  }
+  .me-tab-pane {
+    display: none;
+  }
+  .me-tab-pane.active {
+    display: block;
+  }
+
+  /* ── Panels ── */
+  .panel {
+    padding-block: var(--space-4);
+  }
+  .panel h2 { font-size: var(--text-md); margin-block-end: var(--space-1); }
+  .panel-sub {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    margin-block-end: var(--space-4);
+  }
+  .panel-header-with-action {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    margin-block-end: var(--space-3);
+  }
+
+  /* ── Toolbar & Filters ── */
+  .me-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-block-end: var(--space-4);
+  }
+  .me-kind-filters {
+    display: flex;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+  .me-kind-filters .chip {
+    cursor: pointer;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    padding: 4px 10px;
     border-radius: var(--radius-sm);
     font-size: var(--text-xs);
     color: var(--text-secondary);
   }
-  .tag-all { border-color: var(--signal); color: var(--signal-ink); }
-  .sub-remove { flex: none; }
-
-  .sub-add-details {
-    margin-block-start: var(--space-3);
+  .me-kind-filters .chip.active {
+    background: var(--surface-hover);
+    border-color: var(--signal);
+    color: var(--text-primary);
+    font-weight: var(--weight-medium);
   }
-  .sub-add-summary {
-    cursor: pointer;
-    font-size: var(--text-sm);
-    color: var(--text-tertiary);
-    user-select: none;
-    list-style: none;
-  }
-  .sub-add-summary::-webkit-details-marker { display: none; }
-  .sub-add-summary:hover { color: var(--text-primary); }
-
-  .sub-add-form { margin-block-start: var(--space-3); }
-  .sub-add-row {
+  .me-search-box {
     display: flex;
-    gap: var(--space-3);
-    flex-wrap: wrap;
-    align-items: flex-end;
-  }
-  .sub-add-row .field { flex: 1; min-inline-size: 8rem; }
-  .sub-add-btn { flex: none; }
-  .btn-sm { font-size: var(--text-xs); padding: 4px 10px; }
-
-  .prefs-card {
-    padding: var(--space-4);
-    background: var(--surface-raised);
-    border: 1px solid var(--border-subtle);
+    align-items: center;
+    gap: var(--space-2);
+    padding: 4px var(--space-3);
+    border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
+    background: var(--surface-inset);
+    min-inline-size: 240px;
+    max-inline-size: 340px;
+    flex: 1;
   }
-  .prefs-lede {
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
+  .me-search-box svg { color: var(--text-tertiary); flex-shrink: 0; }
+  .me-search-input {
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: var(--text-xs);
+    inline-size: 100%;
+    outline: none;
   }
 
-  /* ─── Linked Accounts & Notifications ─── */
-  .accounts-card {
-    padding: var(--space-4);
-    background: var(--surface-raised);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+  /* ── Report Cards ── */
+  .me-reports-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    list-style: none;
+    padding: 0;
+    margin: 0;
   }
-  .account-row {
+  .me-report-card {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-4);
-    padding-block: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    transition: border-color 0.15s ease;
   }
-  .account-info {
+  .me-report-card:hover {
+    border-color: var(--border-default);
+  }
+  .me-report-main {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+  .me-report-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .me-report-title {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-primary);
+    text-decoration: none;
+  }
+  .me-report-title:hover {
+    color: var(--signal-ink);
+    text-decoration: underline;
+  }
+  .report-num {
+    color: var(--text-muted);
+    font-family: var(--font-data);
+  }
+  .me-report-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    font-size: var(--text-xs);
+  }
+  .tag-meta {
+    color: var(--text-secondary);
+    background: var(--surface-sunken);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+  }
+  .me-time { color: var(--text-muted); }
+  .me-comment-chip { color: var(--text-tertiary); font-size: 0.75rem; }
+  .me-vote-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 10px;
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    color: var(--signal-ink);
+    flex-shrink: 0;
+    min-inline-size: 44px;
+  }
+  .me-vote-box.backed-voted {
+    background: rgba(99, 102, 241, 0.12);
+    border-color: rgba(99, 102, 241, 0.3);
+  }
+
+  /* Kind Tags */
+  .kind-tag {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    letter-spacing: 0.05em;
+  }
+  .kind-bug {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+  .kind-suggestion {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+  .kind-extension {
+    background: rgba(99, 102, 241, 0.15);
+    color: #818cf8;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+  }
+
+  /* Status Badges */
+  .status-badge {
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    font-weight: var(--weight-medium);
+    border: 1px solid var(--border-subtle);
+  }
+  .status-fixed {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.3);
+  }
+  .status-in_progress {
+    background: rgba(6, 182, 212, 0.15);
+    color: #22d3ee;
+    border-color: rgba(6, 182, 212, 0.3);
+  }
+  .status-open {
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+  }
+
+  /* ── Updates Feed ── */
+  .updates-feed {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .update-row {
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    transition: all 0.15s ease;
+  }
+  .update-row:hover {
+    border-color: var(--border-default);
+  }
+  .update-row.is-unread {
+    background: var(--surface-sunken);
+    border-inline-start: 3px solid var(--signal);
+  }
+  .update-link {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    text-decoration: none;
+    color: inherit;
+  }
+  .update-indicator-col {
+    padding-block-start: 4px;
+    flex-shrink: 0;
+  }
+  .unread-dot {
+    display: block;
+    inline-size: 8px;
+    block-size: 8px;
+    border-radius: 999px;
+    background: var(--signal);
+  }
+  .read-dot {
+    display: block;
+    inline-size: 8px;
+    block-size: 8px;
+    border-radius: 999px;
+    background: var(--border-subtle);
+  }
+  .update-content {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-inline-size: 0;
+    flex: 1;
+  }
+  .update-title-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    font-size: var(--text-sm);
+  }
+  .update-report-title {
+    font-weight: var(--weight-semi);
+    color: var(--text-primary);
+  }
+  .update-action {
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+  }
+  .update-note {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    background: var(--surface-sunken);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    margin: 0;
+  }
+  .update-meta-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
+  }
+  .update-tag {
+    color: var(--text-tertiary);
+  }
+  .update-time {
+    color: var(--text-muted);
+    margin-inline-start: auto;
+  }
+
+  /* ── Subscriptions Drawer & Cards ── */
+  .add-sub-drawer {
+    margin-block-end: var(--space-4);
+  }
+  .add-box {
+    padding: var(--space-4);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+  }
+  .add-box-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-block-end: var(--space-3);
+  }
+  .add-box-header h3 {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+  }
+  .sub-form-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-3);
+    margin-block-end: var(--space-3);
+  }
+  .sub-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--space-3);
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .sub-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+  }
+  .sub-tags-wrap {
+    display: flex;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .sub-tag-pill {
+    font-size: var(--text-xs);
+    padding: 2px 7px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
+  }
+  .sub-tag-pill.accent {
+    color: var(--signal-ink);
+  }
+
+  /* ── Settings & Account Tab ── */
+  .settings-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .account-rows-box {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .account-row-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+  }
+  .account-item-left {
     display: flex;
     align-items: center;
     gap: var(--space-3);
   }
-  .account-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
+  .account-avatar {
+    inline-size: 40px;
+    block-size: 40px;
+    border-radius: 999px;
+    object-fit: cover;
+  }
+  .account-icon-badge {
+    inline-size: 40px;
+    block-size: 40px;
+    border-radius: 999px;
     display: flex;
     align-items: center;
     justify-content: center;
   }
-  .account-icon.discord {
-    background: #5865F2;
-    color: #fff;
+  .account-icon-badge.discord {
+    background: rgba(88, 101, 242, 0.15);
+    color: #5865F2;
   }
-  .account-icon.telegram {
-    background: #24A1DE;
-    color: #fff;
+  .account-icon-badge.telegram {
+    background: rgba(36, 161, 222, 0.15);
+    color: #24A1DE;
   }
   .account-name {
-    font-weight: 600;
     font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
   }
   .account-status {
     font-size: var(--text-xs);
     color: var(--text-secondary);
   }
-  .text-muted {
-    color: var(--text-tertiary);
-  }
-  .account-avatar-wrapper {
-    position: relative;
-    inline-size: 38px;
-    block-size: 38px;
-    flex-shrink: 0;
-  }
-  .account-avatar-img {
-    inline-size: 38px;
-    block-size: 38px;
-    border-radius: 50%;
-    object-fit: cover;
-    border: 1.5px solid var(--border-default);
-    background: var(--bg-surface-elevated, #24262b);
-    display: block;
-  }
-  .service-badge {
-    position: absolute;
-    inset-block-end: -2px;
-    inset-inline-end: -2px;
-    inline-size: 16px;
-    block-size: 16px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 2px solid var(--bg-surface, #18191c);
-  }
-  .service-badge.discord {
-    background: #5865F2;
-    color: #fff;
-  }
-  .service-badge.telegram {
-    background: #24A1DE;
-    color: #fff;
-  }
-  .btn-discord {
-    background: #5865F2;
-    color: #fff;
-    border: none;
-  }
-  .btn-discord:hover {
-    background: #4752c4;
-    color: #fff;
-  }
-  .btn-telegram {
-    background: #24A1DE;
-    color: #fff;
-    border: none;
-  }
-  .btn-telegram:hover {
-    background: #1d8bc0;
-    color: #fff;
-  }
-  .accounts-divider {
-    border: none;
-    border-block-start: 1px solid var(--border-subtle);
-    margin-block: var(--space-4);
-  }
-  .prefs-subtitle {
-    font-size: var(--text-sm);
-    font-weight: 600;
-    margin-block-end: var(--space-1);
-  }
-  .prefs-hint {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    margin-block-end: var(--space-3);
-  }
-  .pref-checkbox-row {
+
+  /* Switch Cards */
+  .pref-switch-card {
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
     margin-block-end: var(--space-2);
   }
-  .pref-checkbox-label {
+  .pref-switch-label {
     display: flex;
-    align-items: center;
-    gap: var(--space-2);
+    align-items: flex-start;
+    gap: var(--space-3);
     cursor: pointer;
-    font-size: var(--text-sm);
-    color: var(--text-primary);
   }
-  .pref-checkbox-label input[type="checkbox"] {
-    accent-color: var(--signal);
-    cursor: pointer;
+  .pref-switch-label input {
+    margin-block-start: 3px;
+  }
+  .pref-switch-info {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .pref-switch-title {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+  }
+  .pref-switch-sub {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+  }
+
+  .appearance-card {
+    padding: var(--space-4);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+  }
+  .appearance-desc {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    margin: 0;
+  }
+
+  /* Empty State */
+  .me-empty-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: var(--space-10) var(--space-4);
+    background: var(--surface-sunken);
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-tertiary);
+  }
+  .me-empty-card svg {
+    color: var(--text-muted);
+    margin-block-end: var(--space-2);
+  }
+  .me-empty-card h3 {
+    font-size: var(--text-md);
+    color: var(--text-secondary);
+    margin-block-end: 2px;
+  }
+  .me-empty-card p {
+    font-size: var(--text-xs);
+    max-inline-size: 40ch;
+  }
+
+  @media (max-width: 640px) {
+    .sub-form-grid {
+      grid-template-columns: 1fr;
+    }
+    .me-kpi-bar {
+      inline-size: 100%;
+      justify-content: space-between;
+    }
+    .me-kpi-item {
+      flex: 1;
+    }
   }
 </style>

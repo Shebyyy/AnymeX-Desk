@@ -1,14 +1,16 @@
 ---
-import { atLeast } from '../lib/levels';
+import { atLeast, LEVEL_LABELS } from '../lib/levels';
 import { avatarUrl, currentUser } from '../lib/auth';
 import { effectiveStaffLevel } from '../lib/staff';
 import { safeReturnTo } from '../lib/redirect';
+import { unreadCount } from '../lib/notify';
 
 const user = await currentUser(Astro);
 const staffInfo = user ? await effectiveStaffLevel(Astro, user.id) : null;
 const effectiveLevel = staffInfo ? staffInfo.effectiveLevel : (user ? user.level : 'user');
 const avatar = user ? avatarUrl(user, 48) : null;
 const staff = user ? atLeast(effectiveLevel, 'mod') : false;
+const unread = user ? await unreadCount(user.id) : 0;
 
 const here = (() => {
   const ref = Astro.request.headers.get('referer');
@@ -49,6 +51,7 @@ const signInHref = `/auth/login?next=${encodeURIComponent(here)}`;
           ) : (
             <span class="avatar-blank" aria-hidden="true" />
           )}
+          {unread > 0 && <span class="avatar-unread-dot" title={`${unread} unread notifications`} />}
         </div>
         <span class="user-pill-name">{user.username}</span>
         <svg class="user-pill-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -60,7 +63,7 @@ const signInHref = `/auth/login?next=${encodeURIComponent(here)}`;
         <div class="user-menu-header">
           <div class="user-menu-identity">
             <span class="user-menu-name">{user.username}</span>
-            {staff && <span class="staff-badge">{user.level}</span>}
+            {staff && <span class="staff-badge">{LEVEL_LABELS[effectiveLevel]}</span>}
           </div>
           <span class="user-menu-sub">
             {user.telegramUsername ? `@${user.telegramUsername}` : (user.discordLinked ? 'Discord account' : 'Telegram account')}
@@ -77,6 +80,7 @@ const signInHref = `/auth/login?next=${encodeURIComponent(here)}`;
             <line x1="16" y1="17" x2="8" y2="17" />
           </svg>
           <span>Your Reports &amp; Activity</span>
+          {unread > 0 && <span class="menu-unread-pill">{unread}</span>}
         </a>
 
         <a href={`/user/${user.id}`} class="user-menu-item" role="menuitem">
@@ -171,17 +175,42 @@ const signInHref = `/auth/login?next=${encodeURIComponent(here)}`;
     width: 26px;
     height: 26px;
     border-radius: 50%;
-    overflow: hidden;
     flex-shrink: 0;
+    position: relative;
     background: var(--surface-active, rgba(255, 255, 255, 0.12));
     display: flex;
     align-items: center;
     justify-content: center;
   }
 
+  .avatar-unread-dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--signal, #6366f1);
+    border: 2px solid var(--surface-overlay, #1c1d21);
+    box-shadow: 0 0 6px var(--signal, #6366f1);
+  }
+
+  .menu-unread-pill {
+    margin-inline-start: auto;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    font-family: var(--font-data);
+  }
+
   .avatar-img {
     width: 100%;
     height: 100%;
+    border-radius: 50%;
     object-fit: cover;
     display: block;
   }
@@ -189,6 +218,7 @@ const signInHref = `/auth/login?next=${encodeURIComponent(here)}`;
   .avatar-blank {
     width: 100%;
     height: 100%;
+    border-radius: 50%;
     display: block;
     background: var(--surface-active);
   }
