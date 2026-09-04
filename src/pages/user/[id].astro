@@ -81,6 +81,7 @@ const initial = (userRow.username || '?')[0].toUpperCase();
 
 const viewer = await currentUser(Astro);
 const viewerLevel = viewer ? await levelOf(viewer.id) : 'user';
+const isViewerStaff = atLeast(viewerLevel, 'mod');
 const nowSeconds = Math.floor(Date.now() / 1000);
 const isSelf = !!(viewer && (viewer.id === targetId || (userRow.telegramId && viewer.telegramId === userRow.telegramId)));
 const canViewPresence = isViewerStaff || isSelf;
