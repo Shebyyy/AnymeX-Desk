@@ -1438,8 +1438,22 @@ Astro.response.headers.set(
 
         const countHeading = commentsSection?.querySelector('h2');
         if (countHeading && data.commentCount != null) {
-          countHeading.textContent = `Comments (${data.commentCount})`;
+          countHeading.textContent = 'Comments (' + data.commentCount + ')';
         }
+      }
+
+      // 3. Live comment deletion: remove any comments deleted on Discord/site
+      if (Array.isArray(data.allCommentIds)) {
+        const idSet = new Set(data.allCommentIds);
+        document.querySelectorAll('.comment[data-comment-id]').forEach((el) => {
+          const cid = Number((el as HTMLElement).dataset.commentId);
+          if (cid && !idSet.has(cid)) {
+            (el as HTMLElement).style.transition = 'all 0.3s ease';
+            (el as HTMLElement).style.opacity = '0';
+            (el as HTMLElement).style.transform = 'translateY(-8px)';
+            setTimeout(() => el.remove(), 300);
+          }
+        });
       }
     } catch {}
   }

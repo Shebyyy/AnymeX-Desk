@@ -97,10 +97,16 @@ export const GET: APIRoute = async (ctx) => {
     };
   });
 
+  const allCommentRows = await d
+    .select({ id: comments.id })
+    .from(comments)
+    .where(eq(comments.reportId, reportId));
+
   return json({
     status: report.status,
     statusLabel: statusLabel(report.status, report.kind),
     commentCount: report.commentCount,
+    allCommentIds: allCommentRows.map((r) => r.id),
     newComments: payloadComments,
   });
 };

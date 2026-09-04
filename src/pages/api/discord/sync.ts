@@ -257,6 +257,7 @@ export const POST: APIRoute = async (ctx) => {
     if (comment) {
       await d.batch([
         d.delete(comments).where(eq(comments.id, comment.id)),
+        d.delete(attachments).where(eq(attachments.commentId, comment.id)),
         d.update(reports)
           .set({ commentCount: sql`max(0, ${reports.commentCount} - 1)` })
           .where(eq(reports.id, report.id)),
@@ -264,6 +265,18 @@ export const POST: APIRoute = async (ctx) => {
     }
 
     return json({ ok: true, status: 'deleted' });
+  }
+
+  // ── 3b. THREAD DELETE (Thread / Report deleted from Discord) ──────────────
+  if (event === 'THREAD_DELETE' || event === 'thread_delete') {
+    if (report) {
+      await d.batch([
+        d.delete(reports).where(eq(reports.id, report.id)),
+        d.delete(comments).where(eq(comments.reportId, report.id)),
+        d.delete(attachments).where(eq(attachments.reportId, report.id)),
+      ]);
+    }
+    return json({ ok: true, status: 'thread_deleted' });
   }
 
   // ── 4. THREAD STATUS / TAG UPDATE (Status change from Discord) ────────────
