@@ -10,7 +10,7 @@ const HEADERS: Record<string, string> = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Content-Type-Options': 'nosniff',
   'Permissions-Policy': 'geolocation=(), microphone=(), camera=(), payment=(), usb=()',
-  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
 };
 
 export const onRequest = defineMiddleware(async (_ctx, next) => {

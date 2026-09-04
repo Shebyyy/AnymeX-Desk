@@ -26,6 +26,7 @@ if (!user) {
 }
 
 let done: string | null = null;
+let error: string | null = null;
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
@@ -83,11 +84,15 @@ const [updates, filed, backed, [dbUserRow]] = await Promise.all([
 
 if (Astro.url.searchParams.has('read')) done = 'Marked as read.';
 if (Astro.url.searchParams.has('subscribed')) done = 'Subscription saved.';
-if (Astro.url.searchParams.has('unsubscribed')) done = 'Subscription removed.';
-if (Astro.url.searchParams.get('telegram') === 'linked') done = 'Telegram account linked successfully!';
-if (Astro.url.searchParams.get('telegram') === 'unlinked') done = 'Telegram account unlinked.';
-if (Astro.url.searchParams.get('telegram') === 'cannot_unlink_primary') done = 'Cannot unlink Telegram: it is your only login method.';
-if (Astro.url.searchParams.get('telegram') === 'already_linked_to_other_account') done = 'That Telegram account is already linked to another user.';
+const tgParam = Astro.url.searchParams.get('telegram');
+if (tgParam === 'linked') done = 'Telegram account linked successfully!';
+if (tgParam === 'unlinked') done = 'Telegram account unlinked.';
+if (tgParam === 'cannot_unlink_primary') error = 'Cannot unlink Telegram: it is your only login method.';
+if (tgParam === 'already_linked_to_other_account') error = 'That Telegram account is already linked to another user.';
+if (tgParam?.startsWith('invalid_signature')) error = 'Failed to verify Telegram login signature. Please ensure the Telegram Bot Token in /admin is valid.';
+if (tgParam === 'not_configured') error = 'Telegram bot is not configured yet. Please configure it in /admin.';
+if (tgParam === 'missing_params') error = 'Telegram authorization was missing required parameters. Please try again.';
+if (tgParam === 'failed') error = 'An error occurred while linking Telegram. Please try again.';
 if (Astro.url.searchParams.has('prefs_saved')) done = 'Notification preferences updated.';
 
 const unread = updates.filter((u) => u.readAt === null);
@@ -115,6 +120,7 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
   </header>
 
   {done && <p class="flash" role="status">{done}</p>}
+  {error && <p class="flash flash-err" role="alert">{error}</p>}
 
   <section class="block">
     <div class="block-head">
@@ -406,6 +412,11 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
     border-radius: var(--radius-md);
     background: var(--signal-fill);
     font-size: var(--text-sm);
+  }
+  .flash-err {
+    border-inline-start-color: var(--dead, #ed4245);
+    background: rgba(237, 66, 69, 0.1);
+    color: #ff7b72;
   }
 
   .block {

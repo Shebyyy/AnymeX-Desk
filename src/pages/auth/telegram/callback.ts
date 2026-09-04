@@ -17,10 +17,22 @@ export const GET: APIRoute = async (ctx) => {
     rawParams[k] = v;
   }
 
+  const rawNext = rawParams.next || (await ctx.session?.get('oauth_next'));
+  const next = safeReturnTo(rawNext, ctx.url.origin);
+  ctx.session?.delete('oauth_next');
+
+  const loggedInUser = await currentUser(ctx);
+  const errorRedirect = (err: string) => {
+    if (loggedInUser || next === '/me') {
+      return ctx.redirect(`/me?telegram=${encodeURIComponent(err)}`, 302);
+    }
+    return ctx.redirect(`/auth/telegram?error=${encodeURIComponent(err)}`, 302);
+  };
+
   const hash = rawParams.hash;
   const telegramId = rawParams.id;
   if (!hash || !telegramId) {
-    return ctx.redirect('/?auth=telegram_missing_params', 302);
+    return errorRedirect('missing_params');
   }
 
   const botToken =
@@ -29,20 +41,16 @@ export const GET: APIRoute = async (ctx) => {
 
   if (!botToken) {
     console.error('[auth:telegram] Bot token not configured');
-    return ctx.redirect('/?auth=telegram_not_configured', 302);
+    return errorRedirect('not_configured');
   }
 
   // 1. Cryptographic HMAC verification
   const verification = await verifyTelegramAuth(rawParams, botToken);
   if (!verification.valid) {
     console.warn('[auth:telegram] Verification failed:', verification.reason);
-    return ctx.redirect('/?auth=telegram_invalid_signature', 302);
+    return errorRedirect(`invalid_signature_${verification.reason || 'unknown'}`);
   }
 
-  const next = safeReturnTo(await ctx.session?.get('oauth_next'), ctx.url.origin);
-  ctx.session?.delete('oauth_next');
-
-  const loggedInUser = await currentUser(ctx);
   const d = db();
 
   try {
@@ -73,6 +81,14 @@ export const GET: APIRoute = async (ctx) => {
       loggedInUser.telegramId = telegramId;
       loggedInUser.telegramUsername = rawParams.username || null;
       await ctx.session?.set('user', loggedInUser);
+
+      ctx.cookies.set('signed_in', '1', {
+        path: '/',
+        httpOnly: false,
+        secure: ctx.url.protocol === 'https:',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 30,
+      });
 
       return ctx.redirect('/me?telegram=linked', 302);
     }
@@ -106,7 +122,7 @@ export const GET: APIRoute = async (ctx) => {
     }
   } catch (err) {
     console.error('[auth:telegram] Login callback error:', err);
-    return ctx.redirect('/?auth=failed', 302);
+    return errorRedirect('failed');
   } finally {
     ctx.session?.delete('pending_vote');
   }

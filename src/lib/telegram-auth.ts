@@ -15,6 +15,15 @@ export interface TelegramAuthData {
   hash: string;
 }
 
+const TELEGRAM_AUTH_KEYS = new Set([
+  'auth_date',
+  'first_name',
+  'id',
+  'last_name',
+  'photo_url',
+  'username',
+]);
+
 /**
  * Verify that the received Telegram login payload was signed by Telegram
  * and matches the configured bot token.
@@ -44,16 +53,16 @@ export async function verifyTelegramAuth(
     return { valid: false, reason: 'auth_expired' };
   }
 
-  // 2. Build data_check_string (all keys sorted alphabetically, excluding 'hash')
+  // 2. Build data_check_string (ONLY official Telegram auth keys, sorted alphabetically, excluding 'hash')
   const checkKeys = Object.keys(data)
-    .filter((k) => k !== 'hash')
+    .filter((k) => TELEGRAM_AUTH_KEYS.has(k) && data[k] !== undefined && data[k] !== null && data[k] !== '')
     .sort();
 
   const dataCheckString = checkKeys.map((k) => `${k}=${data[k]}`).join('\n');
 
   // 3. Compute secret_key = SHA-256(botToken)
   const encoder = new TextEncoder();
-  const botTokenBuffer = encoder.encode(botToken);
+  const botTokenBuffer = encoder.encode(botToken.trim());
   const secretKeyBuffer = await crypto.subtle.digest('SHA-256', botTokenBuffer);
 
   // 4. Import secret_key for HMAC-SHA256

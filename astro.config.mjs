@@ -152,8 +152,10 @@ export default defineConfig({
     csp: {
       directives: [
         "default-src 'self'",
-        "img-src 'self' https://cdn.discordapp.com data:",
-        "connect-src 'self'",
+        "script-src 'self' https://telegram.org https://oauth.telegram.org",
+        "frame-src 'self' https://oauth.telegram.org https://telegram.org",
+        "img-src 'self' https://cdn.discordapp.com https://t.me https://*.telegram.org https://telegram.org data:",
+        "connect-src 'self' https://oauth.telegram.org",
         "font-src 'self'",
         // Only ever posts to itself. Blocks an injected form from exfiltrating a
         // report — or a moderator's status change — to somewhere else.
