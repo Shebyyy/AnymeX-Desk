@@ -150,24 +150,52 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
         )
       }
 
-      <!-- Mobile Hamburger Button -->
-      <button
-        type="button"
-        class="btn btn-ghost btn-icon mobile-menu-btn"
-        id="mobile-menu-toggle"
-        aria-label="Toggle navigation menu"
-        aria-expanded="false"
-      >
-        <svg class="i-menu" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <line x1="3" y1="12" x2="21" y2="12" />
-          <line x1="3" y1="6" x2="21" y2="6" />
-          <line x1="3" y1="18" x2="21" y2="18" />
-        </svg>
-        <svg class="i-close" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
+      <!-- Mobile Hamburger / Explore Dropdown -->
+      <div class="dropdown-wrap mobile-menu-wrap" data-dropdown>
+        <button
+          type="button"
+          class:list={['btn', 'btn-ghost', 'btn-icon', 'mobile-menu-btn', { active: isSecondaryActive }]}
+          aria-haspopup="true"
+          aria-expanded="false"
+          data-dropdown-trigger
+          aria-label="Toggle navigation menu"
+          title="Explore menu"
+        >
+          <svg class="i-menu" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+          <svg class="i-close" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+
+        <div class="dropdown-card mobile-menu-card" role="menu">
+          <div class="mobile-menu-header">Explore</div>
+          {
+            secondaryTabs.map((t) => (
+              <a href={t.href} class="dropdown-item" role="menuitem" aria-current={t.href === path ? 'page' : undefined}>
+                <div class="dropdown-item-title">{t.label}</div>
+                <div class="dropdown-item-desc">{t.desc}</div>
+              </a>
+            ))
+          }
+          <div class="mobile-menu-divider" />
+          <a href="https://github.com/RyanYuuki/AnymeX" target="_blank" rel="noopener noreferrer" class="dropdown-item" role="menuitem">
+            <div class="dropdown-item-title flex-between">
+              <span>AnymeX GitHub</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                <polyline points="15 3 21 3 21 9" />
+                <line x1="10" y1="14" x2="21" y2="3" />
+              </svg>
+            </div>
+            <div class="dropdown-item-desc">Source code &amp; releases</div>
+          </a>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -185,35 +213,11 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
       </div>
     </div>
   </div>
-
-  <!-- Mobile Drawer Menu (Collapsible) -->
-  <div class="mobile-drawer" id="mobile-drawer">
-    <div class="shell mobile-drawer-inner">
-      <div class="mobile-drawer-section">
-        <span class="mobile-drawer-label">Explore</span>
-        {
-          secondaryTabs.map((t) => (
-            <a href={t.href} class="mobile-drawer-item" aria-current={t.href === path ? 'page' : undefined}>
-              <span class="item-name">{t.label}</span>
-              <span class="item-desc">{t.desc}</span>
-            </a>
-          ))
-        }
-      </div>
-      <div class="mobile-drawer-divider" />
-      <div class="mobile-drawer-section">
-        <a href="https://github.com/RyanYuuki/AnymeX" target="_blank" rel="noopener noreferrer" class="mobile-drawer-item">
-          <span class="item-name">AnymeX GitHub ↗</span>
-          <span class="item-desc">Source code and releases</span>
-        </a>
-      </div>
-    </div>
-  </div>
 </header>
 
 <script is:inline>
   (() => {
-    // Dropdown toggle logic for both More and UserChip
+    // Dropdown toggle logic for More, Mobile Menu, and UserChip
     document.addEventListener('click', (e) => {
       const target = e.target;
       if (!target) return;
@@ -247,24 +251,12 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
       }
     });
 
-    // Mobile Hamburger Toggle
-    const mobileToggle = document.getElementById('mobile-menu-toggle');
-    const header = document.getElementById('main-header');
-
-    if (mobileToggle && header) {
-      mobileToggle.addEventListener('click', () => {
-        const isOpen = header.classList.toggle('drawer-open');
-        mobileToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-      });
-    }
-
     // Keyboard shortcuts (Cmd+K / Ctrl+K & Escape)
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         document.querySelectorAll('[data-dropdown].is-open').forEach((d) => {
           d.classList.remove('is-open');
         });
-        if (header) header.classList.remove('drawer-open');
       }
 
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -527,23 +519,60 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     background: var(--border-strong, #666);
   }
 
-  /* Mobile Hamburger Toggle */
+  /* Mobile Menu Dropdown (Floating Card) */
+  .mobile-menu-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+  @media (min-width: 820px) {
+    .mobile-menu-wrap {
+      display: none;
+    }
+  }
+
   .mobile-menu-btn {
     display: inline-flex;
   }
-  .mobile-menu-btn .i-close {
+  .mobile-menu-btn.active {
+    background: var(--surface-active, rgba(255, 255, 255, 0.1));
+    color: var(--text-primary, #fff);
+  }
+  .mobile-menu-wrap .i-close {
     display: none;
   }
-  .bar.drawer-open .mobile-menu-btn .i-menu {
+  .mobile-menu-wrap.is-open .i-menu {
     display: none;
   }
-  .bar.drawer-open .mobile-menu-btn .i-close {
+  .mobile-menu-wrap.is-open .i-close {
     display: inline-block;
   }
-  @media (min-width: 820px) {
-    .mobile-menu-btn {
-      display: none;
-    }
+
+  .mobile-menu-wrap .dropdown-card {
+    right: 0;
+    left: auto;
+    width: 220px;
+    max-width: calc(100vw - 24px);
+  }
+
+  .mobile-menu-header {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary, #777);
+    padding: 6px 10px 4px;
+  }
+
+  .mobile-menu-divider {
+    height: 1px;
+    background: var(--border-subtle, rgba(255, 255, 255, 0.08));
+    margin: 4px 6px;
+  }
+
+  .flex-between {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
 
   /* Mobile Subnav (Row 2 on small screens) */
@@ -589,72 +618,5 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     background: var(--surface-active, rgba(255, 255, 255, 0.14));
     color: var(--text-primary, #fff);
     font-weight: 600;
-  }
-
-  /* Mobile Drawer Menu */
-  .mobile-drawer {
-    display: none;
-    background: var(--surface-overlay, #18191d);
-    border-block-start: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
-    border-block-end: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
-    animation: drawerSlide 0.2s ease;
-  }
-  @keyframes drawerSlide {
-    from { opacity: 0; transform: translateY(-8px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  .bar.drawer-open .mobile-drawer {
-    display: block;
-  }
-  @media (min-width: 820px) {
-    .mobile-drawer {
-      display: none !important;
-    }
-  }
-  .mobile-drawer-inner {
-    padding: var(--space-4, 16px) var(--space-3, 12px);
-  }
-  .mobile-drawer-section {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .mobile-drawer-label {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-tertiary, #777);
-    margin-block-end: 4px;
-    padding-inline: 8px;
-  }
-  .mobile-drawer-item {
-    display: flex;
-    flex-direction: column;
-    padding: 8px 10px;
-    border-radius: var(--radius-md, 8px);
-    text-decoration: none;
-    transition: background 0.12s;
-  }
-  .mobile-drawer-item:hover {
-    background: var(--surface-hover, rgba(255, 255, 255, 0.08));
-  }
-  .mobile-drawer-item[aria-current='page'] {
-    background: var(--surface-active, rgba(255, 255, 255, 0.12));
-  }
-  .mobile-drawer-item .item-name {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-primary, #fff);
-  }
-  .mobile-drawer-item .item-desc {
-    font-size: 12px;
-    color: var(--text-tertiary, #888);
-    margin-top: 2px;
-  }
-  .mobile-drawer-divider {
-    height: 1px;
-    background: var(--border-subtle, rgba(255, 255, 255, 0.08));
-    margin: 12px 0;
   }
 </style>
