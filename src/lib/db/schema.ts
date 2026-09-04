@@ -169,6 +169,13 @@ export const users = sqliteTable('users', {
   banned: integer('banned', { mode: 'boolean' }).notNull().default(false),
   firstSeen: integer('first_seen').notNull().default(sql`(unixepoch())`),
   lastLogin: integer('last_login').notNull().default(sql`(unixepoch())`),
+
+  /** Telegram integration fields */
+  telegramId: text('telegram_id'),
+  telegramUsername: text('telegram_username'),
+  telegramPhotoUrl: text('telegram_photo_url'),
+  notifyTelegram: integer('notify_telegram', { mode: 'boolean' }).notNull().default(true),
+  notifyDiscord: integer('notify_discord', { mode: 'boolean' }).notNull().default(true),
 });
 
 export const reports = sqliteTable(

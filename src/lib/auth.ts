@@ -28,6 +28,10 @@ export interface SessionUser {
    * use `canWriteNow`.
    */
   canWrite: boolean;
+  /** Linked Telegram ID if connected */
+  telegramId?: string | null;
+  /** Linked Telegram Username if connected */
+  telegramUsername?: string | null;
 }
 
 const DISCORD_API = 'https://discord.com/api/v10';
@@ -158,6 +162,8 @@ export async function buildSessionUser(token: string): Promise<SessionUser> {
       discordLevel: users.discordLevel,
       manualLevel: users.manualLevel,
       banned: users.banned,
+      telegramId: users.telegramId,
+      telegramUsername: users.telegramUsername,
     });
 
   const owner = !!env.OWNER_DISCORD_ID && String(env.OWNER_DISCORD_ID).trim() === me.id;
@@ -171,6 +177,83 @@ export async function buildSessionUser(token: string): Promise<SessionUser> {
     level: owner ? 'owner' : combine(row?.discordLevel ?? null, row?.manualLevel ?? null),
     guildRoles: roles,
     canWrite: !row?.banned && ageDays >= minAgeDays,
+    telegramId: row?.telegramId ?? null,
+    telegramUsername: row?.telegramUsername ?? null,
+  };
+}
+
+/**
+ * Builds the session user for a user authenticated via Telegram Login.
+ * If an existing user has this telegramId linked, it signs into that user.
+ * Otherwise, creates a new user account with `discordId = tg:<telegram_id>`.
+ */
+export async function buildTelegramSessionUser(tgUser: {
+  id: string;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  photo_url?: string;
+}): Promise<SessionUser> {
+  const d = db();
+  const telegramId = String(tgUser.id);
+  const internalId = `tg:${telegramId}`;
+  const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ').trim();
+  const displayName = fullName || tgUser.username || `Telegram User ${telegramId.slice(-4)}`;
+  const avatar = tgUser.photo_url || null;
+
+  // Check if existing user is already linked with this telegramId
+  const [existing] = await d
+    .select()
+    .from(users)
+    .where(eq(users.telegramId, telegramId));
+
+  let finalUserId = internalId;
+  let userRow = existing;
+
+  if (existing) {
+    finalUserId = existing.discordId;
+    const [updated] = await d
+      .update(users)
+      .set({
+        telegramUsername: tgUser.username || existing.telegramUsername,
+        telegramPhotoUrl: avatar || existing.telegramPhotoUrl,
+        lastLogin: sql`(unixepoch())`,
+      })
+      .where(eq(users.discordId, existing.discordId))
+      .returning();
+    userRow = updated;
+  } else {
+    // Create new user for this Telegram account
+    const now = Math.floor(Date.now() / 1000);
+    const [inserted] = await d
+      .insert(users)
+      .values({
+        discordId: internalId,
+        username: displayName,
+        avatarHash: avatar,
+        accountCreatedAt: now,
+        telegramId,
+        telegramUsername: tgUser.username || null,
+        telegramPhotoUrl: avatar,
+        firstSeen: now,
+        lastLogin: now,
+      })
+      .returning();
+    userRow = inserted;
+  }
+
+  const owner = !!env.OWNER_DISCORD_ID && String(env.OWNER_DISCORD_ID).trim() === finalUserId;
+
+  return {
+    id: finalUserId,
+    username: userRow?.username || displayName,
+    avatarHash: userRow?.telegramPhotoUrl || userRow?.avatarHash || null,
+    accountCreatedAt: userRow?.accountCreatedAt || Math.floor(Date.now() / 1000),
+    level: owner ? 'owner' : combine(userRow?.discordLevel ?? null, userRow?.manualLevel ?? null),
+    guildRoles: [],
+    canWrite: !userRow?.banned,
+    telegramId,
+    telegramUsername: userRow?.telegramUsername || tgUser.username || null,
   };
 }
 
@@ -180,11 +263,14 @@ export async function currentUser(
   return (await ctx.session?.get('user')) ?? null;
 }
 
-/** The avatar URL Discord serves for this user, or null for the default one. */
-export const avatarUrl = (u: { id: string; avatarHash: string | null }, size = 32) =>
-  u.avatarHash
-    ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatarHash}.png?size=${size}`
-    : null;
+/** The avatar URL Discord or Telegram serves for this user, or null for the default one. */
+export const avatarUrl = (u: { id: string; avatarHash: string | null }, size = 32) => {
+  if (!u.avatarHash) return null;
+  if (u.avatarHash.startsWith('http://') || u.avatarHash.startsWith('https://')) {
+    return u.avatarHash;
+  }
+  return `https://cdn.discordapp.com/avatars/${u.id}/${u.avatarHash}.png?size=${size}`;
+};
 
 /**
  * Why this visitor may not write, or null if they may.

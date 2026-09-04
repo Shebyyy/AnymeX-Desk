@@ -1,7 +1,7 @@
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import { db } from './db/client';
 import { inIds } from './db/sql';
-import { notifications, reports, votes } from './db/schema';
+import { notifications, reports, votes, users } from './db/schema';
 import { readSetting } from './settings';
 import { BLURPLE } from './webhook';
 
@@ -152,10 +152,88 @@ export function truncateQuote(text: string, max = 300): string {
  * The bot must share a guild with the target user, otherwise Discord returns
  * 403. This is best-effort: a failure is logged but never propagated.
  */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
+ * Send a DM to a Telegram user via the Telegram Bot API.
+ * Uses HTML markup and interactive inline links.
+ */
+export async function sendTelegramDm(
+  telegramId: string,
+  embed: DmEmbed,
+): Promise<boolean> {
+  const botToken = await readSetting('telegram_bot_token');
+  const dmEnabled = await readSetting('telegram_dm_enabled');
+  if (!botToken || (dmEnabled !== 'true' && dmEnabled !== '1')) {
+    return false;
+  }
+
+  try {
+    const authorLine = embed.author ? `👤 <b>${escapeHtml(embed.author)}</b>\n` : '';
+    const footerLine = embed.footer ? `\n\n<i>${escapeHtml(embed.footer)}</i>` : '';
+    const descLine = embed.description ? `\n\n<blockquote>${escapeHtml(embed.description)}</blockquote>` : '';
+    const linkLine = embed.url ? `\n\n🔗 <a href="${embed.url}">View on AnymeX Desk</a>` : '';
+
+    const text = `${authorLine}<b>${escapeHtml(embed.title)}</b>${descLine}${footerLine}${linkLine}`.trim();
+
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: telegramId,
+        text,
+        parse_mode: 'HTML',
+        disable_web_page_preview: false,
+      }),
+    });
+
+    if (!res.ok) {
+      console.warn('[TelegramDM] Failed to send message:', res.status, await res.text());
+      return false;
+    }
+    console.log('[TelegramDM] Sent to', telegramId);
+    return true;
+  } catch (err) {
+    console.error('[TelegramDM] Exception', err);
+    return false;
+  }
+}
+
+/**
+ * Send a DM to a user. Routes automatically to Telegram if recipientId is a
+ * Telegram ID (`tg:12345`), and also mirrors to Telegram if the user has
+ * linked a Telegram account.
+ */
 export async function sendDiscordDm(
   discordId: string,
   embed: DmEmbed,
 ): Promise<boolean> {
+  // If this ID is a Telegram-only ID (e.g. tg:123456), route directly to Telegram
+  if (discordId.startsWith('tg:')) {
+    return sendTelegramDm(discordId.slice('tg:'.length), embed);
+  }
+
+  // Also mirror to Telegram asynchronously if user has Telegram linked and enabled
+  db()
+    .select({
+      telegramId: users.telegramId,
+      notifyTelegram: users.notifyTelegram,
+      notifyDiscord: users.notifyDiscord,
+    })
+    .from(users)
+    .where(eq(users.discordId, discordId))
+    .then(([u]) => {
+      if (u?.telegramId && u.notifyTelegram) {
+        sendTelegramDm(u.telegramId, embed).catch(() => {});
+      }
+    })
+    .catch(() => {});
+
   const botToken = await readSetting('discord_bot_token');
   const dmEnabled = await readSetting('discord_dm_enabled');
   if (!botToken || (dmEnabled !== 'true' && dmEnabled !== '1')) {

@@ -3,6 +3,8 @@ import { atLeast } from '../lib/levels';
 import { avatarUrl, currentUser } from '../lib/auth';
 import { safeReturnTo } from '../lib/redirect';
 
+import { readSetting } from '../lib/settings';
+
 const user = await currentUser(Astro);
 const avatar = user ? avatarUrl(user, 48) : null;
 const staff = user ? atLeast(user.level, 'mod') : false;
@@ -27,6 +29,8 @@ const here = (() => {
   return Astro.url.pathname + (p.toString() ? `?${p.toString()}` : '');
 })();
 const signInHref = `/auth/discord?next=${encodeURIComponent(here)}`;
+const telegramSignInHref = `/auth/telegram?next=${encodeURIComponent(here)}`;
+const hasTelegram = !!(await readSetting('telegram_bot_username'));
 ---
 
 {
@@ -47,6 +51,21 @@ const signInHref = `/auth/discord?next=${encodeURIComponent(here)}`;
         <button class="btn btn-ghost" type="submit">Sign out</button>
       </form>
     </div>
+  ) : hasTelegram ? (
+    <div class="signin-dual">
+      <a class="btn btn-discord btn-chip" href={signInHref} title="Sign in with Discord">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M19.3 5.3A16.6 16.6 0 0 0 15.2 4l-.3.6a12.4 12.4 0 0 1 3.7 1.2 12.9 12.9 0 0 0-11-.5l.3-.7A16.5 16.5 0 0 0 4.7 5.3C2.2 9 1.5 12.6 1.9 16.2a16.4 16.4 0 0 0 5 2.5l.6-1a10.7 10.7 0 0 1-1.8-.9l.4-.3a11.7 11.7 0 0 0 10 0l.4.3a10.8 10.8 0 0 1-1.8.9l.6 1a16.3 16.3 0 0 0 5-2.5c.5-4.2-.6-7.8-2.9-10.9ZM8.7 14c-1 0-1.7-.9-1.7-2s.8-2 1.7-2 1.8.9 1.7 2c0 1.1-.8 2-1.7 2Zm6.6 0c-1 0-1.7-.9-1.7-2s.8-2 1.7-2 1.8.9 1.7 2c0 1.1-.8 2-1.7 2Z" />
+        </svg>
+        <span class="login-text">Discord</span>
+      </a>
+      <a class="btn btn-telegram-nav btn-chip" href={telegramSignInHref} title="Sign in with Telegram">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+        </svg>
+        <span class="login-text">Telegram</span>
+      </a>
+    </div>
   ) : (
     <a class="btn btn-discord" href={signInHref}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -56,3 +75,16 @@ const signInHref = `/auth/discord?next=${encodeURIComponent(here)}`;
     </a>
   )
 }
+
+<style>
+  .signin-dual {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2, 6px);
+  }
+  .btn-chip {
+    font-size: var(--text-xs, 12px);
+    padding: 3px 9px;
+    gap: 5px;
+  }
+</style>

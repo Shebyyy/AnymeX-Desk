@@ -1,0 +1,135 @@
+---
+import Base from '../../layouts/Base.astro';
+import { readConfig, readSetting } from '../../lib/settings';
+import { currentUser } from '../../lib/auth';
+import { safeReturnTo } from '../../lib/redirect';
+
+export const prerender = false;
+
+const user = await currentUser(Astro);
+const cfg = await readConfig();
+const botUsername = cfg.telegram_bot_username || (await readSetting('telegram_bot_username'));
+const next = safeReturnTo(Astro.url.searchParams.get('next'), Astro.url.origin);
+
+// Save 'next' in session for the callback
+if (next) {
+  Astro.session?.set('oauth_next', next);
+}
+
+const callbackUrl = new URL('/auth/telegram/callback', Astro.url.origin).toString();
+---
+
+<Base title="Log in with Telegram — AnymeX Desk">
+  <div class="auth-card-wrap">
+    <div class="auth-card">
+      <div class="auth-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="12" cy="12" r="12" fill="#24A1DE" />
+          <path d="M5.4 11.8L16.6 7.2C17.1 7 17.6 7.4 17.4 7.9L15.5 16.9C15.3 17.5 14.8 17.7 14.3 17.4L11.4 15.2L10 16.5C9.8 16.7 9.7 16.9 9.5 16.9L9.7 13.9L15.1 9C15.3 8.8 15.1 8.7 14.8 8.9L8.2 13.1L5.3 12.2C4.7 12 4.7 11.6 5.4 11.8Z" fill="white" />
+        </svg>
+      </div>
+
+      <h1>{user ? 'Link your Telegram' : 'Sign in with Telegram'}</h1>
+      <p class="lede">
+        {user
+          ? 'Connect your Telegram account to receive DMs when your reports are updated, and log in seamlessly.'
+          : 'Sign in to AnymeX Desk using your Telegram account to report bugs, track suggestions, and vote.'}
+      </p>
+
+      {botUsername ? (
+        <div class="widget-container">
+          <script
+            async
+            src="https://telegram.org/js/telegram-widget.js?22"
+            data-telegram-login={botUsername}
+            data-size="large"
+            data-radius="8"
+            data-auth-url={callbackUrl}
+            data-request-access="write"
+          ></script>
+        </div>
+      ) : (
+        <div class="notice-error">
+          <p><strong>Telegram sign-in is not configured yet.</strong></p>
+          <p class="hint">The administrator needs to configure <code>telegram_bot_username</code> and <code>telegram_bot_token</code>.</p>
+        </div>
+      )}
+
+      <div class="auth-footer">
+        <a href={next || '/'} class="back-link">← Cancel & return</a>
+      </div>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .auth-card-wrap {
+    min-height: calc(100vh - 200px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-4);
+  }
+  .auth-card {
+    background: var(--bg-surface, #18191c);
+    border: 1px solid var(--border-default, #2e3035);
+    border-radius: var(--radius-lg, 12px);
+    padding: var(--space-8);
+    max-width: 440px;
+    width: 100%;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  }
+  .auth-icon {
+    margin-inline: auto;
+    margin-block-end: var(--space-4);
+    display: inline-block;
+  }
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-block-end: var(--space-2);
+    color: var(--text-primary, #fff);
+  }
+  .lede {
+    font-size: 0.95rem;
+    color: var(--text-secondary, #b9bbbe);
+    margin-block-end: var(--space-6);
+    line-height: 1.5;
+  }
+  .widget-container {
+    min-height: 44px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-block: var(--space-4) var(--space-6);
+  }
+  .notice-error {
+    background: rgba(237, 66, 69, 0.1);
+    border: 1px solid rgba(237, 66, 69, 0.3);
+    border-radius: var(--radius-md, 8px);
+    padding: var(--space-4);
+    color: #ff7b72;
+    font-size: 0.88rem;
+    margin-block-end: var(--space-4);
+  }
+  .hint {
+    margin-block-start: var(--space-1);
+    font-size: 0.8rem;
+    color: var(--text-tertiary, #72767d);
+  }
+  .auth-footer {
+    border-block-start: 1px solid var(--border-default, #2e3035);
+    padding-block-start: var(--space-4);
+    margin-block-start: var(--space-4);
+  }
+  .back-link {
+    color: var(--text-secondary, #b9bbbe);
+    font-size: 0.88rem;
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .back-link:hover {
+    color: var(--text-primary, #fff);
+  }
+</style>

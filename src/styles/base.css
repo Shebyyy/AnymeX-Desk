@@ -130,6 +130,9 @@
   .btn-discord { background: var(--discord); border-color: transparent; color: oklch(0.99 0 0); }
   .btn-discord:hover { filter: brightness(1.08); color: oklch(0.99 0 0); }
 
+  .btn-telegram-nav { background: #24A1DE; border-color: transparent; color: #ffffff; }
+  .btn-telegram-nav:hover { filter: brightness(1.08); color: #ffffff; }
+
   .btn-icon { inline-size: var(--control-height); padding-inline: 0; }
 
   /* --- inputs ----------------------------------------------------------- */

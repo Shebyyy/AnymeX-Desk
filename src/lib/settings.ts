@@ -29,6 +29,9 @@ export const SETTING_KEYS = [
   'discord_forum_extensions_id',
   'discord_forum_sync_enabled',
   'discord_sync_secret',
+  'telegram_bot_token',
+  'telegram_bot_username',
+  'telegram_dm_enabled',
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -52,6 +55,9 @@ const DEFAULTS: Record<SettingKey, () => string> = {
   discord_forum_extensions_id: () => String((env as Record<string, unknown>).DISCORD_FORUM_EXTENSIONS_ID ?? '1545003859380805702'),
   discord_forum_sync_enabled: () => '1',
   discord_sync_secret: () => String((env as Record<string, unknown>).DISCORD_SYNC_SECRET ?? 'anymex_sync_8f4a9b2c6e1d3075e82f419c8a74e5bd'),
+  telegram_bot_token: () => String((env as Record<string, unknown>).TELEGRAM_BOT_TOKEN ?? ''),
+  telegram_bot_username: () => String((env as Record<string, unknown>).TELEGRAM_BOT_USERNAME ?? ''),
+  telegram_dm_enabled: () => '1',
 };
 
 export type Config = Record<SettingKey, string>;

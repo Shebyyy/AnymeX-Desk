@@ -6,7 +6,7 @@ import { safeReturnTo } from '../lib/redirect';
 import { myBacked, myReports, myUpdates, markRead } from '../lib/notify';
 import { relativeAge, statusLabel, kindLabel, categoryLabel } from '../lib/format';
 import { STATUSES, KINDS, KIND_LABELS, PLATFORMS, PLATFORM_LABELS, CATEGORY_LABELS,
-  BUG_CATEGORIES, SUGGESTION_CATEGORIES, EXTENSION_SOURCES, subscriptions } from '../lib/db/schema';
+  BUG_CATEGORIES, SUGGESTION_CATEGORIES, EXTENSION_SOURCES, subscriptions, users } from '../lib/db/schema';
 import { db } from '../lib/db/client';
 import { eq, and } from 'drizzle-orm';
 
@@ -47,6 +47,16 @@ if (Astro.request.method === 'POST') {
     return Astro.redirect('/me?unsubscribed=1', 303);
   }
 
+  if (intent === 'update_notifications') {
+    const notifyTelegram = form.get('notify_telegram') === 'on';
+    const notifyDiscord = form.get('notify_discord') === 'on';
+    await db()
+      .update(users)
+      .set({ notifyTelegram, notifyDiscord })
+      .where(eq(users.discordId, user.id));
+    return Astro.redirect('/me?prefs_saved=1', 303);
+  }
+
   const ids = String(form.get('ids') ?? '')
     .split(',')
     .map(Number)
@@ -55,15 +65,30 @@ if (Astro.request.method === 'POST') {
   return Astro.redirect('/me?read=1', 303);
 }
 
-const [updates, filed, backed] = await Promise.all([
+const [updates, filed, backed, [dbUserRow]] = await Promise.all([
   myUpdates(user.id),
   myReports(user.id),
   myBacked(user.id),
+  db()
+    .select({
+      discordId: users.discordId,
+      telegramId: users.telegramId,
+      telegramUsername: users.telegramUsername,
+      notifyTelegram: users.notifyTelegram,
+      notifyDiscord: users.notifyDiscord,
+    })
+    .from(users)
+    .where(eq(users.discordId, user.id)),
 ]);
 
 if (Astro.url.searchParams.has('read')) done = 'Marked as read.';
 if (Astro.url.searchParams.has('subscribed')) done = 'Subscription saved.';
 if (Astro.url.searchParams.has('unsubscribed')) done = 'Subscription removed.';
+if (Astro.url.searchParams.get('telegram') === 'linked') done = 'Telegram account linked successfully!';
+if (Astro.url.searchParams.get('telegram') === 'unlinked') done = 'Telegram account unlinked.';
+if (Astro.url.searchParams.get('telegram') === 'cannot_unlink_primary') done = 'Cannot unlink Telegram: it is your only login method.';
+if (Astro.url.searchParams.get('telegram') === 'already_linked_to_other_account') done = 'That Telegram account is already linked to another user.';
+if (Astro.url.searchParams.has('prefs_saved')) done = 'Notification preferences updated.';
 
 const unread = updates.filter((u) => u.readAt === null);
 
@@ -241,6 +266,101 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
         </div>
       </form>
     </details>
+  </section>
+
+  {/* ─── Linked Accounts & Notification Channels ──────────────────── */}
+  <section class="block">
+    <div class="block-head">
+      <h2>Linked Accounts &amp; Notifications</h2>
+    </div>
+    <div class="accounts-card">
+      <div class="account-row">
+        <div class="account-info">
+          <div class="account-icon discord">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+            </svg>
+          </div>
+          <div>
+            <div class="account-name">Discord</div>
+            <div class="account-status">
+              {user.id.startsWith('tg:') ? 'Not linked' : `Connected as ${user.username}`}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="account-row">
+        <div class="account-info">
+          <div class="account-icon telegram">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+            </svg>
+          </div>
+          <div>
+            <div class="account-name">Telegram</div>
+            <div class="account-status">
+              {dbUserRow?.telegramId ? (
+                <span>Connected as <b>@{dbUserRow.telegramUsername || dbUserRow.telegramId}</b></span>
+              ) : (
+                <span class="text-muted">Not connected</span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div class="account-action">
+          {dbUserRow?.telegramId ? (
+            !user.id.startsWith('tg:') && (
+              <form method="POST" action="/auth/telegram/unlink">
+                <button type="submit" class="btn btn-ghost btn-sm">Unlink</button>
+              </form>
+            )
+          ) : (
+            <a href="/auth/telegram?next=/me" class="btn btn-sm btn-telegram">
+              Connect Telegram
+            </a>
+          )}
+        </div>
+      </div>
+
+      <hr class="accounts-divider" />
+
+      <form method="POST" class="notif-prefs-form">
+        <input type="hidden" name="intent" value="update_notifications" />
+        <h3 class="prefs-subtitle">DM Notification Preferences</h3>
+        <p class="prefs-hint">
+          Receive direct messages when someone replies to your comment, mentions you, or changes your report's status.
+        </p>
+
+        <div class="pref-checkbox-row">
+          <label class="pref-checkbox-label">
+            <input
+              type="checkbox"
+              name="notify_discord"
+              checked={dbUserRow?.notifyDiscord !== false}
+              disabled={user.id.startsWith('tg:')}
+            />
+            <span>Send Discord DMs</span>
+          </label>
+        </div>
+
+        <div class="pref-checkbox-row">
+          <label class="pref-checkbox-label">
+            <input
+              type="checkbox"
+              name="notify_telegram"
+              checked={dbUserRow?.notifyTelegram !== false}
+              disabled={!dbUserRow?.telegramId}
+            />
+            <span>Send Telegram DMs {!dbUserRow?.telegramId && '(Link Telegram above first)'}</span>
+          </label>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-sm" style="margin-block-start: var(--space-3);">
+          Save Notification Preferences
+        </button>
+      </form>
+    </div>
   </section>
 
   {/* ─── Display & Appearance Preferences ──────────────────────────── */}
@@ -437,5 +557,91 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
   .prefs-lede {
     font-size: var(--text-sm);
     color: var(--text-secondary);
+  }
+
+  /* ─── Linked Accounts & Notifications ─── */
+  .accounts-card {
+    padding: var(--space-4);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
+  .account-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding-block: var(--space-2);
+  }
+  .account-info {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .account-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .account-icon.discord {
+    background: #5865F2;
+    color: #fff;
+  }
+  .account-icon.telegram {
+    background: #24A1DE;
+    color: #fff;
+  }
+  .account-name {
+    font-weight: 600;
+    font-size: var(--text-sm);
+  }
+  .account-status {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+  }
+  .text-muted {
+    color: var(--text-tertiary);
+  }
+  .btn-telegram {
+    background: #24A1DE;
+    color: #fff;
+    border: none;
+  }
+  .btn-telegram:hover {
+    background: #1d8bc0;
+    color: #fff;
+  }
+  .accounts-divider {
+    border: none;
+    border-block-start: 1px solid var(--border-subtle);
+    margin-block: var(--space-4);
+  }
+  .prefs-subtitle {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    margin-block-end: var(--space-1);
+  }
+  .prefs-hint {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    margin-block-end: var(--space-3);
+  }
+  .pref-checkbox-row {
+    margin-block-end: var(--space-2);
+  }
+  .pref-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+  .pref-checkbox-label input[type="checkbox"] {
+    accent-color: var(--signal);
+    cursor: pointer;
   }
 </style>
