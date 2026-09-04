@@ -3,7 +3,7 @@ import Base from '../layouts/Base.astro';
 import { desc, eq, isNotNull, or } from 'drizzle-orm';
 import { db } from '../lib/db/client';
 import { audit, labels, STAFF_LEVELS, users, type StaffLevel } from '../lib/db/schema';
-import { snowflakeCreatedAt } from '../lib/auth';
+import { avatarUrl, snowflakeCreatedAt } from '../lib/auth';
 import { LEVEL_LABELS, combine, atLeast } from '../lib/levels';
 import { idList, readConfig, writeSettings } from '../lib/settings';
 import { isOwner, isResponse, levelOf, logAction, requireStaff, setManualLevel } from '../lib/staff';
@@ -433,7 +433,8 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
   <!-- TAB 1: STAFF & TEAM -->
   <div class:list={['tab-pane', { active: activeTab === 'staff' }]} data-tab-pane="staff" hidden={activeTab !== 'staff'}>
     <section class="panel">
-      <div class="panel-header">
+      <!-- Section Header with Add Button -->
+      <div class="panel-header-with-action">
         <div>
           <h2>Staff Members</h2>
           <p class="panel-sub">
@@ -444,25 +445,143 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
                 : 'Directory of active staff members and their permissions.'}
           </p>
         </div>
+
+        {!isModUser && (
+          <button type="button" class="btn btn-primary btn-sm" id="toggle-add-staff-btn" aria-expanded="false" aria-controls="add-staff-drawer">
+            <svg class="toggle-icon-plus" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            <span>Add Staff Member</span>
+          </button>
+        )}
       </div>
 
+      <!-- Expandable Add Staff Member Drawer (Above Staff List) -->
+      {!isModUser && (
+        <div id="add-staff-drawer" class="add-staff-drawer" hidden>
+          <div class="add-box">
+            <div class="add-box-header">
+              <h3>Appoint Staff Member</h3>
+              <button type="button" class="btn btn-ghost btn-sm" id="close-add-staff-btn" aria-label="Close drawer">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+                <span>Cancel</span>
+              </button>
+            </div>
+            <form method="POST" class="add">
+              <input type="hidden" name="intent" value="staff-set" />
+              <input type="hidden" name="tab" value="staff" />
+              <div class="field">
+                <label class="label" for="discord_id">Discord User ID</label>
+                <input
+                  class="input"
+                  id="discord_id"
+                  name="discord_id"
+                  inputmode="numeric"
+                  placeholder="e.g. 216154654256398347"
+                  autocomplete="off"
+                  required
+                />
+                <p class="field-hint">Enable Developer Mode in Discord → right-click user → Copy User ID.</p>
+              </div>
+              <div class="add-actions">
+                <button class="btn btn-primary" type="submit" name="level" value="mod">
+                  Add as Moderator
+                </button>
+                {isOwnerUser ? (
+                  <button class="btn btn-accent" type="submit" name="level" value="admin">
+                    Add as Administrator
+                  </button>
+                ) : (
+                  <span class="admin-notice-hint">
+                    ℹ️ Only the Owner can appoint Administrators.
+                  </span>
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <!-- Staff Search & Role Filter Toolbar -->
+      <div class="staff-toolbar">
+        <div class="staff-search-box">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="search"
+            class="staff-search-input"
+            id="staff-search"
+            placeholder="Search staff by name or Discord ID..."
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="staff-filter-chips" role="group" aria-label="Filter staff by role">
+          <button type="button" class="chip active" data-staff-filter="all">
+            All ({staff.length})
+          </button>
+          <button type="button" class="chip" data-staff-filter="owner">
+            Owners ({staff.filter(s => isOwner(s.discordId)).length})
+          </button>
+          <button type="button" class="chip" data-staff-filter="admin">
+            Admins ({staff.filter(s => !isOwner(s.discordId) && combine(s.discordLevel, s.manualLevel) === 'admin').length})
+          </button>
+          <button type="button" class="chip" data-staff-filter="mod">
+            Mods ({staff.filter(s => !isOwner(s.discordId) && combine(s.discordLevel, s.manualLevel) === 'mod').length})
+          </button>
+        </div>
+      </div>
+
+      <!-- Staff Cards Grid -->
       {
         staff.length === 0 ? (
           <p class="empty-line">No staff configured yet.</p>
         ) : (
-          <ul class="staff-grid">
+          <ul class="staff-grid" id="staff-card-grid">
             {staff.map((s) => {
               const eff = isOwner(s.discordId) ? 'owner' : combine(s.discordLevel, s.manualLevel);
               const isTargetOwner = isOwner(s.discordId);
               const isTargetAdmin = eff === 'admin';
               const isTargetMod = eff === 'mod';
+              const avatar = avatarUrl({ id: s.discordId, avatarHash: s.avatarHash }, 64);
+              const initial = (s.username || '?')[0].toUpperCase();
 
               return (
-                <li class="staff-card">
+                <li
+                  class="staff-card"
+                  data-staff-role={eff}
+                  data-staff-search={`${s.username} ${s.discordId}`.toLowerCase()}
+                >
                   <div class="staff-card-header">
-                    <div class="staff-who">
-                      <span class="staff-name">{s.username}</span>
-                      <span class="staff-id num">{s.discordId}</span>
+                    <div class="staff-identity">
+                      <div class="staff-avatar-wrap">
+                        {avatar ? (
+                          <img class="staff-avatar" src={avatar} alt={s.username} width="38" height="38" loading="lazy" />
+                        ) : (
+                          <div class="staff-avatar-fallback">{initial}</div>
+                        )}
+                      </div>
+                      <div class="staff-who">
+                        <span class="staff-name">{s.username}</span>
+                        <button
+                          type="button"
+                          class="staff-id-copy-btn"
+                          data-copy-id={s.discordId}
+                          title="Click to copy Discord ID"
+                        >
+                          <span class="staff-id num">{s.discordId}</span>
+                          <svg class="copy-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                     <span class={`role-badge role-${eff}`}>{LEVEL_LABELS[eff]}</span>
                   </div>
@@ -481,7 +600,11 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
                   </div>
 
                   {!isModUser && !isTargetOwner && (
-                    <form method="POST" class="staff-actions">
+                    <form
+                      method="POST"
+                      class="staff-actions"
+                      onsubmit={s.manualLevel ? "return confirm('Are you sure you want to remove staff privileges from this user?');" : undefined}
+                    >
                       <input type="hidden" name="intent" value="staff-set" />
                       <input type="hidden" name="tab" value="staff" />
                       <input type="hidden" name="discord_id" value={s.discordId} />
@@ -535,43 +658,6 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
           </ul>
         )
       }
-
-      {!isModUser && (
-        <div class="add-box">
-          <h3>Add Staff Member</h3>
-          <form method="POST" class="add">
-            <input type="hidden" name="intent" value="staff-set" />
-            <input type="hidden" name="tab" value="staff" />
-            <div class="field">
-              <label class="label" for="discord_id">Discord User ID</label>
-              <input
-                class="input"
-                id="discord_id"
-                name="discord_id"
-                inputmode="numeric"
-                placeholder="e.g. 216154654256398347"
-                autocomplete="off"
-                required
-              />
-              <p class="field-hint">Enable Developer Mode in Discord → right-click user → Copy User ID.</p>
-            </div>
-            <div class="add-actions">
-              <button class="btn btn-primary" type="submit" name="level" value="mod">
-                Add as Moderator
-              </button>
-              {isOwnerUser ? (
-                <button class="btn btn-accent" type="submit" name="level" value="admin">
-                  Add as Administrator
-                </button>
-              ) : (
-                <span class="admin-notice-hint">
-                  ℹ️ Only the Owner can appoint Administrators.
-                </span>
-              )}
-            </div>
-          </form>
-        </div>
-      )}
     </section>
 
     <!-- Role Mapping Panel -->
@@ -987,6 +1073,7 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
 
 <script is:inline>
   document.addEventListener('DOMContentLoaded', () => {
+    // 1. Tab Navigation
     const tabs = document.querySelectorAll('[data-tab-trigger]');
     const panes = document.querySelectorAll('[data-tab-pane]');
 
@@ -1015,12 +1102,10 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
         tab.setAttribute('aria-selected', isMatch ? 'true' : 'false');
       });
 
-      // Update hidden tab fields across all forms
       document.querySelectorAll('input[type="hidden"][name="tab"]').forEach(input => {
         input.value = targetId;
       });
 
-      // Update URL without page reload
       try {
         const url = new URL(window.location.href);
         url.searchParams.set('tab', targetId);
@@ -1033,6 +1118,85 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
         e.preventDefault();
         const tabId = tab.dataset.tabTrigger;
         if (tabId) activateTab(tabId);
+      });
+    });
+
+    // 2. Add Staff Drawer Toggle
+    const toggleAddStaffBtn = document.getElementById('toggle-add-staff-btn');
+    const closeAddStaffBtn = document.getElementById('close-add-staff-btn');
+    const addStaffDrawer = document.getElementById('add-staff-drawer');
+    const discordIdInput = document.getElementById('discord_id');
+
+    function toggleAddStaff(show) {
+      if (!addStaffDrawer || !toggleAddStaffBtn) return;
+      const isShowing = show !== undefined ? show : addStaffDrawer.hidden;
+      addStaffDrawer.hidden = !isShowing;
+      toggleAddStaffBtn.classList.toggle('is-open', isShowing);
+      toggleAddStaffBtn.setAttribute('aria-expanded', isShowing ? 'true' : 'false');
+      if (isShowing && discordIdInput) {
+        discordIdInput.focus();
+      }
+    }
+
+    if (toggleAddStaffBtn) {
+      toggleAddStaffBtn.addEventListener('click', () => toggleAddStaff());
+    }
+    if (closeAddStaffBtn) {
+      closeAddStaffBtn.addEventListener('click', () => toggleAddStaff(false));
+    }
+
+    // 3. Click to Copy Discord ID
+    document.querySelectorAll('[data-copy-id]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const id = btn.getAttribute('data-copy-id');
+        if (!id) return;
+        try {
+          await navigator.clipboard.writeText(id);
+          const originalTitle = btn.getAttribute('title') || '';
+          btn.setAttribute('title', 'Copied to clipboard!');
+          const label = btn.querySelector('.staff-id');
+          if (label) {
+            const oldText = label.textContent;
+            label.textContent = 'Copied!';
+            setTimeout(() => {
+              label.textContent = oldText;
+              btn.setAttribute('title', originalTitle);
+            }, 1200);
+          }
+        } catch (err) {}
+      });
+    });
+
+    // 4. Staff Search & Filter
+    const searchInput = document.getElementById('staff-search');
+    const filterChips = document.querySelectorAll('[data-staff-filter]');
+    const staffCards = document.querySelectorAll('.staff-card');
+    let currentRoleFilter = 'all';
+
+    function applyStaffFilters() {
+      const query = (searchInput?.value || '').trim().toLowerCase();
+      staffCards.forEach(card => {
+        const cardRole = card.getAttribute('data-staff-role');
+        const cardSearch = card.getAttribute('data-staff-search') || '';
+
+        const matchesRole = currentRoleFilter === 'all' || cardRole === currentRoleFilter;
+        const matchesQuery = !query || cardSearch.includes(query);
+
+        card.hidden = !(matchesRole && matchesQuery);
+      });
+    }
+
+    if (searchInput) {
+      searchInput.addEventListener('input', applyStaffFilters);
+    }
+
+    filterChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        filterChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        currentRoleFilter = chip.getAttribute('data-staff-filter') || 'all';
+        applyStaffFilters();
       });
     });
   });
@@ -1089,6 +1253,7 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     border: 1px solid var(--border-default);
     text-transform: uppercase;
     letter-spacing: var(--track-wider);
+    flex-shrink: 0;
   }
   .role-owner {
     background: #f59e0b18;
@@ -1246,10 +1411,109 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
   }
   .empty-line { font-size: var(--text-sm); color: var(--text-muted); }
 
+  /* Section Header With Action */
+  .panel-header-with-action {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-block-end: var(--space-3);
+  }
+  .panel-header-with-action .panel-sub {
+    margin-block-end: 0;
+  }
+  .toggle-icon-plus {
+    transition: transform 0.2s ease;
+  }
+  #toggle-add-staff-btn.is-open .toggle-icon-plus {
+    transform: rotate(45deg);
+  }
+
+  /* Add Staff Drawer */
+  .add-staff-drawer {
+    margin-block-end: var(--space-4);
+    animation: slideDown 0.2s ease-out;
+  }
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .add-box-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-block-end: var(--space-3);
+  }
+  .add-box {
+    padding: var(--space-4);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+  .add-box h3 {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+  }
+  .add { display: grid; gap: var(--space-3); max-inline-size: 44rem; }
+  .add-actions { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+  .admin-notice-hint { font-size: var(--text-xs); color: var(--text-tertiary); }
+
+  /* Staff Search & Filter Toolbar */
+  .staff-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-block-end: var(--space-4);
+  }
+  .staff-search-box {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+    min-inline-size: 260px;
+    flex: 1;
+    max-inline-size: 380px;
+  }
+  .staff-search-box svg {
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+  .staff-search-input {
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    inline-size: 100%;
+    outline: none;
+  }
+  .staff-filter-chips {
+    display: flex;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+  .staff-filter-chips .chip {
+    cursor: pointer;
+    background: var(--surface-raised);
+    border-color: var(--border-subtle);
+  }
+  .staff-filter-chips .chip.active {
+    background: var(--surface-hover);
+    border-color: var(--signal);
+    color: var(--text-primary);
+    font-weight: var(--weight-medium);
+  }
+
   /* Staff Cards Grid */
   .staff-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: var(--space-3);
     margin-block-end: var(--space-5);
   }
@@ -1261,6 +1525,10 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     background: var(--surface-raised);
+    transition: border-color 0.15s ease;
+  }
+  .staff-card:hover {
+    border-color: var(--border-default);
   }
   .staff-card-header {
     display: flex;
@@ -1268,14 +1536,76 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     align-items: flex-start;
     gap: var(--space-2);
   }
-  .staff-who { display: flex; flex-direction: column; min-inline-size: 0; }
-  .staff-name { font-weight: var(--weight-medium); font-size: var(--text-base); }
-  .staff-id { font-size: var(--text-xs); color: var(--text-muted); }
+  .staff-identity {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-inline-size: 0;
+  }
+  .staff-avatar-wrap {
+    flex-shrink: 0;
+  }
+  .staff-avatar {
+    inline-size: 38px;
+    block-size: 38px;
+    border-radius: 999px;
+    object-fit: cover;
+    border: 1px solid var(--border-subtle);
+  }
+  .staff-avatar-fallback {
+    inline-size: 38px;
+    block-size: 38px;
+    border-radius: 999px;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: var(--weight-semi);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+  .staff-who {
+    display: flex;
+    flex-direction: column;
+    min-inline-size: 0;
+  }
+  .staff-name {
+    font-weight: var(--weight-medium);
+    font-size: var(--text-base);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .staff-id-copy-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+    text-align: left;
+    transition: color 0.15s ease;
+  }
+  .staff-id-copy-btn:hover {
+    color: var(--signal-ink);
+  }
+  .staff-id-copy-btn .copy-icon {
+    opacity: 0.6;
+    transition: opacity 0.15s ease;
+  }
+  .staff-id-copy-btn:hover .copy-icon {
+    opacity: 1;
+  }
   .staff-meta {
     display: flex;
     justify-content: space-between;
     font-size: var(--text-xs);
     color: var(--text-tertiary);
+    margin-block-start: var(--space-1);
   }
   .staff-actions {
     display: flex;
@@ -1294,30 +1624,17 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
   .danger { color: var(--dead); }
   .danger:hover { border-color: var(--dead); color: var(--dead); }
 
-  /* Add Box */
-  .add-box {
-    margin-block-start: var(--space-4);
-    padding: var(--space-4);
-    border: 1px dashed var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-sunken);
-  }
-  .add-box h3 {
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    margin-block-end: var(--space-3);
-  }
-  .add { display: grid; gap: var(--space-3); max-inline-size: 44rem; }
-  .add-actions { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
-  .admin-notice-hint { font-size: var(--text-xs); color: var(--text-tertiary); }
-
-  /* Forms & Inputs */
+  /* Forms & Inputs — FIXED GRID ALIGNMENT */
   .rows-2 {
     display: grid;
     gap: var(--space-4);
     grid-template-columns: 1fr 1fr;
-    align-items: start;
+    align-items: flex-start;
     max-inline-size: 48rem;
+  }
+  .rows-2 .field,
+  .rows-2 .field + .field {
+    margin-block-start: 0 !important;
   }
   .rows-2 .wide, .rows-2 .field.wide { grid-column: 1 / -1; }
   @media (max-width: 640px) { .rows-2 { grid-template-columns: 1fr; } }
