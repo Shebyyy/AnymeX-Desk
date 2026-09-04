@@ -492,7 +492,7 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, st
     const tabBtns = document.querySelectorAll('.profile-tab-btn');
     const tabPanes = document.querySelectorAll('.profile-tab-pane');
 
-    function switchTab(tabId: string) {
+    function switchTab(tabId) {
       tabBtns.forEach(btn => {
         const isTarget = btn.getAttribute('data-tab-target') === tabId;
         btn.classList.toggle('active', isTarget);
@@ -524,27 +524,26 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, st
     }
 
     // 2. Report Filtering & Search
-    const searchInput = document.getElementById('user-reports-search') as HTMLInputElement | null;
+    const searchInput = document.getElementById('user-reports-search');
     const kindChips = document.querySelectorAll('[data-kind-filter]');
     const reportCards = document.querySelectorAll('#user-reports-list .user-report-card');
     const emptySearch = document.getElementById('reports-empty-search');
     let currentKind = 'all';
 
     function applyReportFilters() {
-      const q = searchInput?.value.trim().toLowerCase() || '';
+      const q = (searchInput && searchInput.value ? searchInput.value : '').trim().toLowerCase();
       let visible = 0;
 
       reportCards.forEach(card => {
-        const el = card as HTMLElement;
-        const kind = el.getAttribute('data-kind');
-        const text = el.getAttribute('data-search') || '';
+        const kind = card.getAttribute('data-kind');
+        const text = card.getAttribute('data-search') || '';
 
         const matchKind = currentKind === 'all' || kind === currentKind;
         const matchSearch = !q || text.includes(q);
         const isVisible = matchKind && matchSearch;
 
-        el.hidden = !isVisible;
-        el.style.display = isVisible ? '' : 'none';
+        card.hidden = !isVisible;
+        card.style.display = isVisible ? '' : 'none';
         if (isVisible) visible++;
       });
 

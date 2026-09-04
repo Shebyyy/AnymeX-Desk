@@ -488,6 +488,7 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
         </a>
       )}
     </nav>
+  )}
   </header>
 
   {done && <p class="flash" role="status">{done}</p>}
@@ -1386,27 +1387,26 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     });
 
     // 4. Staff Search & Role Filter
-    const searchInput = document.getElementById('staff-search') as HTMLInputElement | null;
+    const searchInput = document.getElementById('staff-search');
     const filterChips = document.querySelectorAll('[data-staff-filter]');
     const staffCards = document.querySelectorAll('#staff-card-grid .staff-card');
     const emptySearchMsg = document.getElementById('staff-empty-search');
     let currentRoleFilter = 'all';
 
     function applyStaffFilters() {
-      const query = (searchInput?.value || '').trim().toLowerCase();
+      const query = (searchInput && searchInput.value ? searchInput.value : '').trim().toLowerCase();
       let visibleCount = 0;
 
       staffCards.forEach(card => {
-        const el = card as HTMLElement;
-        const cardRole = el.getAttribute('data-staff-role');
-        const cardSearch = el.getAttribute('data-staff-search') || '';
+        const cardRole = card.getAttribute('data-staff-role');
+        const cardSearch = card.getAttribute('data-staff-search') || '';
 
         const matchesRole = currentRoleFilter === 'all' || cardRole === currentRoleFilter;
         const matchesQuery = !query || cardSearch.includes(query);
         const isVisible = matchesRole && matchesQuery;
 
-        el.hidden = !isVisible;
-        el.style.display = isVisible ? '' : 'none';
+        card.hidden = !isVisible;
+        card.style.display = isVisible ? '' : 'none';
         if (isVisible) visibleCount++;
       });
 
@@ -1433,12 +1433,12 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     const toggleBlockBtn = document.getElementById('toggle-block-user-btn');
     const closeBlockBtn = document.getElementById('close-block-user-btn');
     const blockDrawer = document.getElementById('block-user-drawer');
-    const blockUserSearch = document.getElementById('block-user-search') as HTMLInputElement | null;
+    const blockUserSearch = document.getElementById('block-user-search');
     const blockUserSuggestions = document.getElementById('block-user-suggestions');
-    const blockDiscordIdInput = document.getElementById('block_discord_id') as HTMLInputElement | null;
+    const blockDiscordIdInput = document.getElementById('block_discord_id');
     const userSuggestItems = document.querySelectorAll('.user-autocomplete-item');
 
-    function toggleBlockDrawer(show?: boolean) {
+    function toggleBlockDrawer(show) {
       if (!blockDrawer || !toggleBlockBtn) return;
       const isShowing = show !== undefined ? show : blockDrawer.hidden;
       blockDrawer.hidden = !isShowing;
@@ -1454,14 +1454,13 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
 
     if (blockUserSearch && blockUserSuggestions && blockDiscordIdInput) {
       function filterUserSuggestions() {
-        const q = blockUserSearch?.value.trim().toLowerCase() || '';
+        const q = (blockUserSearch.value || '').trim().toLowerCase();
         let matched = 0;
         userSuggestItems.forEach(item => {
-          const el = item as HTMLElement;
-          const s = el.getAttribute('data-search') || '';
+          const s = item.getAttribute('data-search') || '';
           const match = !q || s.includes(q);
-          el.hidden = !match;
-          el.style.display = match ? 'flex' : 'none';
+          item.hidden = !match;
+          item.style.display = match ? 'flex' : 'none';
           if (match) matched++;
         });
         if (blockUserSuggestions) {
@@ -1494,7 +1493,7 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
       document.addEventListener('click', (e) => {
         if (
           blockUserSuggestions &&
-          !blockUserSuggestions.contains(e.target as Node) &&
+          !blockUserSuggestions.contains(e.target) &&
           e.target !== blockUserSearch
         ) {
           blockUserSuggestions.hidden = true;
@@ -1506,11 +1505,11 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
     const toggleLabelBtn = document.getElementById('toggle-add-label-btn');
     const closeLabelBtn = document.getElementById('close-add-label-btn');
     const labelDrawer = document.getElementById('add-label-drawer');
-    const labelNameInput = document.getElementById('label_name') as HTMLInputElement | null;
-    const labelColorInput = document.getElementById('label_color') as HTMLInputElement | null;
+    const labelNameInput = document.getElementById('label_name');
+    const labelColorInput = document.getElementById('label_color');
     const labelLivePreview = document.getElementById('label-live-preview');
 
-    function toggleLabelDrawer(show?: boolean) {
+    function toggleLabelDrawer(show) {
       if (!labelDrawer || !toggleLabelBtn) return;
       const isShowing = show !== undefined ? show : labelDrawer.hidden;
       labelDrawer.hidden = !isShowing;
@@ -1526,8 +1525,8 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
 
     function updateLabelPreview() {
       if (!labelLivePreview) return;
-      const name = labelNameInput?.value?.trim() || 'preview';
-      const color = labelColorInput?.value || '#6366f1';
+      const name = (labelNameInput && labelNameInput.value ? labelNameInput.value : '').trim() || 'preview';
+      const color = (labelColorInput && labelColorInput.value ? labelColorInput.value : '') || '#6366f1';
       labelLivePreview.textContent = name;
       labelLivePreview.style.background = `${color}22`;
       labelLivePreview.style.borderColor = color;
@@ -1550,7 +1549,7 @@ const forumSyncEnabled = cfg.discord_forum_sync_enabled === '1';
       });
 
       document.addEventListener('click', (e) => {
-        if (!viewAsMenu.contains(e.target as Node) && e.target !== viewAsBtn) {
+        if (!viewAsMenu.contains(e.target) && e.target !== viewAsBtn) {
           viewAsMenu.hidden = true;
           viewAsBtn.setAttribute('aria-expanded', 'false');
         }
