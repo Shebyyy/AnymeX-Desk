@@ -753,6 +753,7 @@ export async function syncCommentToDiscord(
   attachmentUrls?: string[],
   cfg?: Config,
   mentionedUserIds?: string[],
+  attachmentFiles?: Array<{ name: string; buffer: ArrayBuffer; mimeType?: string }>,
 ): Promise<string | null> {
   const c = cfg ?? (await readConfig());
   if (c.discord_forum_sync_enabled !== '1') return null;
@@ -769,12 +770,13 @@ export async function syncCommentToDiscord(
         ? mentionedUserIds.map((id) => `<@${id}>`).join(' ') + ' '
         : '';
     const bodyText = comment.body || '';
+    const hasNativeFiles = attachmentFiles && attachmentFiles.length > 0;
     const attachmentLines =
-      attachmentUrls && attachmentUrls.length > 0
+      !hasNativeFiles && attachmentUrls && attachmentUrls.length > 0
         ? '\n' + attachmentUrls.join('\n')
         : '';
     const content = (mentionPrefix + bodyText + attachmentLines).trim() ||
-      '(attachment)';
+      (hasNativeFiles ? '' : '(attachment)');
 
     // Unarchive thread if it was archived
     await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {

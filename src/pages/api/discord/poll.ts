@@ -132,28 +132,36 @@ async function storeDiscordAttachment(
   if (mime.startsWith('image/')) fileType = 'image';
   else if (mime.startsWith('video/')) fileType = 'video';
 
-  const uuid = crypto.randomUUID();
-  const filePath = `uploads/${uuid}/${att.filename}`;
+  const filePath = att.url;
 
-  if (kv) {
-    await kv.put(`discord_cdn:${filePath}`, att.url, {
-      expirationTtl: 60 * 60 * 24 * 365,
-    }).catch(() => {});
-  }
-
-  await db()
-    .insert(attachments)
-    .values({
-      reportId,
-      commentId,
-      fileName: att.filename,
-      filePath,
-      fileType,
-      mimeType: mime,
-      fileSize: att.size,
-      discordCdnUrl: att.url,
-    })
-    .onConflictDoNothing(); // attachment dedup guard
+  try {
+    await db()
+      .insert(attachments)
+      .values({
+        reportId,
+        commentId,
+        fileName: att.filename,
+        filePath,
+        fileType,
+        mimeType: mime,
+        fileSize: att.size,
+        discordCdnUrl: att.url,
+      })
+      .onConflictDoNothing();
+  } catch {
+    await db()
+      .insert(attachments)
+      .values({
+        reportId,
+        commentId,
+        fileName: att.filename,
+        filePath,
+        fileType,
+        mimeType: mime,
+        fileSize: att.size,
+      })
+      .onConflictDoNothing();
+  } // attachment dedup guard
 }
 
 /**

@@ -176,27 +176,31 @@ export const POST: APIRoute = async (ctx) => {
       if (mime.startsWith('image/')) fileType = 'image';
       else if (mime.startsWith('video/')) fileType = 'video';
 
-      // Generate a stable path for this attachment
-      const uuid = crypto.randomUUID();
-      const filePath = `uploads/${uuid}/${att.filename}`;
+      // Use direct Discord CDN URL for filePath so it loads everywhere immediately
+      const filePath = att.url;
 
-      // Store the CDN URL in KV so the proxy route can redirect to it
-      if (kv) {
-        await kv.put(`discord_cdn:${filePath}`, att.url, {
-          expirationTtl: 60 * 60 * 24 * 365, // 1 year
+      try {
+        await d.insert(attachments).values({
+          reportId: report.id,
+          commentId: newComment?.id ?? null,
+          fileName: att.filename,
+          filePath,
+          fileType,
+          mimeType: mime,
+          fileSize: 0,
+          discordCdnUrl: att.url,
+        });
+      } catch {
+        await d.insert(attachments).values({
+          reportId: report.id,
+          commentId: newComment?.id ?? null,
+          fileName: att.filename,
+          filePath,
+          fileType,
+          mimeType: mime,
+          fileSize: 0,
         });
       }
-
-      await d.insert(attachments).values({
-        reportId: report.id,
-        commentId: newComment?.id ?? null,
-        fileName: att.filename,
-        filePath,
-        fileType,
-        mimeType: mime,
-        fileSize: 0, // Unknown from Discord payload
-        discordCdnUrl: att.url,
-      });
     }
 
     // Notify parent comment author if this was a reply

@@ -450,6 +450,7 @@ if (report.duplicateOf) {
 }
 
 const contributorGuildId = (await readSetting('contributor_guild_id')) || '1545003117018357850';
+const resolveAttUrl = (p: string) => p.startsWith('http') ? p : '/' + p;
 
 Astro.response.headers.set(
   'Cache-Control',
@@ -628,9 +629,9 @@ Astro.response.headers.set(
           {reportAttachments.map((att) => (
             <div class="gallery-item" data-type={att.fileType}>
               {att.fileType === 'image' ? (
-                <a href={`/${att.filePath}`} target="_blank" rel="noopener">
+                <a href={resolveAttUrl(att.filePath)} target="_blank" rel="noopener">
                   <img
-                    src={`/${att.filePath}`}
+                    src={resolveAttUrl(att.filePath)}
                     alt={att.fileName}
                     loading="lazy"
                     class="gallery-img"
@@ -643,7 +644,7 @@ Astro.response.headers.set(
                   class="gallery-video"
                   poster={att.thumbnailPath ? `/${att.thumbnailPath}` : undefined}
                 >
-                  <source src={`/${att.filePath}`} type={att.mimeType} />
+                  <source src={resolveAttUrl(att.filePath)} type={att.mimeType} />
                   Your browser does not support the video element.
                 </video>
               )}
@@ -721,15 +722,15 @@ Astro.response.headers.set(
                   {cAtts.map((att) => (
                     <div class="comment-att" data-type={att.fileType}>
                       {att.fileType === 'image' ? (
-                        <a href={`/${att.filePath}`} target="_blank" rel="noopener">
-                          <img src={`/${att.filePath}`} alt={att.fileName} class="comment-att-img" loading="lazy" />
+                        <a href={resolveAttUrl(att.filePath)} target="_blank" rel="noopener">
+                          <img src={resolveAttUrl(att.filePath)} alt={att.fileName} class="comment-att-img" loading="lazy" />
                         </a>
                       ) : att.fileType === 'video' ? (
                         <video controls preload="metadata" class="comment-att-video">
-                          <source src={`/${att.filePath}`} type={att.mimeType} />
+                          <source src={resolveAttUrl(att.filePath)} type={att.mimeType} />
                         </video>
                       ) : (
-                        <a href={`/${att.filePath}`} class="comment-att-file" download={att.fileName}>
+                        <a href={resolveAttUrl(att.filePath)} class="comment-att-file" download={att.fileName}>
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
                           </svg>
@@ -1096,7 +1097,10 @@ Astro.response.headers.set(
       selectedFile = null;
       cancelReply();
       if (fileChip) { fileChip.textContent = ''; fileChip.style.display = 'none'; }
-      window.location.reload();
+      await pollLiveUpdates();
+      const newestEl = document.getElementById('comment-' + latestCommentId);
+      if (newestEl) newestEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      else window.location.reload();
     } catch {
       alert('Network error');
     } finally {
@@ -1351,6 +1355,102 @@ Astro.response.headers.set(
       btn.disabled = false;
     }
   });
+
+  // ── Live real-time polling (zero refresh needed) ──────────────────────────
+  const reportIdMeta = Number((document.getElementById('comment-form')?.querySelector('[name=reportId]') as HTMLInputElement)?.value || 0);
+  let currentReportStatus = document.querySelector('dd.status')?.getAttribute('data-status') || '';
+  let latestCommentId = 0;
+  document.querySelectorAll<HTMLElement>('.comment[data-comment-id]').forEach((el) => {
+    const cid = Number(el.dataset.commentId) || 0;
+    if (cid > latestCommentId) latestCommentId = cid;
+  });
+
+  async function pollLiveUpdates() {
+    if (!reportIdMeta) return;
+    try {
+      const res = await fetch(`/api/v1/report-live?reportId=${reportIdMeta}&after=${latestCommentId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      // 1. Live status update
+      if (data.status && data.status !== currentReportStatus) {
+        currentReportStatus = data.status;
+        const statusEl = document.querySelector('dd.status');
+        if (statusEl) {
+          statusEl.setAttribute('data-status', data.status);
+          statusEl.textContent = data.statusLabel || data.status;
+          statusEl.classList.add('status-updated-flash');
+          setTimeout(() => statusEl.classList.remove('status-updated-flash'), 1200);
+        }
+      }
+
+      // 2. Live new comments injection
+      if (Array.isArray(data.newComments) && data.newComments.length > 0) {
+        const commentsSection = document.querySelector('.comments-section');
+        let commentsList = commentsSection?.querySelector('.comments-list');
+
+        if (!commentsList && commentsSection) {
+          commentsList = document.createElement('div');
+          commentsList.className = 'comments-list';
+          const emptyNotice = commentsSection.querySelector('.empty');
+          if (emptyNotice) emptyNotice.remove();
+          commentsSection.appendChild(commentsList);
+        }
+
+        for (const c of data.newComments) {
+          if (document.querySelector(`.comment[data-comment-id="${c.id}"]`)) continue;
+          latestCommentId = Math.max(latestCommentId, c.id);
+
+          const el = document.createElement('div');
+          el.className = 'comment live-comment-enter';
+          el.id = `comment-${c.id}`;
+          el.dataset.commentId = String(c.id);
+
+          let attsHtml = '';
+          if (c.attachments && c.attachments.length > 0) {
+            attsHtml = `<div class="comment-attachments">` + c.attachments.map((att: any) => {
+              if (att.fileType === 'image') {
+                return `<div class="comment-att" data-type="image"><a href="${att.url}" target="_blank" rel="noopener"><img src="${att.url}" alt="${att.fileName}" class="comment-att-img" loading="lazy" /></a></div>`;
+              } else if (att.fileType === 'video') {
+                return `<div class="comment-att" data-type="video"><video controls preload="metadata" class="comment-att-video"><source src="${att.url}" type="${att.mimeType || 'video/mp4'}" /></video></div>`;
+              } else {
+                return `<div class="comment-att" data-type="file"><a href="${att.url}" class="comment-att-file" download="${att.fileName}"><span>${att.fileName}</span></a></div>`;
+              }
+            }).join('') + `</div>`;
+          }
+
+          el.innerHTML = `
+            <div class="comment-header">
+              <div class="comment-author">
+                <a href="/user/${c.userId}" class="comment-author-link" title="View ${c.username}'s profile">
+                  <img class="avatar" src="${c.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png'}" alt="" width="24" height="24" />
+                  <span class="comment-username">${c.username}</span>
+                </a>
+                <span class="comment-time">just now</span>
+              </div>
+            </div>
+            ${c.body ? `<p class="comment-body" data-comment-body data-raw-body="${c.body}">${c.body.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>` : ''}
+            ${attsHtml}
+          `;
+
+          commentsList?.appendChild(el);
+        }
+
+        const countHeading = commentsSection?.querySelector('h2');
+        if (countHeading && data.commentCount != null) {
+          countHeading.textContent = `Comments (${data.commentCount})`;
+        }
+      }
+    } catch {}
+  }
+
+  // Poll every 5 seconds
+  if (reportIdMeta > 0) {
+    setInterval(pollLiveUpdates, 5000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') pollLiveUpdates();
+    });
+  }
 </script>
 
 <style>
@@ -1829,5 +1929,20 @@ Astro.response.headers.set(
   .reaction-emoji-btn:hover {
     transform: scale(1.25);
     background: var(--surface-hover);
+  }
+  @keyframes liveCommentFade {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .live-comment-enter {
+    animation: liveCommentFade 0.4s ease-out forwards;
+  }
+  @keyframes statusFlash {
+    0% { transform: scale(1); filter: brightness(1); }
+    50% { transform: scale(1.12); filter: brightness(1.4); }
+    100% { transform: scale(1); filter: brightness(1); }
+  }
+  .status-updated-flash {
+    animation: statusFlash 0.8s ease-in-out;
   }
 </style>

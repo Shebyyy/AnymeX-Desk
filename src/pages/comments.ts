@@ -147,6 +147,7 @@ export const POST: APIRoute = async (ctx) => {
 
   /* Upload file attachment if provided. */
   let attachment = null;
+  let fileBuffer: ArrayBuffer | null = null;
   if (file && file.size > 0) {
     const mime = file.type || 'application/octet-stream';
     const uuid = crypto.randomUUID();
@@ -161,7 +162,8 @@ export const POST: APIRoute = async (ctx) => {
     // Store in KV.
     const kv = env.SESSION as KVNamespace | undefined;
     if (kv) {
-      const buf = await file.arrayBuffer();
+      fileBuffer = await file.arrayBuffer();
+      const buf = fileBuffer;
       await kv.put(kvKey, buf, {
         metadata: { mimeType: mime, fileName: file.name },
         expirationTtl: 60 * 60 * 24 * 365,
@@ -272,6 +274,7 @@ export const POST: APIRoute = async (ctx) => {
     // Collect all mentioned Discord IDs so they arrive as <@id> pings in Discord
     const allMentionedIds = body ? (await resolveMentions(body, user.id)).map((m) => m.id) : [];
     const attUrl = attachment ? `${ctx.url.origin}/uploads/${attachment.filePath}` : undefined;
+    const attFiles = fileBuffer && file ? [{ name: file.name, buffer: fileBuffer, mimeType: file.type }] : undefined;
     dmTasks.push(
       syncCommentToDiscord(
         report,
@@ -280,6 +283,7 @@ export const POST: APIRoute = async (ctx) => {
         attUrl ? [attUrl] : undefined,
         undefined,
         allMentionedIds.length > 0 ? allMentionedIds : undefined,
+        attFiles,
       ),
     );
   }
