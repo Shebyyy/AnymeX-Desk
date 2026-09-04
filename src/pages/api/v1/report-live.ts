@@ -4,6 +4,7 @@ import { db } from '../../../lib/db/client';
 import { reports, comments, users, attachments } from '../../../lib/db/schema';
 import { statusLabel } from '../../../lib/format';
 import { resolveDiscordAvatarUrl } from '../../../lib/discord-forums';
+import { prepareCommentBody } from '../../../lib/richtext';
 
 export const prerender = false;
 
@@ -88,6 +89,12 @@ export const GET: APIRoute = async (ctx) => {
     return {
       id: c.id,
       body: c.body,
+      // Pre-rendered markdown HTML so the live-update client can insert it
+      // directly. Without this, the client dumped the raw body as text and
+      // newly-posted comments showed unparsed markdown until a page reload.
+      // Uses the same prepareCommentBody() as the SSR path, so the rendering
+      // matches exactly.
+      bodyHtml: c.body ? prepareCommentBody(c.body).html : '',
       createdAt: c.createdAt,
       userId: c.userId,
       username: c.username,

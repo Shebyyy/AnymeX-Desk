@@ -1472,7 +1472,7 @@ Astro.response.headers.set(
                 <span class="comment-time">just now</span>
               </div>
             </div>
-            ${c.body ? `<p class="comment-body" data-comment-body data-raw-body="${c.body}">${c.body.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>` : ''}
+            ${c.body ? `<div class="comment-body" data-comment-body data-raw-body="${c.body.replace(/"/g, '&quot;')}">${c.bodyHtml || c.body.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
             ${attsHtml}
           `;
 
