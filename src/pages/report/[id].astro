@@ -21,6 +21,7 @@ import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } fro
 import { prepareCommentBody } from '../../lib/richtext';
 import { fetchLinkPreviews } from '../../lib/link-preview';
 import { getPresence } from '../../lib/presence';
+import { isReportLocked } from '../../lib/writes';
 import { env } from 'cloudflare:workers';
 
 export const prerender = false;
@@ -420,6 +421,11 @@ const linkPreviews = allPreviewUrls.length ? await fetchLinkPreviews(allPreviewU
 
 const nowSeconds = Math.floor(Date.now() / 1000);
 const canModerate = user ? atLeast(await levelOf(user.id), 'mod') : false;
+// A report is "locked" if either a staff member manually locked it, OR its
+// status is one of the closed ones (fixed/wont_fix/duplicate). See
+// isReportLocked in lib/writes.ts. Members are blocked from commenting,
+// reacting, editing, and attaching on locked reports. Staff bypass.
+const isLocked = isReportLocked(report);
 const isReporterCurrentViewer = user && reporter && (reporter.discordId === user.id || (user.telegramId && reporter.telegramId === user.telegramId));
 const reporterPresence = canModerate && reporter
   ? getPresence(isReporterCurrentViewer ? nowSeconds : (reporter.lastSeen || reporter.lastLogin), reporter.lastLogin, nowSeconds)
@@ -491,6 +497,12 @@ Astro.response.headers.set(
   }
 
   <article>
+    {isLocked && (
+      <div class="locked-banner" role="status">
+        <span class="locked-icon">🔒</span>
+        <span>This report is locked. {canModerate ? 'You can still post as staff.' : 'Comments and reactions are disabled.'}</span>
+      </div>
+    )}
     <header class="head">
       <VoteButton reportId={report.id} votes={report.votes} mine={mine} closed={!isLive} />
       <div>
@@ -857,7 +869,7 @@ Astro.response.headers.set(
         })}
       </div>
 
-      {user && (
+      {user && !isLocked && (
         <form class="comment-form" id="comment-form">
           <input type="hidden" name="reportId" value={report.id} />
           <input type="hidden" name="replyToId" id="reply-to-id" value="" />
@@ -891,6 +903,49 @@ Astro.response.headers.set(
             <button class="btn" type="submit" id="comment-btn">Post</button>
           </div>
         </form>
+      )}
+
+      {/* Staff can still comment on a locked report — render a separate form
+          marked data-staff-locked so the client JS knows to bypass the lock
+          notice. Members never see this (gated by canModerate). */}
+      {user && isLocked && canModerate && (
+        <form class="comment-form" id="comment-form" data-staff-locked>
+          <input type="hidden" name="reportId" value={report.id} />
+          <input type="hidden" name="replyToId" id="reply-to-id" value="" />
+          <p class="reply-indicator" id="reply-indicator" style="display: none;">
+            Replying to <strong id="reply-indicator-username"></strong>
+            <button type="button" id="cancel-reply-btn" class="cancel-reply-btn">Cancel</button>
+          </p>
+          <div class="comment-input-row">
+            <input id="comment-file" type="file" multiple class="sr-only" />
+            <button type="button" class="btn btn-ghost attach-btn" id="attach-btn" title="Attach a file">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+              </svg>
+              <span class="sr-only">Attach a file</span>
+            </button>
+            <span class="file-chip" id="file-chip"></span>
+          </div>
+          <div class="mention-wrap">
+            <textarea
+              name="body"
+              class="textarea"
+              id="comment-body"
+              rows="3"
+              maxlength="2000"
+              placeholder="Add a comment (staff posting on a locked report)..."
+            ></textarea>
+            <ul class="mention-dropdown" id="mention-dropdown" style="display: none;"></ul>
+          </div>
+          <div class="comment-form-actions">
+            <span class="char-hint">Max 2000 characters</span>
+            <button class="btn" type="submit" id="comment-btn">Post</button>
+          </div>
+        </form>
+      )}
+
+      {user && isLocked && !canModerate && (
+        <p class="comments-locked-notice">🔒 Comments are locked on this report.</p>
       )}
     </section>
 
@@ -959,6 +1014,21 @@ Astro.response.headers.set(
     {
       canModerate && (
         <section class="mod">
+          {/* Lock / Unlock — manual toggle, independent of status. Locking
+              freezes comments/reactions/edits/attachments for members (staff
+              bypass). Voting is NOT affected (voting is status-gated). */}
+          <div class="mod-lock-row">
+            <button
+              class="btn lock-btn"
+              type="button"
+              id="lock-toggle-btn"
+              data-report-id={report.id}
+              data-locked={report.locked ? 'true' : 'false'}>
+              {report.locked ? '🔓 Unlock report' : '🔒 Lock report'}
+            </button>
+            <span class="mod-hint">Freezes comments &amp; reactions for members. Voting stays open if status is open.</span>
+          </div>
+
           <form method="POST">
             <p class="mod-label">Move this report</p>
             <div class="field">
@@ -1524,6 +1594,40 @@ Astro.response.headers.set(
       if (document.visibilityState === 'visible') pollLiveUpdates();
     });
   }
+
+  // ── Lock / Unlock button (staff only) ────────────────────────────────
+  const lockBtn = document.getElementById('lock-toggle-btn') as HTMLButtonElement | null;
+  lockBtn?.addEventListener('click', async () => {
+    const reportId = lockBtn.dataset.reportId;
+    const currentlyLocked = lockBtn.dataset.locked === 'true';
+    if (!reportId) return;
+    lockBtn.disabled = true;
+    lockBtn.textContent = currentlyLocked ? 'Unlocking…' : 'Locking…';
+    try {
+      const res = await fetch(`/api/report/${reportId}/lock`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ locked: !currentlyLocked }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed' }));
+        alert(err.error || 'Failed');
+        lockBtn.textContent = currentlyLocked ? '🔓 Unlock report' : '🔒 Lock report';
+        return;
+      }
+      const data = await res.json();
+      const nowLocked = !!data.locked;
+      lockBtn.dataset.locked = nowLocked ? 'true' : 'false';
+      lockBtn.textContent = nowLocked ? '🔓 Unlock report' : '🔒 Lock report';
+      // Reload so the banner + comment form visibility update correctly.
+      window.location.reload();
+    } catch {
+      alert('Network error');
+      lockBtn.textContent = currentlyLocked ? '🔓 Unlock report' : '🔒 Lock report';
+    } finally {
+      lockBtn.disabled = false;
+    }
+  });
 </script>
 
 <style>
@@ -1837,6 +1941,47 @@ Astro.response.headers.set(
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
     background: var(--surface-inset);
+  }
+  .mod-lock-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding-block-end: var(--space-3);
+    margin-block-end: var(--space-3);
+    border-block-end: 1px solid var(--border-subtle);
+  }
+  .lock-btn {
+    align-self: flex-start;
+    border-color: var(--dead, #ed4245);
+    color: var(--dead, #ed4245);
+  }
+  .lock-btn:hover { background: var(--dead-fill, rgba(237,66,69,0.1)); }
+
+  /* ── Locked banner ── */
+  .locked-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    margin-block-end: var(--space-3);
+    border: 1px solid var(--dead, #ed4245);
+    border-inline-start-width: 3px;
+    border-radius: var(--radius-md);
+    background: var(--dead-fill, rgba(237,66,69,0.08));
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+  }
+  .locked-banner .locked-icon { font-size: var(--text-md); }
+
+  .comments-locked-notice {
+    margin-block-start: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+    text-align: center;
   }
   .mod-label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
   .mod-row {

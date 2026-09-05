@@ -1,6 +1,26 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from './db/client';
-import { OPEN_STATUSES, normalizeTitle, reports } from './db/schema';
+import { OPEN_STATUSES, normalizeTitle, reports, STATUSES, type Report } from './db/schema';
+
+/**
+ * Is this report's conversation locked for members?
+ *
+ * A report is locked when EITHER:
+ *   - a staff member manually set `locked` (the Lock button), on any status, OR
+ *   - the status is one of the closed ones (fixed / wont_fix / duplicate).
+ *
+ * Locked blocks comments, reactions, comment edits, and attachments for
+ * members. Staff (mod/admin/owner) always bypass — enforced at each call
+ * site, not here.
+ *
+ * Voting is NOT affected by this — voting is gated by status alone via
+ * isVotableReport (only OPEN_STATUSES are votable). That's intentional: a
+ * manually-locked open report freezes the conversation but keeps collecting
+ * votes.
+ */
+export function isReportLocked(report: { locked: boolean; status: string }): boolean {
+  return report.locked || ['fixed', 'wont_fix', 'duplicate'].includes(report.status);
+}
 
 /**
  * Guards shared by the write paths (/new, /vote).

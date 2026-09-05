@@ -2,7 +2,10 @@ import type { APIRoute } from 'astro';
 import { and, eq, sql } from 'drizzle-orm';
 import { canWriteNow, currentUser } from '../lib/auth';
 import { db } from '../lib/db/client';
-import { commentReactions, comments } from '../lib/db/schema';
+import { commentReactions, comments, reports } from '../lib/db/schema';
+import { atLeast } from '../lib/levels';
+import { levelOf } from '../lib/staff';
+import { isReportLocked } from '../lib/writes';
 
 export const prerender = false;
 
@@ -47,12 +50,24 @@ export const POST: APIRoute = async (ctx) => {
   if (!(ALLOWED_EMOJI as readonly string[]).includes(emoji))
     return json({ error: 'unsupported emoji' }, 400);
 
-  // Verify the comment exists.
+  // Verify the comment exists and load the report for the lock check.
   const [comment] = await db()
-    .select({ id: comments.id })
+    .select({ id: comments.id, reportId: comments.reportId })
     .from(comments)
     .where(eq(comments.id, commentId));
   if (!comment) return json({ error: 'comment not found' }, 404);
+
+  // Lock gate: members cannot react on a locked report's comments. Staff bypass.
+  const [report] = await db()
+    .select({ locked: reports.locked, status: reports.status })
+    .from(reports)
+    .where(eq(reports.id, comment.reportId));
+  if (report && isReportLocked(report)) {
+    const level = await levelOf(user.id);
+    if (!atLeast(level, 'mod')) {
+      return json({ error: 'This report is locked — reactions are disabled.' }, 403);
+    }
+  }
 
   // Toggle: try DELETE first; if nothing removed, INSERT.
   const deleted = await db()

@@ -13,8 +13,10 @@ import {
   reports,
   VIDEO_MIMES,
 } from '../lib/db/schema';
-import { isReportId } from '../lib/writes';
+import { isReportId, isReportLocked } from '../lib/writes';
 import { syncAttachmentToDiscord } from '../lib/discord-forums';
+import { atLeast } from '../lib/levels';
+import { levelOf } from '../lib/staff';
 
 export const prerender = false;
 
@@ -101,10 +103,21 @@ export const POST: APIRoute = async (ctx) => {
 
   /* ── Verify report exists ──────────────────────────────────────────── */
   const [report] = await db()
-    .select({ id: reports.id })
+    .select({ id: reports.id, locked: reports.locked, status: reports.status })
     .from(reports)
     .where(eq(reports.id, reportId));
   if (!report) return json({ error: 'report not found' }, 404);
+
+  /* ── Lock gate: comment attachments blocked on locked reports ────── */
+  /* Report-level uploads (no commentId) only happen at filing time, when the
+     report is brand-new and not locked. But comment-level uploads (commentId
+     set) can happen any time and must respect the lock. Staff bypass. */
+  if (isCommentAttachment && isReportLocked(report)) {
+    const level = await levelOf(user.id);
+    if (!atLeast(level, 'mod')) {
+      return json({ error: 'This report is locked — attachments are disabled.' }, 403);
+    }
+  }
 
   /* ── Generate path & store file in KV ──────────────────────────────── */
   const uuid = crypto.randomUUID();

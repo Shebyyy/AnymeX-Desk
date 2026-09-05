@@ -6,7 +6,7 @@ import { db } from '../lib/db/client';
 import { comments, reports, users, notifications, attachments, IMAGE_MIMES, VIDEO_MIMES, MAX_IMAGE_SIZE, MAX_VIDEO_SIZE, MAX_FILE_SIZE } from '../lib/db/schema';
 import { atLeast } from '../lib/levels';
 import { levelOf, logAction } from '../lib/staff';
-import { isReportId } from '../lib/writes';
+import { isReportId, isReportLocked } from '../lib/writes';
 import { sendDiscordDm, truncateQuote } from '../lib/notify';
 import { resolveMentions } from '../lib/mentions';
 import { BLURPLE } from '../lib/webhook';
@@ -151,10 +151,19 @@ export const POST: APIRoute = async (ctx) => {
 
   /* Verify the report exists. */
   const [report] = await db()
-    .select({ id: reports.id, kind: reports.kind, reporterId: reports.reporterId, title: reports.title, discordThreadId: reports.discordThreadId })
+    .select({ id: reports.id, kind: reports.kind, reporterId: reports.reporterId, title: reports.title, discordThreadId: reports.discordThreadId, locked: reports.locked, status: reports.status })
     .from(reports)
     .where(eq(reports.id, reportId));
   if (!report) return json({ error: 'report not found' }, 404);
+
+  /* Lock gate: members cannot post new comments on a locked report.
+     Staff (mod+) always bypass. */
+  if (isReportLocked(report)) {
+    const level = await levelOf(user.id);
+    if (!atLeast(level, 'mod')) {
+      return json({ error: 'This report is locked — commenting is disabled.' }, 403);
+    }
+  }
 
   /* If replying, make sure the parent comment actually belongs to this report. */
   let parentAuthorId: string | null = null;
@@ -401,9 +410,18 @@ export const PUT: APIRoute = async (ctx) => {
   if (comment.userId !== user.id) return json({ error: 'forbidden' }, 403);
 
   const [report] = await db()
-    .select({ id: reports.id, title: reports.title, discordThreadId: reports.discordThreadId })
+    .select({ id: reports.id, title: reports.title, discordThreadId: reports.discordThreadId, locked: reports.locked, status: reports.status })
     .from(reports)
     .where(eq(reports.id, comment.reportId));
+
+  /* Lock gate: even the comment author cannot edit on a locked report.
+     Staff (mod+) bypass. */
+  if (report && isReportLocked(report)) {
+    const level = await levelOf(user.id);
+    if (!atLeast(level, 'mod')) {
+      return json({ error: 'This report is locked — editing is disabled.' }, 403);
+    }
+  }
 
   const [updated] = await db()
     .update(comments)

@@ -33,6 +33,7 @@ export const GET: APIRoute = async (ctx) => {
       status: reports.status,
       kind: reports.kind,
       commentCount: reports.commentCount,
+      locked: reports.locked,
     })
     .from(reports)
     .where(eq(reports.id, reportId));
@@ -113,6 +114,7 @@ export const GET: APIRoute = async (ctx) => {
     status: report.status,
     statusLabel: statusLabel(report.status, report.kind),
     commentCount: report.commentCount,
+    locked: report.locked,
     allCommentIds: allCommentRows.map((r) => r.id),
     newComments: payloadComments,
   });

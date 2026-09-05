@@ -260,6 +260,14 @@ export const reports = sqliteTable(
     discordLastPolledAt: integer('discord_last_polled_at'),
     /** Snowflake of the newest Discord message seen — used as `after` cursor. */
     discordLastMessageId: text('discord_last_message_id'),
+
+    /**
+     * Manual staff lock, independent of status. When true (OR when the status
+     * is fixed/wont_fix/duplicate — see isReportLocked), members cannot
+     * comment, react, edit their own comments, or attach files. Voting is
+     * NOT affected by this flag — voting is gated by status alone.
+     */
+    locked: integer('locked', { mode: 'boolean' }).notNull().default(false),
   },
   (t) => [
     /**
