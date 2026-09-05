@@ -3,7 +3,7 @@ import type { APIRoute } from 'astro';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { canWriteNow, currentUser, avatarUrl } from '../lib/auth';
 import { db } from '../lib/db/client';
-import { comments, reports, users, notifications, attachments } from '../lib/db/schema';
+import { comments, reports, users, notifications, attachments, IMAGE_MIMES, VIDEO_MIMES, MAX_IMAGE_SIZE, MAX_VIDEO_SIZE, MAX_FILE_SIZE } from '../lib/db/schema';
 import { atLeast } from '../lib/levels';
 import { levelOf, logAction } from '../lib/staff';
 import { isReportId } from '../lib/writes';
@@ -24,6 +24,19 @@ function json(data: unknown, status = 200) {
     headers: { 'content-type': 'application/json' },
   });
 }
+
+/**
+ * Filename-extension → MIME fallback, mirroring /upload. Some browsers hand
+ * us an empty/generic MIME for files picked from the camera roll or dragged
+ * in; without this, a .png would get fileType='file' and render as a download
+ * link instead of inline.
+ */
+const EXT_MIME: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+  gif: 'image/gif', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif',
+  apng: 'image/png',
+  mp4: 'video/mp4', webm: 'video/webm', m4v: 'video/mp4',
+};
 
 /* ── GET — list comments for a report ────────────────────────────────── */
 export const GET: APIRoute = async (ctx) => {
@@ -106,6 +119,19 @@ export const POST: APIRoute = async (ctx) => {
   if (!body && !file) return json({ error: 'body or file is required' }, 400);
   if (body.length > 2000) return json({ error: 'body too long (max 2000 chars)' }, 400);
 
+  /* ── Validate comment attachment: same classification + size limits as /upload ── */
+  if (file && file.size > 0) {
+    const declared = (file.type || '').trim();
+    let mime = declared && declared !== 'application/octet-stream'
+      ? declared
+      : (EXT_MIME[(file.name.split('.').pop() ?? '').toLowerCase()] ?? declared ?? 'application/octet-stream');
+    const max = IMAGE_MIMES.has(mime) ? MAX_IMAGE_SIZE : VIDEO_MIMES.has(mime) ? MAX_VIDEO_SIZE : MAX_FILE_SIZE;
+    if (file.size > max) {
+      const label = IMAGE_MIMES.has(mime) ? '5 MB' : VIDEO_MIMES.has(mime) ? '50 MB' : `${Math.round(MAX_FILE_SIZE / (1024 * 1024))} MB`;
+      return json({ error: `file too large (max ${label})` }, 400);
+    }
+  }
+
   /* Verify the report exists. */
   const [report] = await db()
     .select({ id: reports.id, kind: reports.kind, reporterId: reports.reporterId, title: reports.title, discordThreadId: reports.discordThreadId })
@@ -154,10 +180,11 @@ export const POST: APIRoute = async (ctx) => {
     const filePath = `uploads/${uuid}/${file.name}`;
     const kvKey = `upload:${filePath}`;
 
-    // Determine file type.
+    // Determine file type — same classification as /upload so HEIC/AVIF/etc.
+    // render inline as images rather than as download links.
     let fileType = 'file';
-    if (mime.startsWith('image/')) fileType = 'image';
-    else if (mime.startsWith('video/')) fileType = 'video';
+    if (IMAGE_MIMES.has(mime)) fileType = 'image';
+    else if (VIDEO_MIMES.has(mime)) fileType = 'video';
 
     // Store in KV.
     const kv = env.SESSION as KVNamespace | undefined;
@@ -280,12 +307,19 @@ export const POST: APIRoute = async (ctx) => {
       fileBuffer && file
         ? [{ name: file.name, buffer: fileBuffer, mimeType: file.type }]
         : undefined;
+    // When we have the native file bytes, send ONLY the native attachment —
+    // don't also append the URL to the content, or Discord shows the file
+    // twice (once as a link in the text, once as the native attachment at
+    // the bottom). The URL is only useful as a fallback when we couldn't
+    // re-upload the bytes (e.g. attachment came from Discord CDN originally,
+    // or the KV read failed and we have no buffer).
+    const hasNativeFile = !!(attFiles && attFiles.length > 0);
     dmTasks.push(
       syncCommentToDiscord(
         report,
         comment,
         user,
-        attUrl ? [attUrl] : undefined,
+        hasNativeFile ? undefined : (attUrl ? [attUrl] : undefined),
         undefined,
         allMentions.length > 0 ? allMentions : undefined,
         attFiles,
