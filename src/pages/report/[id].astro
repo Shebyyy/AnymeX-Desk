@@ -866,7 +866,7 @@ Astro.response.headers.set(
             <button type="button" id="cancel-reply-btn" class="cancel-reply-btn">Cancel</button>
           </p>
           <div class="comment-input-row">
-            <input id="comment-file" type="file" class="sr-only" />
+            <input id="comment-file" type="file" multiple class="sr-only" />
             <button type="button" class="btn btn-ghost attach-btn" id="attach-btn" title="Attach a file">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
@@ -1063,25 +1063,41 @@ Astro.response.headers.set(
 </Base>
 
 <script>
-  // ── File attachment for comment ──────────────────────────────────
+  // ── File attachment for comment (multiple) ───────────────────────────
   const commentFile = document.getElementById('comment-file') as HTMLInputElement | null;
   const attachBtn = document.getElementById('attach-btn') as HTMLButtonElement | null;
   const fileChip = document.getElementById('file-chip');
-  let selectedFile: File | null = null;
+  const MAX_FILES_PER_COMMENT = 5;
+  let selectedFiles: File[] = [];
 
   attachBtn?.addEventListener('click', () => commentFile?.click());
   commentFile?.addEventListener('change', () => {
-    selectedFile = commentFile.files?.[0] ?? null;
-    if (selectedFile && fileChip) {
-      const size = selectedFile.size > 1024 * 1024
-        ? `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`
-        : `${(selectedFile.size / 1024).toFixed(0)} KB`;
-      fileChip.textContent = `${selectedFile.name} (${size})`;
-      fileChip.style.display = '';
-    } else if (fileChip) {
-      fileChip.style.display = 'none';
+    for (const f of Array.from(commentFile.files ?? [])) {
+      if (selectedFiles.length >= MAX_FILES_PER_COMMENT) break;
+      if (!selectedFiles.find(x => x.name === f.name && x.size === f.size)) {
+        selectedFiles.push(f);
+      }
     }
+    commentFile.value = '';
+    renderFileChip();
   });
+
+  function renderFileChip() {
+    if (!fileChip) return;
+    if (selectedFiles.length === 0) {
+      fileChip.textContent = '';
+      fileChip.style.display = 'none';
+      return;
+    }
+    const parts = selectedFiles.map((f, i) => {
+      const size = f.size > 1024 * 1024
+        ? `${(f.size / (1024 * 1024)).toFixed(1)} MB`
+        : `${(f.size / 1024).toFixed(0)} KB`;
+      return `${f.name} (${size})`;
+    });
+    fileChip.textContent = `${selectedFiles.length} file${selectedFiles.length !== 1 ? 's' : ''}: ${parts.join(', ')}`;
+    fileChip.style.display = '';
+  }
 
   // ── Reply to a comment ─────────────────────────────────────────────
   const replyToIdInput = document.getElementById('reply-to-id') as HTMLInputElement | null;
@@ -1120,7 +1136,7 @@ Astro.response.headers.set(
   commentForm?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const body = commentBody?.value.trim() ?? '';
-    if (!body && !selectedFile) return;
+    if (!body && selectedFiles.length === 0) return;
     commentBtn!.disabled = true;
     commentBtn!.textContent = 'Posting…';
     try {
@@ -1128,7 +1144,7 @@ Astro.response.headers.set(
       fd.append('reportId', (commentForm!.querySelector('[name=reportId]') as HTMLInputElement).value);
       fd.append('body', body);
       if (replyToIdInput?.value) fd.append('replyToId', replyToIdInput.value);
-      if (selectedFile) fd.append('file', selectedFile);
+      for (const f of selectedFiles) fd.append('files', f);
       const res = await fetch('/comments', { method: 'POST', body: fd });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Failed to post' }));
@@ -1136,7 +1152,7 @@ Astro.response.headers.set(
         return;
       }
       commentBody!.value = '';
-      selectedFile = null;
+      selectedFiles = [];
       cancelReply();
       if (fileChip) { fileChip.textContent = ''; fileChip.style.display = 'none'; }
       await pollLiveUpdates();

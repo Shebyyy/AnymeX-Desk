@@ -110,25 +110,42 @@ export const POST: APIRoute = async (ctx) => {
   const form = await ctx.request.formData();
   const reportId = Number(form.get('reportId'));
   const body = String(form.get('body') ?? '').trim();
-  const file = form.get('file') as File | null;
   const replyToRaw = form.get('replyToId');
   let replyToId: number | null = replyToRaw ? Number(replyToRaw) : null;
   if (replyToId != null && (!Number.isSafeInteger(replyToId) || replyToId <= 0)) replyToId = null;
 
+  // Collect ALL files from the form. Supports multiple files per comment
+  // (form input has `multiple`). Backwards-compatible: the old single `file`
+  // field still works. Cap at 5 per comment.
+  const MAX_FILES_PER_COMMENT = 5;
+  const files: File[] = [];
+  const allFileEntries = form.getAll('files');
+  for (const f of allFileEntries) {
+    if (f instanceof File && f.size > 0) files.push(f);
+  }
+  // Legacy single-file path (old clients still send `file`)
+  const singleFile = form.get('file');
+  if (singleFile instanceof File && singleFile.size > 0 && files.length === 0) {
+    files.push(singleFile);
+  }
+  if (files.length > MAX_FILES_PER_COMMENT) {
+    return json({ error: `max ${MAX_FILES_PER_COMMENT} files per comment` }, 400);
+  }
+
   if (!isReportId(reportId)) return json({ error: 'invalid report id' }, 400);
-  if (!body && !file) return json({ error: 'body or file is required' }, 400);
+  if (!body && files.length === 0) return json({ error: 'body or file is required' }, 400);
   if (body.length > 2000) return json({ error: 'body too long (max 2000 chars)' }, 400);
 
-  /* ── Validate comment attachment: same classification + size limits as /upload ── */
-  if (file && file.size > 0) {
+  /* ── Validate every comment attachment: same classification + size limits as /upload ── */
+  for (const file of files) {
     const declared = (file.type || '').trim();
-    let mime = declared && declared !== 'application/octet-stream'
+    const mime = declared && declared !== 'application/octet-stream'
       ? declared
       : (EXT_MIME[(file.name.split('.').pop() ?? '').toLowerCase()] ?? declared ?? 'application/octet-stream');
     const max = IMAGE_MIMES.has(mime) ? MAX_IMAGE_SIZE : VIDEO_MIMES.has(mime) ? MAX_VIDEO_SIZE : MAX_FILE_SIZE;
     if (file.size > max) {
       const label = IMAGE_MIMES.has(mime) ? '5 MB' : VIDEO_MIMES.has(mime) ? '50 MB' : `${Math.round(MAX_FILE_SIZE / (1024 * 1024))} MB`;
-      return json({ error: `file too large (max ${label})` }, 400);
+      return json({ error: `${file.name}: file too large (max ${label})` }, 400);
     }
   }
 
@@ -171,11 +188,15 @@ export const POST: APIRoute = async (ctx) => {
 
   const comment = inserted[0];
 
-  /* Upload file attachment if provided. */
-  let attachment = null;
-  let fileBuffer: ArrayBuffer | null = null;
-  if (file && file.size > 0) {
-    const mime = file.type || 'application/octet-stream';
+  /* Upload file attachments if provided. Loop over all files. */
+  const attachmentsResult: Array<{ id: number; fileName: string; filePath: string; fileType: string; mimeType: string; fileSize: number }> = [];
+  const fileBuffers: Array<{ name: string; buffer: ArrayBuffer; mimeType: string } | null> = [];
+  const kv = env.SESSION as KVNamespace | undefined;
+  for (const file of files) {
+    const declared = (file.type || '').trim();
+    const mime = declared && declared !== 'application/octet-stream'
+      ? declared
+      : (EXT_MIME[(file.name.split('.').pop() ?? '').toLowerCase()] ?? declared ?? 'application/octet-stream');
     const uuid = crypto.randomUUID();
     const filePath = `uploads/${uuid}/${file.name}`;
     const kvKey = `upload:${filePath}`;
@@ -186,12 +207,11 @@ export const POST: APIRoute = async (ctx) => {
     if (IMAGE_MIMES.has(mime)) fileType = 'image';
     else if (VIDEO_MIMES.has(mime)) fileType = 'video';
 
-    // Store in KV.
-    const kv = env.SESSION as KVNamespace | undefined;
+    // Store in KV. Keep the buffer for Discord native-file sync.
+    let fileBuffer: ArrayBuffer | null = null;
     if (kv) {
       fileBuffer = await file.arrayBuffer();
-      const buf = fileBuffer;
-      await kv.put(kvKey, buf, {
+      await kv.put(kvKey, fileBuffer, {
         metadata: { mimeType: mime, fileName: file.name },
         expirationTtl: 60 * 60 * 24 * 365,
       });
@@ -217,8 +237,12 @@ export const POST: APIRoute = async (ctx) => {
         mimeType: attachments.mimeType,
         fileSize: attachments.fileSize,
       });
-    attachment = attInserted;
+    attachmentsResult.push(attInserted);
+    fileBuffers.push(fileBuffer ? { name: file.name, buffer: fileBuffer, mimeType: mime } : null);
   }
+
+  // Backwards-compat: `attachment` (single) is the first file, if any.
+  const attachment = attachmentsResult[0] ?? null;
 
   /* Notify the reporter (skip if commenting on your own report). */
   const reportUrl = `${ctx.url.origin}/report/${reportId}`;
@@ -300,29 +324,27 @@ export const POST: APIRoute = async (ctx) => {
   if (report.discordThreadId) {
     // Collect all mentioned Discord users so they arrive as natural in-place <@id> pings in Discord
     const allMentions = body ? await resolveMentions(body, user.id) : [];
-    const attUrl = attachment
-      ? `${ctx.url.origin}/${attachment.filePath.replace(/^\/+/, '')}`
-      : undefined;
-    const attFiles =
-      fileBuffer && file
-        ? [{ name: file.name, buffer: fileBuffer, mimeType: file.type }]
-        : undefined;
-    // When we have the native file bytes, send ONLY the native attachment —
-    // don't also append the URL to the content, or Discord shows the file
+    // Build URLs and native-file payloads for ALL attachments.
+    const attUrls = attachmentsResult
+      .map((a) => `${ctx.url.origin}/${a.filePath.replace(/^\/+/, '')}`);
+    const attFiles = fileBuffers
+      .filter((f): f is { name: string; buffer: ArrayBuffer; mimeType: string } => !!f);
+    // When we have native file bytes, send ONLY the native attachments —
+    // don't also append the URLs to the content, or Discord shows each file
     // twice (once as a link in the text, once as the native attachment at
-    // the bottom). The URL is only useful as a fallback when we couldn't
+    // the bottom). The URLs are only useful as a fallback when we couldn't
     // re-upload the bytes (e.g. attachment came from Discord CDN originally,
     // or the KV read failed and we have no buffer).
-    const hasNativeFile = !!(attFiles && attFiles.length > 0);
+    const hasNativeFiles = attFiles.length > 0;
     dmTasks.push(
       syncCommentToDiscord(
         report,
         comment,
         user,
-        hasNativeFile ? undefined : (attUrl ? [attUrl] : undefined),
+        hasNativeFiles ? undefined : (attUrls.length > 0 ? attUrls : undefined),
         undefined,
         allMentions.length > 0 ? allMentions : undefined,
-        attFiles,
+        attFiles.length > 0 ? attFiles : undefined,
       ),
     );
   }
@@ -347,7 +369,8 @@ export const POST: APIRoute = async (ctx) => {
     username: user.username,
     avatarUrl: avatarUrl(user),
     createdAt: comment.createdAt,
-    attachment,
+    attachment,           // backwards-compat: first file, if any
+    attachments: attachmentsResult,  // all files, if any
     replyToId: comment.replyToId,
     replyToUsername,
   });
