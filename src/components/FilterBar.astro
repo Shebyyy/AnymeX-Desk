@@ -125,6 +125,12 @@ const states = (['open', 'fixed', 'other'] as const).map((key) => ({
   <input type="hidden" name="state" value={state} />
   {platform && <input type="hidden" name="platform" value={platform} />}
   {category && <input type="hidden" name="category" value={category} />}
+  {/* Preserve the current board (bug/suggestion/extension) when the user
+      clicks a state/sort/category/platform button. Without this, submitting
+      the form sends only the clicked field's value and `kind` falls back to
+      its default 'bug' — so e.g. clicking "Fixed" on the Suggestions board
+      jumped to the Bugs board. */}
+  <input type="hidden" name="kind" value={kind} />}
 </form>
 
 <style>

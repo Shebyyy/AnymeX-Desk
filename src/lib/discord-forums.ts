@@ -1230,9 +1230,18 @@ export async function syncAttachmentToDiscord(
       ? filePath
       : `${origin}/${filePath.replace(/^\/+/, '')}`;
     const byLine = uploaderUsername ? ` by **${uploaderUsername}**` : '';
-    const content = `📎 **${fileName}**${byLine}\n${fileUrl}`;
+    const hasBuffer = fileBuffer && fileBuffer.byteLength > 0 && fileBuffer.byteLength < 25 * 1024 * 1024;
 
-    if (fileBuffer && fileBuffer.byteLength > 0 && fileBuffer.byteLength < 25 * 1024 * 1024) {
+    // When we upload the file as a native Discord attachment, DON'T also paste
+    // the URL into the content — Discord would render the file twice (once as
+    // a link in the text and once as the native attachment at the bottom).
+    // The URL is only useful as a fallback when we can't send the native file
+    // (no buffer, or buffer too large). Matches the comment-sync behavior.
+    const content = hasBuffer
+      ? `📎 **${fileName}**${byLine}`
+      : `📎 **${fileName}**${byLine}\n${fileUrl}`;
+
+    if (hasBuffer) {
       const form = new FormData();
       form.append(
         'payload_json',
@@ -1243,7 +1252,7 @@ export async function syncAttachmentToDiscord(
       );
       form.append(
         'files[0]',
-        new Blob([fileBuffer], { type: mimeType || 'application/octet-stream' }),
+        new Blob([fileBuffer as ArrayBuffer], { type: mimeType || 'application/octet-stream' }),
         fileName,
       );
 
