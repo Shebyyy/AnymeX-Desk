@@ -131,19 +131,21 @@ if (Astro.request.method === 'POST') {
     // Check dedup. findDuplicate normalizes the title internally.
     const dup = await findDuplicate(kind, category, platform, title);
     if (dup) {
-      await ensureVote(dup.id, user.id);
-      const log = logAction(
-        user,
-        'report.join_duplicate',
-        `report #${dup.id}`,
-        normalizeTitle(title),
-        `${Astro.url.origin}/report/${dup.id}`,
-      );
-      const cf1 = Astro.locals.cfContext;
-      if (cf1) cf1.waitUntil(log);
-      else await log;
-      if (isAjax) return json({ id: dup.id, joined: true }, 200);
-      return Astro.redirect(`/report/${dup.id}?joined=1`, 303);
+      if (!dup.locked) {
+        await ensureVote(dup.id, user.id);
+        const log = logAction(
+          user,
+          'report.join_duplicate',
+          `report #${dup.id}`,
+          normalizeTitle(title),
+          `${Astro.url.origin}/report/${dup.id}`,
+        );
+        const cf1 = Astro.locals.cfContext;
+        if (cf1) cf1.waitUntil(log);
+        else await log;
+      }
+      if (isAjax) return json({ id: dup.id, joined: !dup.locked, locked: dup.locked }, 200);
+      return Astro.redirect(`/report/${dup.id}?joined=1${dup.locked ? '&locked=1' : ''}`, 303);
     }
 
     const [created] = await db()

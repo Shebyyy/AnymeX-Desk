@@ -332,9 +332,30 @@ export const POST: APIRoute = async (ctx) => {
       }
     }
 
-    // Fallback: query Discord API for tags if tagNames wasn't provided or didn't change
-    if (!newStatus || newStatus === report.status) {
-      newStatus = await syncReportStatusFromDiscord(report);
+    // Handle thread locked state changes from Discord
+    let lockChanged = false;
+    if (typeof body.locked === 'boolean' && body.locked !== report.locked) {
+      lockChanged = true;
+      const isNowLocked = body.locked;
+      await d
+        .update(reports)
+        .set({
+          locked: isNowLocked,
+          lockedReason: isNowLocked ? 'Locked via Discord' : null,
+          lockedAt: isNowLocked ? sql`(unixepoch())` : null,
+          updatedAt: sql`(unixepoch())`,
+        })
+        .where(eq(reports.id, report.id));
+
+      const log = logAction(
+        { id: author?.id || 'discord', username: author?.username || 'Discord Mod' } as any,
+        isNowLocked ? 'report.lock' : 'report.unlock',
+        `report #${report.id}`,
+        isNowLocked ? 'locked (via Discord)' : 'unlocked (via Discord)',
+        `${ctx.url.origin}/report/${report.id}`,
+      );
+      if (cf) cf.waitUntil(log);
+      else await log;
     }
 
     if (newStatus && newStatus !== report.status) {
@@ -347,7 +368,10 @@ export const POST: APIRoute = async (ctx) => {
       if (cf) cf.waitUntil(notifTask);
       else await notifTask;
 
-      return json({ ok: true, newStatus });
+      return json({ ok: true, newStatus, locked: lockChanged ? body.locked : report.locked });
+    }
+    if (lockChanged) {
+      return json({ ok: true, locked: body.locked });
     }
     return json({ ok: true, status: 'no_change' });
   }

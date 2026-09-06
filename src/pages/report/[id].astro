@@ -15,7 +15,7 @@ import { atLeast } from '../../lib/levels';
 import { isResponse, levelOf, logAction, requireStaff } from '../../lib/staff';
 import { announceFixed, statusColor } from '../../lib/webhook';
 import { notifyWatchers, sendDiscordDm } from '../../lib/notify';
-import { updateForumThread, updateForumStatus, deleteForumThread, syncReportStatusFromDiscord } from '../../lib/discord-forums';
+import { updateForumThread, updateForumStatus, deleteForumThread, syncReportStatusFromDiscord, syncForumThreadLock } from '../../lib/discord-forums';
 import { readSetting } from '../../lib/settings';
 import { relativeAge, statusLabel, kindLabel, categoryLabel, platformLabel } from '../../lib/format';
 import { prepareCommentBody } from '../../lib/richtext';
@@ -82,6 +82,10 @@ if (Astro.request.method === 'POST') {
       return new Response('Forbidden', { status: 403 });
     }
 
+    if (target.locked && !isMod) {
+      return new Response('Forbidden: This report is locked', { status: 403 });
+    }
+
     const newBody     = String(form.get('body') ?? '').trim().slice(0, 5000) || null;
     const newSteps    = String(form.get('stepsToReproduce') ?? '').trim().slice(0, 5000) || null;
     const newCategory = String(form.get('category') ?? '').trim();
@@ -133,9 +137,27 @@ if (Astro.request.method === 'POST') {
     const rawNote = String(form.get('note') ?? '').trim().slice(0, 500);
     const statusNote = rawNote || null;
     const detail = statusNote ? `${status}: ${statusNote}` : status;
+    const isClosing = ['fixed', 'wont_fix', 'duplicate'].includes(status);
+
+    const updateSet: Record<string, unknown> = {
+      status,
+      statusNote,
+      statusChangedAt: sql`(unixepoch())`,
+      updatedAt: sql`(unixepoch())`,
+    };
+    if (isClosing) {
+      updateSet.locked = true;
+      updateSet.lockedAt = sql`(unixepoch())`;
+      updateSet.lockedReason = statusNote || `Marked as ${statusLabel(status, wanted)}`;
+    } else {
+      updateSet.locked = false;
+      updateSet.lockedAt = null;
+      updateSet.lockedReason = null;
+    }
+
     const [updated] = await db()
       .update(reports)
-      .set({ status, statusNote, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
+      .set(updateSet as never)
       .where(eq(reports.id, id))
       .returning();
     if (updated) {
@@ -146,6 +168,19 @@ if (Astro.request.method === 'POST') {
         notifyWatchers(id, 'status_changed', detail, gate.user.id),
         updateForumStatus(updated, status, statusNote, gate.user.username),
       ];
+
+      if (updated.discordThreadId) {
+        after.push(
+          syncForumThreadLock(
+            updated.discordThreadId,
+            isClosing,
+            updated.title,
+            gate.user.username,
+            (updateSet.lockedReason as string) || undefined,
+            isClosing,
+          ),
+        );
+      }
 
       if (updated.reporterId && updated.reporterId !== gate.user.id) {
         after.push(
@@ -176,7 +211,15 @@ if (Astro.request.method === 'POST') {
     if (Number.isSafeInteger(dupId) && dupId > 0 && dupId !== id) {
       const [updated] = await db()
         .update(reports)
-        .set({ status: 'duplicate', duplicateOf: dupId, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
+        .set({
+          status: 'duplicate',
+          duplicateOf: dupId,
+          locked: true,
+          lockedReason: `Merged into #${dupId}`,
+          lockedAt: sql`(unixepoch())`,
+          statusChangedAt: sql`(unixepoch())`,
+          updatedAt: sql`(unixepoch())`,
+        })
         .where(eq(reports.id, id))
         .returning();
       if (updated) {
@@ -218,6 +261,18 @@ if (Astro.request.method === 'POST') {
           notifyWatchers(id, 'duplicate', detail, gate.user.id),
           updateForumStatus(updated, 'duplicate', `Duplicate of #${dupId}`, gate.user.username),
         ];
+        if (updated.discordThreadId) {
+          dupTasks.push(
+            syncForumThreadLock(
+              updated.discordThreadId,
+              true,
+              updated.title,
+              gate.user.username,
+              `Merged into #${dupId}`,
+              true,
+            ),
+          );
+        }
         const cf = Astro.locals.cfContext;
         if (cf) for (const t of dupTasks) cf.waitUntil(t);
         else await Promise.all(dupTasks);
@@ -445,9 +500,9 @@ const saved = Astro.url.searchParams.get('saved');
 
 const isLive = (OPEN_STATUSES as readonly string[]).includes(report.status);
 
-/** Reporter (on open report) or mod at any time. */
+/** Reporter (on open, unlocked report) or mod at any time. */
 const canEdit = user != null && (
-  (report.reporterId === user.id && isLive) || canModerate
+  (report.reporterId === user.id && isLive && !report.locked) || canModerate
 );
 
 const categories =
@@ -499,12 +554,22 @@ Astro.response.headers.set(
   <article>
     {isLocked && (
       <div class="locked-banner" role="status">
-        <span class="locked-icon">🔒</span>
-        <span>This report is locked. {canModerate ? 'You can still post as staff.' : 'Comments and reactions are disabled.'}</span>
+        <span class="locked-icon">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+        </span>
+        <div class="locked-banner-text">
+          <span>This report is locked. {canModerate ? 'You can still post as staff.' : 'Comments, reactions, and voting are disabled.'}</span>
+          {report.lockedReason && (
+            <span class="locked-reason">Reason: {report.lockedReason}</span>
+          )}
+        </div>
       </div>
     )}
     <header class="head">
-      <VoteButton reportId={report.id} votes={report.votes} mine={mine} closed={!isLive} />
+      <VoteButton reportId={report.id} votes={report.votes} mine={mine} closed={!isLive} locked={isLocked} />
       <div>
         <h1>{report.title}</h1>
         <p class="meta-line">
@@ -945,7 +1010,13 @@ Astro.response.headers.set(
       )}
 
       {user && isLocked && !canModerate && (
-        <p class="comments-locked-notice">🔒 Comments are locked on this report.</p>
+        <p class="comments-locked-notice">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          <span>Comments are locked on this report.</span>
+        </p>
       )}
     </section>
 
@@ -1015,18 +1086,44 @@ Astro.response.headers.set(
       canModerate && (
         <section class="mod">
           {/* Lock / Unlock — manual toggle, independent of status. Locking
-              freezes comments/reactions/edits/attachments for members (staff
-              bypass). Voting is NOT affected (voting is status-gated). */}
-          <div class="mod-lock-row">
-            <button
-              class="btn lock-btn"
-              type="button"
-              id="lock-toggle-btn"
-              data-report-id={report.id}
-              data-locked={report.locked ? 'true' : 'false'}>
-              {report.locked ? '🔓 Unlock report' : '🔒 Lock report'}
-            </button>
-            <span class="mod-hint">Freezes comments &amp; reactions for members. Voting stays open if status is open.</span>
+              freezes comments, reactions, edits, attachments, and voting for members. */}
+          <div class="mod-lock-box">
+            <div class="mod-lock-row">
+              <button
+                class="btn lock-btn"
+                type="button"
+                id="lock-toggle-btn"
+                data-report-id={report.id}
+                data-locked={report.locked ? 'true' : 'false'}>
+                {report.locked ? (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                      <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+                    </svg>
+                    <span>Unlock report</span>
+                  </>
+                ) : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                    <span>Lock report</span>
+                  </>
+                )}
+              </button>
+              <input
+                id="lock-reason-input"
+                class="input lock-reason-input"
+                type="text"
+                placeholder="Optional lock reason..."
+                maxlength="500"
+                value={report.lockedReason ?? ''}
+                style={report.locked ? 'display: none;' : ''}
+              />
+            </div>
+            <span class="mod-hint">Freezes comments, reactions, edits, attachments, and voting for members.</span>
           </div>
 
           <form method="POST">
@@ -1584,6 +1681,16 @@ Astro.response.headers.set(
           }
         });
       }
+
+      // 4. Live lock synchronization: if lock state changed, reload to sync UI
+      if (typeof data.locked === 'boolean') {
+        const isCurrentlyLocked = lockBtn
+          ? lockBtn.dataset.locked === 'true'
+          : document.querySelector('.locked-banner') != null;
+        if (data.locked !== isCurrentlyLocked) {
+          window.location.reload();
+        }
+      }
     } catch {}
   }
 
@@ -1597,33 +1704,33 @@ Astro.response.headers.set(
 
   // ── Lock / Unlock button (staff only) ────────────────────────────────
   const lockBtn = document.getElementById('lock-toggle-btn') as HTMLButtonElement | null;
+  const lockReasonInput = document.getElementById('lock-reason-input') as HTMLInputElement | null;
   lockBtn?.addEventListener('click', async () => {
     const reportId = lockBtn.dataset.reportId;
     const currentlyLocked = lockBtn.dataset.locked === 'true';
     if (!reportId) return;
+    const reason = lockReasonInput ? lockReasonInput.value.trim() : '';
     lockBtn.disabled = true;
     lockBtn.textContent = currentlyLocked ? 'Unlocking…' : 'Locking…';
     try {
       const res = await fetch(`/api/report/${reportId}/lock`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ locked: !currentlyLocked }),
+        body: JSON.stringify({
+          locked: !currentlyLocked,
+          reason: !currentlyLocked ? reason : null,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Failed' }));
         alert(err.error || 'Failed');
-        lockBtn.textContent = currentlyLocked ? '🔓 Unlock report' : '🔒 Lock report';
+        window.location.reload();
         return;
       }
-      const data = await res.json();
-      const nowLocked = !!data.locked;
-      lockBtn.dataset.locked = nowLocked ? 'true' : 'false';
-      lockBtn.textContent = nowLocked ? '🔓 Unlock report' : '🔒 Lock report';
-      // Reload so the banner + comment form visibility update correctly.
       window.location.reload();
     } catch {
       alert('Network error');
-      lockBtn.textContent = currentlyLocked ? '🔓 Unlock report' : '🔒 Lock report';
+      window.location.reload();
     } finally {
       lockBtn.disabled = false;
     }
@@ -1942,25 +2049,38 @@ Astro.response.headers.set(
     border-radius: var(--radius-md);
     background: var(--surface-inset);
   }
-  .mod-lock-row {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
+  .mod-lock-box {
     padding-block-end: var(--space-3);
     margin-block-end: var(--space-3);
     border-block-end: 1px solid var(--border-subtle);
   }
+  .mod-lock-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-block-end: var(--space-1);
+  }
   .lock-btn {
-    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     border-color: var(--dead, #ed4245);
     color: var(--dead, #ed4245);
   }
   .lock-btn:hover { background: var(--dead-fill, rgba(237,66,69,0.1)); }
+  .lock-reason-input {
+    flex: 1;
+    min-inline-size: 200px;
+    max-inline-size: 360px;
+    font-size: var(--text-xs);
+    padding-block: var(--space-1);
+  }
 
   /* ── Locked banner ── */
   .locked-banner {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
     margin-block-end: var(--space-3);
@@ -1971,9 +2091,29 @@ Astro.response.headers.set(
     color: var(--text-primary);
     font-size: var(--text-sm);
   }
-  .locked-banner .locked-icon { font-size: var(--text-md); }
+  .locked-banner .locked-icon {
+    display: flex;
+    align-items: center;
+    color: var(--dead, #ed4245);
+    margin-block-start: 2px;
+    flex-shrink: 0;
+  }
+  .locked-banner-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .locked-reason {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    font-style: italic;
+  }
 
   .comments-locked-notice {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
     margin-block-start: var(--space-2);
     padding: var(--space-2) var(--space-3);
     border: 1px solid var(--border-subtle);
@@ -1982,6 +2122,10 @@ Astro.response.headers.set(
     color: var(--text-tertiary);
     font-size: var(--text-sm);
     text-align: center;
+  }
+  .comments-locked-notice svg {
+    color: var(--dead, #ed4245);
+    flex-shrink: 0;
   }
   .mod-label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
   .mod-row {

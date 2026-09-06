@@ -500,7 +500,7 @@ export const DELETE: APIRoute = async (ctx) => {
   if (!comment) return json({ error: 'comment not found' }, 404);
 
   const [report] = await db()
-    .select({ discordThreadId: reports.discordThreadId })
+    .select({ discordThreadId: reports.discordThreadId, locked: reports.locked })
     .from(reports)
     .where(eq(reports.id, comment.reportId));
 
@@ -508,6 +508,11 @@ export const DELETE: APIRoute = async (ctx) => {
   const isAuthor = comment.userId === user.id;
   const isStaff = atLeast(await levelOf(user.id), 'mod');
   if (!isAuthor && !isStaff) return json({ error: 'forbidden' }, 403);
+
+  /* Lock gate: members cannot delete comments on a locked report. Staff bypass. */
+  if (report && isReportLocked(report) && !isStaff) {
+    return json({ error: 'This report is locked — comment deletion is disabled.' }, 403);
+  }
 
   /* Delete comment + decrement counter in a batch. */
   const d = db();

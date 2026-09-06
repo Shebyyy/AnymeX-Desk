@@ -3,23 +3,21 @@ import { db } from './db/client';
 import { OPEN_STATUSES, normalizeTitle, reports, STATUSES, type Report } from './db/schema';
 
 /**
- * Is this report's conversation locked for members?
+ * Is this report's conversation and voting locked for members?
  *
- * A report is locked when EITHER:
- *   - a staff member manually set `locked` (the Lock button), on any status, OR
- *   - the status is one of the closed ones (fixed / wont_fix / duplicate).
+ * `locked` is the single source of truth. When a report is closed
+ * (fixed / wont_fix / duplicate), `locked` is set to true automatically,
+ * but staff can explicitly lock or unlock any report on any status.
  *
- * Locked blocks comments, reactions, comment edits, and attachments for
- * members. Staff (mod/admin/owner) always bypass — enforced at each call
- * site, not here.
- *
- * Voting is NOT affected by this — voting is gated by status alone via
- * isVotableReport (only OPEN_STATUSES are votable). That's intentional: a
- * manually-locked open report freezes the conversation but keeps collecting
- * votes.
+ * When locked:
+ *   - Members cannot comment, reply, edit/delete comments, or react.
+ *   - Members cannot vote or remove votes.
+ *   - Members (including reporter) cannot edit report details.
+ *   - Members cannot upload attachments.
+ *   - Staff bypass moderation gates.
  */
-export function isReportLocked(report: { locked: boolean; status: string }): boolean {
-  return report.locked || ['fixed', 'wont_fix', 'duplicate'].includes(report.status);
+export function isReportLocked(report: { locked?: boolean | null }): boolean {
+  return Boolean(report?.locked);
 }
 
 /**
@@ -67,13 +65,19 @@ export async function overFilingLimit(reporterId: string): Promise<boolean> {
 export const isReportId = (n: number) => Number.isSafeInteger(n) && n > 0;
 
 /**
- * Whether this report exists and still counts as live demand.
+ * Whether this report exists, is in an open status, and is NOT locked.
  */
 export async function isVotableReport(reportId: number): Promise<boolean> {
   const [row] = await db()
     .select({ id: reports.id })
     .from(reports)
-    .where(and(eq(reports.id, reportId), inArray(reports.status, [...OPEN_STATUSES])));
+    .where(
+      and(
+        eq(reports.id, reportId),
+        inArray(reports.status, [...OPEN_STATUSES]),
+        eq(reports.locked, false),
+      ),
+    );
   return !!row;
 }
 
@@ -83,6 +87,7 @@ export interface DedupHit {
   id: number;
   title: string;
   votes: number;
+  locked: boolean;
 }
 
 /**
@@ -100,7 +105,7 @@ export async function findDuplicate(
 ): Promise<DedupHit | null> {
   const normalized = normalizeTitle(title);
   const [row] = await db()
-    .select({ id: reports.id, title: reports.title, votes: reports.votes })
+    .select({ id: reports.id, title: reports.title, votes: reports.votes, locked: reports.locked })
     .from(reports)
     .where(
       and(

@@ -5,18 +5,17 @@ interface Props {
   mine?: boolean;
   /**
    * The report is no longer open, so there is nothing to vote on.
-   *
-   * /vote refuses anything outside OPEN_STATUSES — a vote stashed for a report
-   * that cannot be voted on would poison the session — so on a fixed row this
-   * control was a button that quietly did nothing, and on the new fixed board
-   * that was every row. The number still means something: it is the demand that
-   * got the thing fixed, so it stays and the button does not.
    */
   closed?: boolean;
+  /**
+   * The report has been locked by staff or status. Voting is frozen.
+   */
+  locked?: boolean;
 }
-const { reportId, votes, mine = false, closed = false } = Astro.props;
+const { reportId, votes, mine = false, closed = false, locked = false } = Astro.props;
 
 const people = votes === 1 ? 'person' : 'people';
+const isFrozen = closed || locked;
 
 // A plain form post, so it works with JavaScript off. The endpoint redirects to
 // Discord sign-in when there's no session, which means the obvious action never
@@ -25,22 +24,8 @@ const people = votes === 1 ? 'person' : 'people';
 /**
  * The word is the control.
  *
- * This used to be an 11px triangle over a bare number, with the meaning parked
- * in a `title` — which a phone never shows, so on the surface most of this
- * audience actually uses, the primary action on every row was an unlabelled
- * glyph and a digit. That is the same needs-a-legend failure as the colour
- * rails and vote bars this board already had removed. So the count now says
- * what it counts, and the button says what tapping it does:
- *
  *   not yours -> "Me too"   the invitation, and what the tap means
  *   yours     -> "Counted"  the state, and still tappable to take it back
- *
- * The whole sentence goes in `aria-label` rather than a visually hidden span.
- * The old markup put the count in `.vote-n` *and* in an `sr-only` span, so a
- * screen reader read the number twice; a label on the button is announced
- * instead of its contents, so there is exactly one reading and it is a
- * sentence. `title` repeats it for a mouse, but nothing depends on `title` any
- * more.
  */
 const word = mine ? 'Counted' : 'Me too';
 const said = mine
@@ -49,12 +34,20 @@ const said = mine
 ---
 
 {
-  closed ? (
-    <p class="vote vote-btn vote-tally" title={`${votes} ${people} backed this.`}>
+  isFrozen ? (
+    <p class="vote vote-btn vote-tally" title={locked ? `Voting locked — ${votes} ${people} backed this.` : `${votes} ${people} backed this.`}>
       <span class="vote-n">{votes}</span>
-      {/* The word says what the number counts, which is the whole rule this
-          control was rebuilt around. */}
-      <span class="vote-word">{people}</span>
+      {locked ? (
+        <span class="vote-word vote-word-locked">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:inline-block;vertical-align:-1px;margin-right:2px;">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          Locked
+        </span>
+      ) : (
+        <span class="vote-word">{people}</span>
+      )}
     </p>
   ) : (
     <form method="POST" action="/vote" class="vote">

@@ -262,12 +262,16 @@ export const reports = sqliteTable(
     discordLastMessageId: text('discord_last_message_id'),
 
     /**
-     * Manual staff lock, independent of status. When true (OR when the status
-     * is fixed/wont_fix/duplicate — see isReportLocked), members cannot
-     * comment, react, edit their own comments, or attach files. Voting is
-     * NOT affected by this flag — voting is gated by status alone.
+     * Lock state for the report. When true, members cannot comment, react,
+     * edit report/comments, delete comments, attach files, or vote.
+     * Auto-set to true when closed (fixed/wont_fix/duplicate), but staff
+     * can explicitly lock or unlock any report on any status.
      */
     locked: integer('locked', { mode: 'boolean' }).notNull().default(false),
+    /** Optional explanation for why staff locked the report. */
+    lockedReason: text('locked_reason'),
+    /** Timestamp when the report was locked. */
+    lockedAt: integer('locked_at'),
   },
   (t) => [
     /**

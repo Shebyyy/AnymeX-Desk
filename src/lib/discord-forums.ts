@@ -678,6 +678,72 @@ export async function deleteForumThread(
   }
 }
 
+/**
+ * Lock or unlock the Discord Forum Thread when a report is locked or unlocked on Desk
+ */
+export async function syncForumThreadLock(
+  threadId: string,
+  locked: boolean,
+  reportTitle?: string,
+  staffUsername?: string,
+  reason?: string,
+  archived?: boolean,
+  cfg?: Config,
+): Promise<boolean> {
+  const c = cfg ?? (await readConfig());
+  const botToken = c.discord_bot_token;
+  if (!botToken || !threadId) return false;
+
+  try {
+    const title = locked ? '🔒 Report Locked' : '🔓 Report Unlocked';
+    const byStaff = staffUsername ? ` by **${staffUsername}**` : '';
+    let description = locked
+      ? `This report has been locked${byStaff} on AnymeX Desk. Discussion is now closed.`
+      : `This report has been unlocked${byStaff} on AnymeX Desk. Discussion is reopened.`;
+    if (locked && reason) {
+      description += `\n\n**Reason:** ${reason}`;
+    }
+
+    await fetch(`${DISCORD_API}/channels/${threadId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bot ${botToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        embeds: [
+          {
+            title,
+            description,
+            color: locked ? RED : GREEN,
+          },
+        ],
+      }),
+    });
+
+    const patchPayload: Record<string, boolean> = { locked };
+    if (locked && archived) {
+      patchPayload.archived = true;
+    } else if (!locked) {
+      patchPayload.archived = false;
+    }
+
+    await fetch(`${DISCORD_API}/channels/${threadId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bot ${botToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(patchPayload),
+    });
+
+    return true;
+  } catch (err) {
+    console.error('[ForumSync] Exception in syncForumThreadLock:', err);
+    return false;
+  }
+}
+
 /** Webhook cache to avoid repeated webhook lookups per channel */
 const webhookCache = new Map<string, { id: string; token: string }>();
 
@@ -1305,7 +1371,30 @@ export async function syncReportStatusFromDiscord(
     });
 
     if (!threadRes.ok) return null;
-    const threadData = (await threadRes.json()) as DiscordChannel;
+    const threadData = (await threadRes.json()) as DiscordChannel & {
+      thread_metadata?: { locked?: boolean; archived?: boolean };
+    };
+
+    // Auto-sync locked state from Discord if changed in Discord
+    const discordThreadLocked = threadData.thread_metadata?.locked;
+    if (
+      typeof discordThreadLocked === 'boolean' &&
+      (report as any).locked !== undefined &&
+      discordThreadLocked !== Boolean((report as any).locked)
+    ) {
+      await db()
+        .update(reports)
+        .set({
+          locked: discordThreadLocked,
+          lockedReason: discordThreadLocked ? 'Locked via Discord' : null,
+          lockedAt: discordThreadLocked ? sql`(unixepoch())` : null,
+          updatedAt: sql`(unixepoch())`,
+        })
+        .where(eq(reports.id, report.id));
+      (report as any).locked = discordThreadLocked;
+      console.log(`[ForumSync] Auto-synced lock from Discord for report #${report.id}: ${discordThreadLocked}`);
+    }
+
     const appliedTags = threadData.applied_tags || [];
     if (appliedTags.length === 0) return null;
 
