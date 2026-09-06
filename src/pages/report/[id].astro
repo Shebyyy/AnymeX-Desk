@@ -147,12 +147,8 @@ if (Astro.request.method === 'POST') {
     };
     if (isClosing) {
       updateSet.locked = true;
-      updateSet.lockedAt = sql`(unixepoch())`;
-      updateSet.lockedReason = statusNote || `Marked as ${statusLabel(status, wanted)}`;
     } else {
       updateSet.locked = false;
-      updateSet.lockedAt = null;
-      updateSet.lockedReason = null;
     }
 
     const [updated] = await db()
@@ -176,7 +172,7 @@ if (Astro.request.method === 'POST') {
             isClosing,
             updated.title,
             gate.user.username,
-            (updateSet.lockedReason as string) || undefined,
+            statusNote || `Marked as ${statusLabel(status, wanted)}`,
             isClosing,
           ),
         );
@@ -215,8 +211,6 @@ if (Astro.request.method === 'POST') {
           status: 'duplicate',
           duplicateOf: dupId,
           locked: true,
-          lockedReason: `Merged into #${dupId}`,
-          lockedAt: sql`(unixepoch())`,
           statusChangedAt: sql`(unixepoch())`,
           updatedAt: sql`(unixepoch())`,
         })
@@ -562,8 +556,8 @@ Astro.response.headers.set(
         </span>
         <div class="locked-banner-text">
           <span>This report is locked. {canModerate ? 'You can still post as staff.' : 'Comments, reactions, and voting are disabled.'}</span>
-          {report.lockedReason && (
-            <span class="locked-reason">Reason: {report.lockedReason}</span>
+          {report.statusNote && (
+            <span class="locked-reason">Note: {report.statusNote}</span>
           )}
         </div>
       </div>
@@ -1119,7 +1113,6 @@ Astro.response.headers.set(
                 type="text"
                 placeholder="Optional lock reason..."
                 maxlength="500"
-                value={report.lockedReason ?? ''}
                 style={report.locked ? 'display: none;' : ''}
               />
             </div>

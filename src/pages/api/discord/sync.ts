@@ -341,8 +341,6 @@ export const POST: APIRoute = async (ctx) => {
         .update(reports)
         .set({
           locked: isNowLocked,
-          lockedReason: isNowLocked ? 'Locked via Discord' : null,
-          lockedAt: isNowLocked ? sql`(unixepoch())` : null,
           updatedAt: sql`(unixepoch())`,
         })
         .where(eq(reports.id, report.id));

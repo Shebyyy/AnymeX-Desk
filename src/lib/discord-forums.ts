@@ -1386,8 +1386,6 @@ export async function syncReportStatusFromDiscord(
         .update(reports)
         .set({
           locked: discordThreadLocked,
-          lockedReason: discordThreadLocked ? 'Locked via Discord' : null,
-          lockedAt: discordThreadLocked ? sql`(unixepoch())` : null,
           updatedAt: sql`(unixepoch())`,
         })
         .where(eq(reports.id, report.id));

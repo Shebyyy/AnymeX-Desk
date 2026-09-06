@@ -57,8 +57,6 @@ export const POST: APIRoute = async (ctx) => {
     .update(reports)
     .set({
       locked: wantLocked,
-      lockedReason: wantLocked ? reason : null,
-      lockedAt: wantLocked ? sql`(unixepoch())` : null,
       updatedAt: sql`(unixepoch())`,
     })
     .where(eq(reports.id, id))
@@ -67,7 +65,6 @@ export const POST: APIRoute = async (ctx) => {
       title: reports.title,
       status: reports.status,
       locked: reports.locked,
-      lockedReason: reports.lockedReason,
       discordThreadId: reports.discordThreadId,
     });
 
@@ -110,6 +107,5 @@ export const POST: APIRoute = async (ctx) => {
   return json({
     id: updated.id,
     locked: updated.locked,
-    lockedReason: updated.lockedReason,
   });
 };

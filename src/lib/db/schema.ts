@@ -268,10 +268,6 @@ export const reports = sqliteTable(
      * can explicitly lock or unlock any report on any status.
      */
     locked: integer('locked', { mode: 'boolean' }).notNull().default(false),
-    /** Optional explanation for why staff locked the report. */
-    lockedReason: text('locked_reason'),
-    /** Timestamp when the report was locked. */
-    lockedAt: integer('locked_at'),
   },
   (t) => [
     /**
