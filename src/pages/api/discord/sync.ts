@@ -304,10 +304,13 @@ export const POST: APIRoute = async (ctx) => {
 
   // ── 4. THREAD STATUS / TAG UPDATE (Status change from Discord) ────────────
   if (event === 'THREAD_UPDATE' || event === 'status_update') {
+    const now = Math.floor(Date.now() / 1000);
+    const isRecentSiteUpdate = report.updatedAt ? (now - Number(report.updatedAt) < 15) : false;
     let newStatus: Status | null = null;
 
-    // Fast-path: map tagNames sent directly by the bot
-    if (Array.isArray(tagNames) && tagNames.length > 0) {
+    // Fast-path: map tagNames sent directly by the bot, only if tags actually changed and not in site cooldown
+    const tagsChanged = (body as any).tagsChanged !== false;
+    if (tagsChanged && !isRecentSiteUpdate && Array.isArray(tagNames) && tagNames.length > 0) {
       for (const rawName of tagNames) {
         const name = String(rawName).toLowerCase().trim();
         if (name === 'fixed' || name === 'completed' || name === 'resolved') newStatus = 'fixed';
@@ -332,9 +335,15 @@ export const POST: APIRoute = async (ctx) => {
       }
     }
 
-    // Handle thread locked state changes from Discord
+    // Handle thread locked state changes from Discord.
+    // Use Boolean(...) normalization so SQLite integer 1/0 equals JS true/false.
+    // Also ignore if the report was just updated on the site within the last 15s.
     let lockChanged = false;
-    if (typeof body.locked === 'boolean' && body.locked !== report.locked) {
+    if (
+      typeof body.locked === 'boolean' &&
+      Boolean(body.locked) !== Boolean(report.locked) &&
+      !isRecentSiteUpdate
+    ) {
       lockChanged = true;
       const isNowLocked = body.locked;
       await d

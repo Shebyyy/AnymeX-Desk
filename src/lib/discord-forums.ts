@@ -1353,7 +1353,7 @@ export async function syncAttachmentToDiscord(
  * Returns the updated status if changed, or null.
  */
 export async function syncReportStatusFromDiscord(
-  report: Pick<Report, 'id' | 'kind' | 'status' | 'discordThreadId'>,
+  report: Pick<Report, 'id' | 'kind' | 'status' | 'discordThreadId'> & Partial<Pick<Report, 'locked' | 'updatedAt'>>,
   cfg?: Config,
 ): Promise<Status | null> {
   const c = cfg ?? (await readConfig());
@@ -1364,6 +1364,12 @@ export async function syncReportStatusFromDiscord(
 
   const channelId = getForumChannelId(report.kind, c);
   if (!channelId) return null;
+
+  // Grace period / cooldown: if site updated the report within the last 15 seconds,
+  // do not let Discord overwrite site's fresh state on page reload.
+  const now = Math.floor(Date.now() / 1000);
+  const isRecentSiteUpdate = report.updatedAt ? (now - Number(report.updatedAt) < 15) : false;
+  if (isRecentSiteUpdate) return null;
 
   try {
     const threadRes = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {
@@ -1379,8 +1385,8 @@ export async function syncReportStatusFromDiscord(
     const discordThreadLocked = threadData.thread_metadata?.locked;
     if (
       typeof discordThreadLocked === 'boolean' &&
-      (report as any).locked !== undefined &&
-      discordThreadLocked !== Boolean((report as any).locked)
+      report.locked !== undefined &&
+      Boolean(discordThreadLocked) !== Boolean(report.locked)
     ) {
       await db()
         .update(reports)
@@ -1389,7 +1395,7 @@ export async function syncReportStatusFromDiscord(
           updatedAt: sql`(unixepoch())`,
         })
         .where(eq(reports.id, report.id));
-      (report as any).locked = discordThreadLocked;
+      report.locked = discordThreadLocked;
       console.log(`[ForumSync] Auto-synced lock from Discord for report #${report.id}: ${discordThreadLocked}`);
     }
 
