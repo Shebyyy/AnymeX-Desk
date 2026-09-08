@@ -445,7 +445,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
         </div>
       </div>
 
-      {shown.kind !== 'suggestion' && (
+      {activeKind !== 'suggestion' && (
         <>
           <div class="field">
             <label class="label">Release channel</label>
@@ -492,7 +492,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           <div
             id="plugin-version-group"
             class="field"
-            style={(shown.kind === 'extension' || shown.category === 'extension_bridge') && shown.platform !== 'ios' ? '' : 'display: none;'}
+            style={(activeKind === 'extension' || shown.category === 'extension_bridge') && shown.platform !== 'ios' ? '' : 'display: none;'}
           >
             <label class="label" for="pluginVersion">Extension Runtime Bridge (Plugin) version</label>
             <div class="version-input-wrap">
@@ -522,7 +522,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           <div
             id="ios-plugin-note"
             class="ios-plugin-note"
-            style={(shown.kind === 'extension' || shown.category === 'extension_bridge') && shown.platform === 'ios' ? '' : 'display: none;'}
+            style={(activeKind === 'extension' || shown.category === 'extension_bridge') && shown.platform === 'ios' ? '' : 'display: none;'}
           >
             ℹ️ iOS does not use the extension runtime bridge plugin.
           </div>
@@ -794,8 +794,16 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       }
     }
 
+    function getSelectedKind(): string {
+      const checked = document.querySelector('input[name="kind"]:checked') as HTMLInputElement | null;
+      if (checked) return checked.value;
+      const hidden = document.querySelector('input[name="kind"]') as HTMLInputElement | null;
+      if (hidden) return hidden.value;
+      return 'bug';
+    }
+
     function updatePluginVisibility() {
-      const currentKind = (document.querySelector('input[name="kind"]:checked') as HTMLInputElement | null)?.value ?? 'bug';
+      const currentKind = getSelectedKind();
       const currentCat = (document.querySelector('input[name="category"]:checked') as HTMLInputElement | null)?.value ?? '';
       const currentPlat = (document.querySelector('input[name="platform"]:checked') as HTMLInputElement | null)?.value ?? '';
 
@@ -873,8 +881,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       }
       similarTimer = window.setTimeout(async () => {
         try {
-          const kindInput = document.querySelector('input[name="kind"]:checked') as HTMLInputElement | null;
-          const kindVal = kindInput?.value ?? '';
+          const kindVal = getSelectedKind();
           const res = await fetch(`/api/v1/similar?q=${encodeURIComponent(val)}&kind=${encodeURIComponent(kindVal)}`);
           if (!res.ok) return;
           const data = await res.json();
