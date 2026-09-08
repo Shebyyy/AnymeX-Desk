@@ -761,14 +761,13 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
         const currentVal = inputEl.value.trim();
         dropdownEl.innerHTML = filtered.map((it, idx) => {
           const isSelected = it.version === currentVal;
-          const formattedDate = it.publishedAt ? new Date(it.publishedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
           return `
             <div class="combobox-item ${isSelected ? 'selected' : ''}" data-version="${it.version}" role="option" aria-selected="${isSelected}" data-index="${idx}">
               <div class="combobox-item-main">
                 <span class="combobox-item-ver">${it.version}</span>
                 ${it.badgeLabel ? `<span class="combobox-item-badge ${it.isLatest ? 'latest' : ''}">${it.badgeLabel}</span>` : ''}
               </div>
-              ${formattedDate ? `<span class="combobox-item-date">${formattedDate}</span>` : ''}
+              ${isSelected ? `<svg class="combobox-item-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>` : ''}
             </div>
           `;
         }).join('');
@@ -1541,40 +1540,44 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     background: var(--border-default);
     border-radius: 3px;
   }
-  .combobox-item {
+  .combobox-dropdown :global(.combobox-item) {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: 12px;
+    padding: 7px 10px;
     border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: var(--text-sm);
     color: var(--text-primary);
-    transition: background 0.1s;
+    transition: background 0.12s ease, border-color 0.12s ease;
     user-select: none;
+    border: 1px solid transparent;
   }
-  .combobox-item:hover,
-  .combobox-item.highlighted {
+  .combobox-dropdown :global(.combobox-item:hover),
+  .combobox-dropdown :global(.combobox-item.highlighted) {
     background: var(--surface-hover, rgba(255, 255, 255, 0.06));
+    border-color: var(--border-subtle);
   }
-  .combobox-item.selected {
+  .combobox-dropdown :global(.combobox-item.selected) {
     background: var(--surface-active, rgba(255, 255, 255, 0.1));
-    font-weight: var(--weight-medium, 500);
+    border-color: rgba(234, 179, 8, 0.3);
   }
-  .combobox-item-main {
+  .combobox-dropdown :global(.combobox-item-main) {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
+    flex: 1;
   }
-  .combobox-item-ver {
+  .combobox-dropdown :global(.combobox-item-ver) {
     font-family: var(--font-data);
     font-size: var(--text-sm);
     font-weight: 600;
     color: var(--text-primary);
+    white-space: nowrap;
   }
-  .combobox-item-badge {
+  .combobox-dropdown :global(.combobox-item-badge) {
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
@@ -1584,20 +1587,19 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     background: var(--surface-inset, rgba(255, 255, 255, 0.08));
     color: var(--text-secondary);
     border: 1px solid var(--border-subtle);
+    white-space: nowrap;
   }
-  .combobox-item-badge.latest {
+  .combobox-dropdown :global(.combobox-item-badge.latest) {
     background: rgba(234, 179, 8, 0.18);
     color: #eab308;
     border-color: rgba(234, 179, 8, 0.35);
   }
-  .combobox-item-date {
-    font-size: var(--text-xs);
-    color: var(--text-muted);
-    font-family: var(--font-data);
-    white-space: nowrap;
+  .combobox-dropdown :global(.combobox-item-check) {
+    color: #eab308;
     flex-shrink: 0;
+    margin-inline-start: auto;
   }
-  .combobox-empty {
+  .combobox-dropdown :global(.combobox-empty) {
     padding: 16px;
     text-align: center;
     font-size: var(--text-sm);
