@@ -1,4 +1,5 @@
 import type { APIRoute } from 'astro';
+import { env } from 'cloudflare:workers';
 import { getCachedReleases } from '../../../lib/github-releases';
 
 export const prerender = false;
@@ -18,8 +19,7 @@ function json(data: unknown, status = 200) {
  *
  * Returns cached release versions for AnymeX Stable, Beta, and Extension Runtime Bridge.
  */
-export const GET: APIRoute = async (ctx) => {
-  const env = (ctx.locals.runtime?.env ?? (process as any).env) as { SESSION?: KVNamespace };
+export const GET: APIRoute = async () => {
   const kv = env.SESSION as KVNamespace | undefined;
 
   try {

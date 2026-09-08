@@ -28,6 +28,7 @@ import { db } from '../lib/db/client';
 import { sql } from 'drizzle-orm';
 import { getCachedReleases } from '../lib/github-releases';
 import { checkAppVersionAdvisory } from '../lib/version';
+import { env } from 'cloudflare:workers';
 
 export const prerender = false;
 
@@ -141,8 +142,8 @@ if (Astro.request.method === 'POST') {
     // Check if user is reporting on an outdated version that requires an update
     let isBlocked = false;
     if (kind !== 'suggestion' && appVersion) {
-      const postEnv = (Astro.locals.runtime?.env ?? (process as any).env) as { SESSION?: KVNamespace };
-      const postReleases = await getCachedReleases(postEnv.SESSION);
+      const kv = env.SESSION as KVNamespace | undefined;
+      const postReleases = await getCachedReleases(kv);
       const advisory = checkAppVersionAdvisory({
         channel: releaseChannel,
         version: appVersion,
@@ -275,7 +276,6 @@ if (draft) {
 const queryKind = Astro.url.searchParams.get('kind') ?? '';
 const kindLocked = queryKind === 'bug' || queryKind === 'suggestion' || queryKind === 'extension';
 
-const env = (Astro.locals.runtime?.env ?? (process as any).env) as { SESSION?: KVNamespace };
 const kv = env.SESSION as KVNamespace | undefined;
 const releases = await getCachedReleases(kv);
 
