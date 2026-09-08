@@ -5,6 +5,7 @@ import { readConfig, type Config } from './settings';
 import { kindLabel, categoryLabel, platformLabel } from './format';
 import { reporterName } from './reporter';
 import { dbUser } from './auth';
+import { parseExtensionEntries, formatExtensionEntriesForDiscord } from './extensions';
 
 /**
  * Outbound Discord announcements for the AnymeX tracker.
@@ -114,7 +115,7 @@ export async function announceFiled(
   report: Pick<
     Report,
     'id' | 'kind' | 'title' | 'body' | 'category' | 'platform' | 'appVersion' | 'releaseChannel' | 'pluginVersion' | 'reporterId'
-  >,
+  > & { extensionNames?: string | null },
   origin: string,
   cfg?: Config,
 ) {
@@ -135,6 +136,13 @@ export async function announceFiled(
   }
   if (report.pluginVersion) {
     fields.push({ name: 'Plugin version', value: report.pluginVersion, inline: true });
+  }
+  if (report.kind === 'extension' && report.extensionNames) {
+    const exts = parseExtensionEntries(report.extensionNames);
+    const formatted = formatExtensionEntriesForDiscord(exts);
+    if (formatted) {
+      fields.push({ name: 'Affected Extension(s)', value: formatted.slice(0, 1024), inline: false });
+    }
   }
 
   const color = report.kind === 'bug' ? RED : YELLOW;

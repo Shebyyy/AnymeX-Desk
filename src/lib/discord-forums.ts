@@ -20,6 +20,7 @@ import { reporterName } from './reporter';
 import { dbUser } from './auth';
 import { statusLabel, categoryLabel, platformLabel, kindLabel } from './format';
 import { GREEN, YELLOW, RED, BLURPLE, statusColor } from './webhook';
+import { parseExtensionEntries, formatExtensionEntriesForDiscord } from './extensions';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 
@@ -315,7 +316,9 @@ export async function buildReportEmbed(report: Report, origin: string) {
 
   if (report.kind === 'extension') {
     if (report.extensionNames) {
-      fields.push({ name: 'Extension Name(s)', value: report.extensionNames, inline: false });
+      const exts = parseExtensionEntries(report.extensionNames);
+      const formatted = formatExtensionEntriesForDiscord(exts);
+      fields.push({ name: 'Affected Extension(s)', value: (formatted || report.extensionNames).slice(0, 1024), inline: false });
     }
     if (report.extensionRepo) {
       fields.push({ name: 'Extension Repository', value: report.extensionRepo, inline: false });

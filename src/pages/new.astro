@@ -18,6 +18,7 @@ import {
   subscriptions,
   notifications,
 } from '../lib/db/schema';
+import { parseExtensionEntries, type ExtensionEntry } from '../lib/extensions';
 import { or, isNull, eq, and } from 'drizzle-orm';
 import { canWriteNow, currentUser } from '../lib/auth';
 import { ensureVote } from '../lib/vote';
@@ -79,11 +80,61 @@ if (Astro.request.method === 'POST') {
   const releaseChannel = (String(form.get('releaseChannel') ?? 'stable').trim() === 'beta' ? 'beta' : 'stable') as ReleaseChannel;
   const pluginVersion = String(form.get('pluginVersion') ?? '').trim().slice(0, 32);
   const title = String(form.get('title') ?? '').trim().slice(0, 200);
-  const body = String(form.get('body') ?? '').trim().slice(0, 5000);
+  let body = String(form.get('body') ?? '').trim().slice(0, 5000);
   const stepsToReproduce = String(form.get('stepsToReproduce') ?? '').trim().slice(0, 5000);
   const testedNativeApp = form.get('testedNativeApp') === 'on';
-  const extensionNames = String(form.get('extensionNames') ?? '').trim().slice(0, 4000);
   const extensionRepo = String(form.get('extensionRepo') ?? '').trim().slice(0, 2000);
+
+  // Dynamic extension cards (name + version + issue description)
+  const rawExtNames = form.getAll('extensionName').map((v) => String(v).trim());
+  const rawExtVers = form.getAll('extensionVersion').map((v) => String(v).trim());
+  const rawExtIssues = form.getAll('extensionIssue').map((v) => String(v).trim());
+
+  let extensionValidationError: string | null = null;
+  const parsedExtensions: ExtensionEntry[] = [];
+
+  if (rawExtNames.length > 0 || rawExtVers.length > 0 || rawExtIssues.length > 0) {
+    const maxLen = Math.max(rawExtNames.length, rawExtVers.length, rawExtIssues.length);
+    for (let i = 0; i < maxLen; i++) {
+      const name = rawExtNames[i] ?? '';
+      const version = rawExtVers[i] ?? '';
+      const issue = rawExtIssues[i] ?? '';
+      if (!name && !version && !issue) continue;
+      if (!name) {
+        extensionValidationError = 'Extension name is required for all added extensions.';
+        break;
+      }
+      if (!version) {
+        extensionValidationError = `Extension version is required for "${name}".`;
+        break;
+      }
+      if (!issue) {
+        extensionValidationError = `Please describe what is wrong with "${name}".`;
+        break;
+      }
+      parsedExtensions.push({
+        name: name.slice(0, 150),
+        version: version.slice(0, 50),
+        issue: issue.slice(0, 3000),
+      });
+    }
+  } else {
+    const legacyNames = String(form.get('extensionNames') ?? '').trim();
+    if (legacyNames) {
+      parsedExtensions.push(...parseExtensionEntries(legacyNames));
+    }
+  }
+
+  const extensionNames = parsedExtensions.length > 0 ? JSON.stringify(parsedExtensions) : '';
+
+  // For extension reports, synthesize body from each extension's issue description
+  if (kind === 'extension') {
+    if (!body && parsedExtensions.length > 0) {
+      body = parsedExtensions
+        .map((e) => `### ${e.name} (v${e.version})\n${e.issue || ''}`)
+        .join('\n\n');
+    }
+  }
 
   const isAjax = Astro.request.headers.get('accept') === 'application/json';
 
@@ -135,10 +186,12 @@ if (Astro.request.method === 'POST') {
     error = 'Give your report a title, at least 5 characters.';
   } else if (kind === 'extension' && !testedNativeApp) {
     error = 'Confirm you tested the extension in its native app and the issue only happens in AnymeX.';
-  } else if (kind === 'extension' && !extensionNames) {
-    error = 'Enter the exact name of the affected extension(s).';
-  } else if (kind === 'extension' && !body) {
-    error = 'Describe what is wrong with the extension.';
+  } else if (kind === 'extension' && extensionValidationError) {
+    error = extensionValidationError;
+  } else if (kind === 'extension' && parsedExtensions.length === 0) {
+    error = 'Add at least one affected extension with its version and problem description.';
+  } else if (kind !== 'extension' && !body) {
+    error = kind === 'suggestion' ? 'Describe your suggestion.' : 'Describe the bug.';
   } else if (await overFilingLimit(user.id)) {
     error = FILING_COOLDOWN_MESSAGE;
   } else {
@@ -296,6 +349,11 @@ const shown = {
   extensionNames: posted?.extensionNames || draft?.extensionNames || '',
   extensionRepo: posted?.extensionRepo || draft?.extensionRepo || '',
 };
+
+let initialExtensionEntries = parseExtensionEntries(shown.extensionNames);
+if (initialExtensionEntries.length === 0) {
+  initialExtensionEntries = [{ name: '', version: '' }];
+}
 
 const activeKind = (kindLocked ? queryKind : shown.kind) as 'bug' | 'suggestion' | 'extension';
 const categories =
@@ -570,39 +628,113 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       )}
 
       {shown.kind === 'extension' && (
-        <div class="field">
-          <label class="label" for="extensionNames">Extension name(s)</label>
-          <textarea
-            class="textarea"
-            id="extensionNames"
-            name="extensionNames"
-            rows="2"
-            maxlength="4000"
-            required
-            placeholder="Enter the exact name of the affected extension(s), one per line"
-          >{shown.extensionNames}</textarea>
+        <div class="field extension-fields-group">
+          <div class="ext-header">
+            <label class="label" style="margin-bottom: 0;">
+              Affected Extension(s) <span class="required-star">*</span>
+            </label>
+            <p class="field-hint">Specify each affected extension, its version, and the problem that occurs.</p>
+          </div>
+
+          <div id="extension-list" class="extension-list">
+            {initialExtensionEntries.map((ext, idx) => (
+              <div class="extension-card" data-index={idx}>
+                <div class="ext-card-header">
+                  <span class="ext-card-num">Extension #{idx + 1}</span>
+                  <button
+                    type="button"
+                    class="ext-remove-btn"
+                    title="Remove extension"
+                    aria-label="Remove extension"
+                    disabled={initialExtensionEntries.length <= 1}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                </div>
+
+                <div class="ext-card-top-row">
+                  <div class="ext-col ext-col-name">
+                    <label class="ext-sublabel" for={`ext-name-${idx}`}>
+                      Extension Name <span class="required-star">*</span>
+                    </label>
+                    <input
+                      class="input ext-name-input"
+                      id={`ext-name-${idx}`}
+                      name="extensionName"
+                      type="text"
+                      maxlength="150"
+                      placeholder="e.g. Gogoanime"
+                      value={ext.name}
+                      required
+                    />
+                  </div>
+                  <div class="ext-col ext-col-version">
+                    <label class="ext-sublabel" for={`ext-ver-${idx}`}>
+                      Version <span class="required-star">*</span>
+                    </label>
+                    <input
+                      class="input ext-ver-input"
+                      id={`ext-ver-${idx}`}
+                      name="extensionVersion"
+                      type="text"
+                      maxlength="50"
+                      placeholder="e.g. 1.4.2"
+                      value={ext.version}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div class="ext-card-issue-row">
+                  <label class="ext-sublabel" for={`ext-issue-${idx}`}>
+                    What is wrong with this extension? <span class="required-star">*</span>
+                  </label>
+                  <textarea
+                    class="textarea ext-issue-input"
+                    id={`ext-issue-${idx}`}
+                    name="extensionIssue"
+                    rows="2"
+                    maxlength="3000"
+                    placeholder="Describe what happens specifically with this extension (e.g. video player returns 403 error, search is empty, etc.)."
+                    required
+                  >{ext.issue ?? ''}</textarea>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button type="button" id="add-extension-btn" class="btn-add-ext" style={initialExtensionEntries.length >= 10 ? 'display: none;' : ''}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>Add another extension</span>
+          </button>
         </div>
       )}
 
-      <div class="field">
-        <label class="label" for="body">
-          {shown.kind === 'suggestion' ? 'Suggestion details' : shown.kind === 'extension' ? 'Issue description' : 'Description'}
-        </label>
-        <textarea
-          class="textarea"
-          id="body"
-          name="body"
-          rows="4"
-          maxlength="5000"
-          required={shown.kind === 'extension'}
-          placeholder={shown.kind === 'suggestion'
-            ? 'Describe your idea, how it should work, and why it would be helpful.'
-            : shown.kind === 'extension'
-              ? 'Describe what is wrong with the extension.'
+      {shown.kind !== 'extension' && (
+        <div class="field">
+          <label class="label" for="body">
+            {shown.kind === 'suggestion' ? 'Suggestion details' : 'Description'}
+          </label>
+          <textarea
+            class="textarea"
+            id="body"
+            name="body"
+            rows="4"
+            maxlength="5000"
+            required={shown.kind !== 'extension'}
+            placeholder={shown.kind === 'suggestion'
+              ? 'Describe your idea, how it should work, and why it would be helpful.'
               : 'What happened? What did you expect to happen?'}
-        >{shown.body}</textarea>
-        <p class="field-hint">Supports Discord Markdown: <code>**bold**</code>, <code>*italic*</code>, <code>__underline__</code>, <code>~~strike~~</code>, <code>`code`</code>, <code>&gt; quote</code>, <code>||spoiler||</code>, <code>-# subtext</code></p>
-      </div>
+          >{shown.body}</textarea>
+          <p class="field-hint">Supports Discord Markdown: <code>**bold**</code>, <code>*italic*</code>, <code>__underline__</code>, <code>~~strike~~</code>, <code>`code`</code>, <code>&gt; quote</code>, <code>||spoiler||</code>, <code>-# subtext</code></p>
+        </div>
+      )}
 
       {shown.kind === 'extension' && (
         <div class="field">
@@ -1240,6 +1372,120 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       }
     });
 
+    // ── Dynamic Extension List (Name + Version Rows) ───────────────────
+    const extList = document.getElementById('extension-list');
+    const addExtBtn = document.getElementById('add-extension-btn');
+
+    function updateRemoveButtonsState() {
+      if (!extList) return;
+      const cards = extList.querySelectorAll('.extension-card');
+      cards.forEach((card, idx) => {
+        const numLabel = card.querySelector('.ext-card-num');
+        if (numLabel) numLabel.textContent = `Extension #${idx + 1}`;
+      });
+      const removeBtns = extList.querySelectorAll<HTMLButtonElement>('.ext-remove-btn');
+      removeBtns.forEach((btn) => {
+        btn.disabled = cards.length <= 1;
+      });
+      if (addExtBtn) {
+        addExtBtn.style.display = cards.length >= 10 ? 'none' : 'inline-flex';
+      }
+    }
+
+    function attachRemoveListener(btn: HTMLButtonElement) {
+      btn.addEventListener('click', () => {
+        const card = btn.closest('.extension-card');
+        if (!card || !extList) return;
+        const cards = extList.querySelectorAll('.extension-card');
+        if (cards.length <= 1) return;
+        card.remove();
+        updateRemoveButtonsState();
+      });
+    }
+
+    extList?.querySelectorAll<HTMLButtonElement>('.ext-remove-btn').forEach(attachRemoveListener);
+
+    addExtBtn?.addEventListener('click', () => {
+      if (!extList) return;
+      const cards = extList.querySelectorAll('.extension-card');
+      if (cards.length >= 10) return;
+
+      const newIdx = Date.now();
+      const card = document.createElement('div');
+      card.className = 'extension-card card-enter';
+      card.dataset.index = String(newIdx);
+      card.innerHTML = `
+        <div class="ext-card-header">
+          <span class="ext-card-num">Extension #${cards.length + 1}</span>
+          <button
+            type="button"
+            class="ext-remove-btn"
+            title="Remove extension"
+            aria-label="Remove extension"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
+        <div class="ext-card-top-row">
+          <div class="ext-col ext-col-name">
+            <label class="ext-sublabel" for="ext-name-${newIdx}">
+              Extension Name <span class="required-star">*</span>
+            </label>
+            <input
+              class="input ext-name-input"
+              id="ext-name-${newIdx}"
+              name="extensionName"
+              type="text"
+              maxlength="150"
+              placeholder="e.g. Gogoanime"
+              required
+            />
+          </div>
+          <div class="ext-col ext-col-version">
+            <label class="ext-sublabel" for="ext-ver-${newIdx}">
+              Version <span class="required-star">*</span>
+            </label>
+            <input
+              class="input ext-ver-input"
+              id="ext-ver-${newIdx}"
+              name="extensionVersion"
+              type="text"
+              maxlength="50"
+              placeholder="e.g. 1.4.2"
+              required
+            />
+          </div>
+        </div>
+
+        <div class="ext-card-issue-row">
+          <label class="ext-sublabel" for="ext-issue-${newIdx}">
+            What is wrong with this extension? <span class="required-star">*</span>
+          </label>
+          <textarea
+            class="textarea ext-issue-input"
+            id="ext-issue-${newIdx}"
+            name="extensionIssue"
+            rows="2"
+            maxlength="3000"
+            placeholder="Describe what happens specifically with this extension (e.g. video player returns 403 error, search is empty, etc.)."
+            required
+          ></textarea>
+        </div>
+      `;
+
+      extList.appendChild(card);
+      const removeBtn = card.querySelector<HTMLButtonElement>('.ext-remove-btn');
+      if (removeBtn) attachRemoveListener(removeBtn);
+      updateRemoveButtonsState();
+
+      const nameInput = card.querySelector<HTMLInputElement>('.ext-name-input');
+      nameInput?.focus();
+    });
+
     // File selection handling
     fileInput?.addEventListener('change', () => {
       for (const f of Array.from(fileInput.files ?? [])) {
@@ -1398,6 +1644,172 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
   .lede { color: var(--text-tertiary); margin-block: var(--space-1) var(--space-6); }
   .extension-warning { border-inline-start-color: var(--dead, #ed4245); }
   .checkbox-field { margin-block-end: var(--space-4); }
+
+  /* ── Dynamic Extension Name & Version Rows ── */
+  .extension-fields-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .ext-header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .required-star {
+    color: var(--dead, #ed4245);
+    font-weight: 700;
+  }
+  /* ── Dynamic Extension Card Styling ── */
+  .extension-fields-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .ext-header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .required-star {
+    color: var(--dead, #ed4245);
+    font-weight: 700;
+  }
+  .extension-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .extension-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background: var(--surface-secondary, rgba(255, 255, 255, 0.02));
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    border-radius: var(--radius-md);
+    transition: border-color var(--dur-fast, 0.15s), background var(--dur-fast, 0.15s);
+  }
+  .extension-card:hover,
+  .extension-card:focus-within {
+    border-color: var(--border-default, rgba(255, 255, 255, 0.16));
+    background: var(--surface-active, rgba(255, 255, 255, 0.04));
+  }
+  .card-enter {
+    animation: cardEnter 0.22s ease-out;
+  }
+  @keyframes cardEnter {
+    from {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .ext-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+    padding-bottom: var(--space-2);
+  }
+  .ext-card-num {
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--signal, #5865f2);
+  }
+  .ext-card-top-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+  }
+  .ext-card-issue-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .ext-issue-input {
+    resize: vertical;
+    min-height: 54px;
+  }
+  .ext-col {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .ext-col-name {
+    flex: 1;
+    min-width: 0;
+  }
+  .ext-col-version {
+    width: 140px;
+    flex-shrink: 0;
+  }
+  .ext-sublabel {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium, 500);
+    color: var(--text-secondary);
+  }
+  .ext-remove-btn {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    background: transparent;
+    color: var(--text-tertiary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+  }
+  .ext-remove-btn:not(:disabled):hover {
+    color: #fff;
+    background: var(--dead-fill, rgba(237, 66, 69, 0.18));
+    border-color: var(--dead, #ed4245);
+  }
+  .ext-remove-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+  .btn-add-ext {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium, 500);
+    color: var(--text-secondary);
+    background: var(--surface-active, rgba(255, 255, 255, 0.05));
+    border: 1px dashed var(--border-default, rgba(255, 255, 255, 0.2));
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    margin-top: var(--space-1);
+  }
+  .btn-add-ext:hover {
+    color: var(--text-primary);
+    background: var(--surface-hover, rgba(255, 255, 255, 0.09));
+    border-color: var(--signal, #5865f2);
+  }
+  @media (max-width: 600px) {
+    .ext-card-top-row {
+      flex-wrap: wrap;
+    }
+    .ext-col-name {
+      flex: 1 1 100%;
+    }
+    .ext-col-version {
+      flex: 1;
+      width: auto;
+    }
+  }
   .checkbox-label {
     display: flex;
     align-items: flex-start;
