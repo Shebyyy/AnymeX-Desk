@@ -464,23 +464,38 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
 
           <div class="field">
             <label class="label" for="appVersion">App version</label>
-            <div class="version-input-wrap">
-              <input
-                class="input"
-                id="appVersion"
-                name="appVersion"
-                type="text"
-                maxlength="32"
-                list="app-versions-list"
-                value={shown.appVersion}
-                placeholder={shown.releaseChannel === 'beta' ? 'e.g. 3.1.6+4-beta' : 'e.g. 3.1.7'}
-                autocomplete="off"
-              />
-              <datalist id="app-versions-list">
-                {(shown.releaseChannel === 'beta' ? releases.beta : releases.stable).map((r) => (
-                  <option value={r.version}>{r.name}{r.isLatest ? ` (Latest ${shown.releaseChannel === 'beta' ? 'Beta' : 'Stable'})` : ''}</option>
-                ))}
-              </datalist>
+            <div class="custom-combobox" id="app-combobox">
+              <div class="combobox-input-wrap">
+                <input
+                  class="input combobox-input"
+                  id="appVersion"
+                  name="appVersion"
+                  type="text"
+                  maxlength="32"
+                  value={shown.appVersion}
+                  placeholder={shown.releaseChannel === 'beta' ? 'e.g. 3.1.6+4-beta' : 'e.g. 3.1.7'}
+                  autocomplete="off"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded="false"
+                  aria-controls="app-version-dropdown"
+                />
+                <button
+                  type="button"
+                  class="combobox-toggle-btn"
+                  id="app-version-toggle-btn"
+                  aria-label="Toggle version list"
+                  tabindex="-1"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+              </div>
+              <div
+                id="app-version-dropdown"
+                class="combobox-dropdown"
+                role="listbox"
+                style="display: none;"
+              ></div>
             </div>
             <p class="field-hint">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 3px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
@@ -495,23 +510,38 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
             style={(activeKind === 'extension' || shown.category === 'extension_bridge') && shown.platform !== 'ios' ? '' : 'display: none;'}
           >
             <label class="label" for="pluginVersion">Extension Runtime Bridge (Plugin) version</label>
-            <div class="version-input-wrap">
-              <input
-                class="input"
-                id="pluginVersion"
-                name="pluginVersion"
-                type="text"
-                maxlength="32"
-                list="plugin-versions-list"
-                value={shown.pluginVersion}
-                placeholder="e.g. 2.4.0"
-                autocomplete="off"
-              />
-              <datalist id="plugin-versions-list">
-                {releases.plugin.map((r) => (
-                  <option value={r.version}>{r.name}{r.isLatest ? ' (Latest)' : ''}</option>
-                ))}
-              </datalist>
+            <div class="custom-combobox" id="plugin-combobox">
+              <div class="combobox-input-wrap">
+                <input
+                  class="input combobox-input"
+                  id="pluginVersion"
+                  name="pluginVersion"
+                  type="text"
+                  maxlength="32"
+                  value={shown.pluginVersion}
+                  placeholder="e.g. 2.4.0"
+                  autocomplete="off"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded="false"
+                  aria-controls="plugin-version-dropdown"
+                />
+                <button
+                  type="button"
+                  class="combobox-toggle-btn"
+                  id="plugin-version-toggle-btn"
+                  aria-label="Toggle plugin version list"
+                  tabindex="-1"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+              </div>
+              <div
+                id="plugin-version-dropdown"
+                class="combobox-dropdown"
+                role="listbox"
+                style="display: none;"
+              ></div>
             </div>
             <p class="field-hint">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 3px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
@@ -673,10 +703,13 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     }
 
     const appVerInput = document.getElementById('appVersion') as HTMLInputElement | null;
-    const appVerDatalist = document.getElementById('app-versions-list') as HTMLDataListElement | null;
+    const appToggleBtn = document.getElementById('app-version-toggle-btn') as HTMLButtonElement | null;
+    const appDropdown = document.getElementById('app-version-dropdown') as HTMLDivElement | null;
     const versionAdvisory = document.getElementById('version-advisory') as HTMLDivElement | null;
+
     const pluginVerInput = document.getElementById('pluginVersion') as HTMLInputElement | null;
-    const pluginVerDatalist = document.getElementById('plugin-versions-list') as HTMLDataListElement | null;
+    const pluginToggleBtn = document.getElementById('plugin-version-toggle-btn') as HTMLButtonElement | null;
+    const pluginDropdown = document.getElementById('plugin-version-dropdown') as HTMLDivElement | null;
     const pluginAdvisory = document.getElementById('plugin-advisory') as HTMLDivElement | null;
     const pluginGroup = document.getElementById('plugin-version-group');
     const iosPluginNote = document.getElementById('ios-plugin-note');
@@ -686,23 +719,183 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       return checked?.value === 'beta' ? 'beta' : 'stable';
     }
 
-    function updateAppVersionDatalist() {
-      if (!appVerDatalist || !releasesData) return;
-      const channel = getSelectedChannel();
-      const list = channel === 'beta' ? releasesData.beta : releasesData.stable;
-      appVerDatalist.innerHTML = list.map((item) => `
-        <option value="${item.version}">${item.name}${item.isLatest ? ' (Latest ' + (channel === 'beta' ? 'Beta' : 'Stable') + ')' : ''}</option>
-      `).join('');
-      if (appVerInput) {
-        appVerInput.placeholder = channel === 'beta' ? 'e.g. 3.1.6+4-beta' : 'e.g. 3.1.7';
+    interface ComboboxItem {
+      version: string;
+      name: string;
+      isLatest: boolean;
+      publishedAt?: string;
+      badgeLabel?: string;
+    }
+
+    function setupCombobox({
+      inputEl,
+      toggleBtn,
+      dropdownEl,
+      getItems,
+      onSelect,
+    }: {
+      inputEl: HTMLInputElement | null;
+      toggleBtn: HTMLButtonElement | null;
+      dropdownEl: HTMLDivElement | null;
+      getItems: () => ComboboxItem[];
+      onSelect: (val: string) => void;
+    }) {
+      if (!inputEl || !toggleBtn || !dropdownEl) return null;
+
+      let isOpen = false;
+      let highlightedIndex = -1;
+
+      function renderList(filterText = '') {
+        if (!dropdownEl || !inputEl) return;
+        const items = getItems();
+        const cleanFilter = filterText.trim().toLowerCase();
+        const filtered = cleanFilter
+          ? items.filter((it) => it.version.toLowerCase().includes(cleanFilter) || it.name.toLowerCase().includes(cleanFilter))
+          : items;
+
+        if (filtered.length === 0) {
+          dropdownEl.innerHTML = `<div class="combobox-empty">No matching versions found</div>`;
+          return;
+        }
+
+        const currentVal = inputEl.value.trim();
+        dropdownEl.innerHTML = filtered.map((it, idx) => {
+          const isSelected = it.version === currentVal;
+          const formattedDate = it.publishedAt ? new Date(it.publishedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+          return `
+            <div class="combobox-item ${isSelected ? 'selected' : ''}" data-version="${it.version}" role="option" aria-selected="${isSelected}" data-index="${idx}">
+              <div class="combobox-item-main">
+                <span class="combobox-item-ver">${it.version}</span>
+                ${it.badgeLabel ? `<span class="combobox-item-badge ${it.isLatest ? 'latest' : ''}">${it.badgeLabel}</span>` : ''}
+              </div>
+              ${formattedDate ? `<span class="combobox-item-date">${formattedDate}</span>` : ''}
+            </div>
+          `;
+        }).join('');
+
+        dropdownEl.querySelectorAll<HTMLDivElement>('.combobox-item').forEach((itemEl) => {
+          itemEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const ver = itemEl.dataset.version;
+            if (ver && inputEl) {
+              inputEl.value = ver;
+              close();
+              onSelect(ver);
+              inputEl.focus();
+            }
+          });
+        });
       }
+
+      function open(showAll = false) {
+        if (!dropdownEl || !inputEl || !toggleBtn) return;
+        isOpen = true;
+        toggleBtn.classList.add('open');
+        inputEl.setAttribute('aria-expanded', 'true');
+        dropdownEl.style.display = 'block';
+        renderList(showAll ? '' : inputEl.value);
+
+        const selectedEl = dropdownEl.querySelector('.combobox-item.selected') as HTMLDivElement | null;
+        if (selectedEl) {
+          selectedEl.scrollIntoView({ block: 'nearest' });
+        }
+      }
+
+      function close() {
+        if (!dropdownEl || !inputEl || !toggleBtn) return;
+        isOpen = false;
+        toggleBtn.classList.remove('open');
+        inputEl.setAttribute('aria-expanded', 'false');
+        dropdownEl.style.display = 'none';
+        highlightedIndex = -1;
+      }
+
+      function toggle() {
+        if (isOpen) {
+          close();
+        } else {
+          open(true);
+        }
+      }
+
+      toggleBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggle();
+        if (isOpen) inputEl.focus();
+      });
+
+      inputEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isOpen) {
+          open(true);
+        }
+      });
+
+      inputEl.addEventListener('input', () => {
+        if (!isOpen) {
+          isOpen = true;
+          toggleBtn.classList.add('open');
+          inputEl.setAttribute('aria-expanded', 'true');
+          dropdownEl.style.display = 'block';
+        }
+        renderList(inputEl.value);
+      });
+
+      inputEl.addEventListener('keydown', (e) => {
+        if (!isOpen) {
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            open(true);
+          }
+          return;
+        }
+
+        const items = dropdownEl.querySelectorAll<HTMLDivElement>('.combobox-item');
+        if (items.length === 0) return;
+
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          highlightedIndex = (highlightedIndex + 1) % items.length;
+          updateHighlight(items);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          highlightedIndex = (highlightedIndex - 1 + items.length) % items.length;
+          updateHighlight(items);
+        } else if (e.key === 'Enter') {
+          if (highlightedIndex >= 0 && highlightedIndex < items.length) {
+            e.preventDefault();
+            const ver = items[highlightedIndex].dataset.version;
+            if (ver) {
+              inputEl.value = ver;
+              close();
+              onSelect(ver);
+            }
+          }
+        } else if (e.key === 'Escape') {
+          close();
+        }
+      });
+
+      function updateHighlight(items: NodeListOf<HTMLDivElement>) {
+        items.forEach((it, idx) => {
+          if (idx === highlightedIndex) {
+            it.classList.add('highlighted');
+            it.scrollIntoView({ block: 'nearest' });
+          } else {
+            it.classList.remove('highlighted');
+          }
+        });
+      }
+
+      return { open, close, toggle, renderList, isOpen: () => isOpen };
     }
 
     let isVersionBlocked = false;
 
     function updateAppVersionAdvisory() {
       if (!appVerInput || !versionAdvisory || !releasesData) return;
-      const currentKind = (document.querySelector('input[name="kind"]:checked') as HTMLInputElement | null)?.value ?? 'bug';
+      const currentKind = getSelectedKind();
       if (currentKind === 'suggestion') {
         isVersionBlocked = false;
         versionAdvisory.style.display = 'none';
@@ -816,19 +1009,80 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       if (iosPluginNote) {
         iosPluginNote.style.display = isExtensionRelevant && isIos ? '' : 'none';
       }
+      if (isIos && pluginVerInput) {
+        pluginVerInput.value = '';
+        pluginCombobox?.close();
+        updatePluginVersionAdvisory();
+      }
     }
 
-    // Initialize datalists and advisories
-    updateAppVersionDatalist();
+    // Initialize custom comboboxes
+    const appCombobox = setupCombobox({
+      inputEl: appVerInput,
+      toggleBtn: appToggleBtn,
+      dropdownEl: appDropdown,
+      getItems: () => {
+        if (!releasesData) return [];
+        const channel = getSelectedChannel();
+        const list = channel === 'beta' ? releasesData.beta : releasesData.stable;
+        return list.map((item) => ({
+          version: item.version,
+          name: item.name,
+          isLatest: item.isLatest,
+          publishedAt: item.publishedAt,
+          badgeLabel: item.isLatest ? `Latest ${channel === 'beta' ? 'Beta' : 'Stable'}` : undefined,
+        }));
+      },
+      onSelect: () => {
+        updateAppVersionAdvisory();
+      },
+    });
+
+    const pluginCombobox = setupCombobox({
+      inputEl: pluginVerInput,
+      toggleBtn: pluginToggleBtn,
+      dropdownEl: pluginDropdown,
+      getItems: () => {
+        if (!releasesData) return [];
+        return releasesData.plugin.map((item) => ({
+          version: item.version,
+          name: item.name,
+          isLatest: item.isLatest,
+          publishedAt: item.publishedAt,
+          badgeLabel: item.isLatest ? 'Latest' : undefined,
+        }));
+      },
+      onSelect: () => {
+        updatePluginVersionAdvisory();
+      },
+    });
+
+    // Close comboboxes when clicking outside
+    document.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest('#app-combobox')) {
+        appCombobox?.close();
+      }
+      if (!target?.closest('#plugin-combobox')) {
+        pluginCombobox?.close();
+      }
+    });
+
+    // Initialize initial advisory and visibility state
     updateAppVersionAdvisory();
     updatePluginVersionAdvisory();
     updatePluginVisibility();
 
-    // Channel change listener
+    // Channel change listener: empty version, reset placeholder, close combobox, update advisory
     const channelRadios = document.querySelectorAll<HTMLInputElement>('input[name="releaseChannel"]');
     channelRadios.forEach((r) => {
       r.addEventListener('change', () => {
-        updateAppVersionDatalist();
+        const channel = getSelectedChannel();
+        if (appVerInput) {
+          appVerInput.value = '';
+          appVerInput.placeholder = channel === 'beta' ? 'e.g. 3.1.6+4-beta' : 'e.g. 3.1.7';
+        }
+        appCombobox?.close();
         updateAppVersionAdvisory();
       });
     });
@@ -839,7 +1093,9 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
         const betaRadio = document.querySelector('input[name="releaseChannel"][value="beta"]') as HTMLInputElement | null;
         if (betaRadio && !betaRadio.checked) {
           betaRadio.checked = true;
-          updateAppVersionDatalist();
+          if (appVerInput) {
+            appVerInput.placeholder = 'e.g. 3.1.6+4-beta';
+          }
         }
       }
       updateAppVersionAdvisory();
@@ -847,12 +1103,20 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
 
     pluginVerInput?.addEventListener('input', updatePluginVersionAdvisory);
 
-    // Platform and Category change listeners for plugin visibility
+    // Platform and Category change listeners
     const platRadios = document.querySelectorAll<HTMLInputElement>('input[name="platform"]');
     platRadios.forEach((r) => r.addEventListener('change', updatePluginVisibility));
 
     const catRadios = document.querySelectorAll<HTMLInputElement>('input[name="category"]');
     catRadios.forEach((r) => r.addEventListener('change', updatePluginVisibility));
+
+    // Delegated listener on form to catch all platform / category changes reliably
+    form?.addEventListener('change', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.matches('input[name="platform"]') || target.matches('input[name="category"]') || target.matches('input[name="kind"]'))) {
+        updatePluginVisibility();
+      }
+    });
 
     // ── Dynamic Kind Switcher ──────────────────────────────────────────
     const kindRadios = document.querySelectorAll<HTMLInputElement>('input[name="kind"]');
@@ -1202,8 +1466,142 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     border: 1px solid rgba(234, 179, 8, 0.35);
     letter-spacing: 0.04em;
   }
-  .version-input-wrap {
+  /* ── Custom Combobox UI ── */
+  .custom-combobox {
     position: relative;
+    width: 100%;
+  }
+  .combobox-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .combobox-input-wrap .input {
+    padding-inline-end: 42px;
+    cursor: text;
+  }
+  .combobox-toggle-btn {
+    position: absolute;
+    inset-inline-end: 8px;
+    inset-block-start: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+    padding: 0;
+  }
+  .combobox-toggle-btn:hover {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+  }
+  .combobox-toggle-btn.open svg {
+    transform: rotate(180deg);
+  }
+  .combobox-toggle-btn svg {
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .combobox-dropdown {
+    position: absolute;
+    inset-inline-start: 0;
+    inset-inline-end: 0;
+    inset-block-start: calc(100% + 4px);
+    z-index: 60;
+    background: var(--surface-raised, #18191c);
+    border: 1px solid var(--border-default, #2e3035);
+    border-radius: var(--radius-md);
+    box-shadow: 0 12px 28px -4px rgba(0, 0, 0, 0.65), 0 4px 10px rgba(0, 0, 0, 0.3);
+    max-height: 250px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 4px;
+    animation: comboboxReveal 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes comboboxReveal {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.99);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  .combobox-dropdown::-webkit-scrollbar {
+    width: 6px;
+  }
+  .combobox-dropdown::-webkit-scrollbar-thumb {
+    background: var(--border-default);
+    border-radius: 3px;
+  }
+  .combobox-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+    transition: background 0.1s;
+    user-select: none;
+  }
+  .combobox-item:hover,
+  .combobox-item.highlighted {
+    background: var(--surface-hover, rgba(255, 255, 255, 0.06));
+  }
+  .combobox-item.selected {
+    background: var(--surface-active, rgba(255, 255, 255, 0.1));
+    font-weight: var(--weight-medium, 500);
+  }
+  .combobox-item-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .combobox-item-ver {
+    font-family: var(--font-data);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .combobox-item-badge {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-inset, rgba(255, 255, 255, 0.08));
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
+  }
+  .combobox-item-badge.latest {
+    background: rgba(234, 179, 8, 0.18);
+    color: #eab308;
+    border-color: rgba(234, 179, 8, 0.35);
+  }
+  .combobox-item-date {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    font-family: var(--font-data);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .combobox-empty {
+    padding: 16px;
+    text-align: center;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
   }
   .advisory-box {
     margin-block-start: var(--space-2);
