@@ -55,6 +55,8 @@ const ROW_COLUMNS = {
   category: reports.category,
   platform: reports.platform,
   appVersion: reports.appVersion,
+  releaseChannel: reports.releaseChannel,
+  pluginVersion: reports.pluginVersion,
   title: reports.title,
   status: reports.status,
   duplicateOf: reports.duplicateOf,

@@ -89,3 +89,105 @@ describe('APPS', () => {
     expect(new Set(APPS).size).toBe(APPS.length);
   });
 });
+
+describe('checkAppVersionAdvisory', () => {
+  const latestStable = { tag: 'v3.1.7', version: '3.1.7', publishedAt: '2026-08-30T18:46:47Z' };
+  const latestBeta = { tag: 'v3.1.6+4-beta', version: '3.1.6+4-beta', publishedAt: '2026-08-30T09:15:16Z' };
+  const allBeta = [
+    latestBeta,
+    { tag: 'v3.1.6+2-beta', version: '3.1.6+2-beta', publishedAt: '2026-08-25T18:21:38Z' },
+  ];
+  const allStable = [
+    latestStable,
+    { tag: 'v3.1.6', version: '3.1.6', publishedAt: '2026-08-16T17:11:54Z' },
+    { tag: 'v3.1.5', version: '3.1.5', publishedAt: '2026-08-01T12:00:00Z' },
+  ];
+
+  test('blocks when beta was released before latest stable', () => {
+    const { checkAppVersionAdvisory } = require('../../src/lib/version');
+    const res = checkAppVersionAdvisory({
+      channel: 'beta',
+      version: '3.1.6+4-beta',
+      allBeta,
+      latestStable,
+      latestBeta,
+    });
+    expect(res.blocked).toBe(true);
+    expect(res.type).toBe('blocked');
+    expect(res.message).toContain('latest stable release (v3.1.7)');
+  });
+
+  test('blocks when beta is older than latest beta', () => {
+    const { checkAppVersionAdvisory } = require('../../src/lib/version');
+    const res = checkAppVersionAdvisory({
+      channel: 'beta',
+      version: '3.1.6+2-beta',
+      allBeta,
+      latestStable: null,
+      latestBeta,
+    });
+    expect(res.blocked).toBe(true);
+    expect(res.type).toBe('blocked');
+    expect(res.message).toContain('older preview build');
+  });
+
+  test('blocks when stable is older than latest stable', () => {
+    const { checkAppVersionAdvisory } = require('../../src/lib/version');
+    const res = checkAppVersionAdvisory({
+      channel: 'stable',
+      version: '3.1.5',
+      allStable,
+      latestStable,
+      latestBeta,
+    });
+    expect(res.blocked).toBe(true);
+    expect(res.type).toBe('blocked');
+    expect(res.message).toContain('older stable version');
+  });
+
+  test('allows up-to-date stable release', () => {
+    const { checkAppVersionAdvisory } = require('../../src/lib/version');
+    const res = checkAppVersionAdvisory({
+      channel: 'stable',
+      version: '3.1.7',
+      allStable,
+      latestStable,
+      latestBeta,
+    });
+    expect(res.blocked).toBe(false);
+  });
+
+  test('informs without blocking when stable is latest but newer beta was published afterwards', () => {
+    const { checkAppVersionAdvisory } = require('../../src/lib/version');
+    const futureBeta = { tag: 'v3.1.8-beta', version: '3.1.8-beta', publishedAt: '2026-09-05T00:00:00Z' };
+    const res = checkAppVersionAdvisory({
+      channel: 'stable',
+      version: '3.1.7',
+      allStable,
+      latestStable,
+      latestBeta: futureBeta,
+    });
+    expect(res.blocked).toBe(false);
+    expect(res.type).toBe('info');
+    expect(res.message).toContain('newer preview build (v3.1.8-beta)');
+  });
+});
+
+describe('checkPluginVersionAdvisory', () => {
+  const latestPlugin = { tag: 'v2.4.0', version: '2.4.0' };
+
+  test('warns when plugin version is behind latest plugin', () => {
+    const { checkPluginVersionAdvisory } = require('../../src/lib/version');
+    const res = checkPluginVersionAdvisory('2.2.0', latestPlugin);
+    expect(res.type).toBe('warning');
+    expect(res.message).toContain('newer extension runtime plugin (v2.4.0)');
+  });
+
+  test('returns null when plugin version is up to date', () => {
+    const { checkPluginVersionAdvisory } = require('../../src/lib/version');
+    const res = checkPluginVersionAdvisory('2.4.0', latestPlugin);
+    expect(res.type).toBeNull();
+    expect(res.message).toBeNull();
+  });
+});
+

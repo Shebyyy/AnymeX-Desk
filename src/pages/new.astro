@@ -9,6 +9,8 @@ import {
   CATEGORY_LABELS,
   PLATFORMS,
   PLATFORM_LABELS,
+  RELEASE_CHANNELS,
+  type ReleaseChannel,
   normalizeTitle,
   reports,
   OPEN_STATUSES,
@@ -24,6 +26,8 @@ import { createForumThread } from '../lib/discord-forums';
 import { logAction } from '../lib/staff';
 import { db } from '../lib/db/client';
 import { sql } from 'drizzle-orm';
+import { getCachedReleases } from '../lib/github-releases';
+import { checkAppVersionAdvisory } from '../lib/version';
 
 export const prerender = false;
 
@@ -49,6 +53,8 @@ type Draft = {
   category: string;
   platform: string;
   appVersion: string;
+  releaseChannel: string;
+  pluginVersion: string;
   title: string;
   body: string;
   stepsToReproduce: string;
@@ -68,6 +74,8 @@ if (Astro.request.method === 'POST') {
   const category = String(form.get('category') ?? '').trim();
   const platform = String(form.get('platform') ?? '').trim();
   const appVersion = String(form.get('appVersion') ?? '').trim().slice(0, 32);
+  const releaseChannel = (String(form.get('releaseChannel') ?? 'stable').trim() === 'beta' ? 'beta' : 'stable') as ReleaseChannel;
+  const pluginVersion = String(form.get('pluginVersion') ?? '').trim().slice(0, 32);
   const title = String(form.get('title') ?? '').trim().slice(0, 200);
   const body = String(form.get('body') ?? '').trim().slice(0, 5000);
   const stepsToReproduce = String(form.get('stepsToReproduce') ?? '').trim().slice(0, 5000);
@@ -82,6 +90,8 @@ if (Astro.request.method === 'POST') {
     category,
     platform,
     appVersion,
+    releaseChannel,
+    pluginVersion,
     title,
     body,
     stepsToReproduce,
@@ -128,7 +138,28 @@ if (Astro.request.method === 'POST') {
   } else if (await overFilingLimit(user.id)) {
     error = FILING_COOLDOWN_MESSAGE;
   } else {
-    // Check dedup. findDuplicate normalizes the title internally.
+    // Check if user is reporting on an outdated version that requires an update
+    let isBlocked = false;
+    if (kind !== 'suggestion' && appVersion) {
+      const postEnv = (Astro.locals.runtime?.env ?? (process as any).env) as { SESSION?: KVNamespace };
+      const postReleases = await getCachedReleases(postEnv.SESSION);
+      const advisory = checkAppVersionAdvisory({
+        channel: releaseChannel,
+        version: appVersion,
+        allStable: postReleases.stable,
+        allBeta: postReleases.beta,
+        latestStable: postReleases.latest.stable,
+        latestBeta: postReleases.latest.beta,
+      });
+      if (advisory.blocked && advisory.message) {
+        isBlocked = true;
+        if (isAjax) return json({ error: 'outdated_version', message: advisory.message }, 400);
+        error = advisory.message;
+      }
+    }
+
+    if (!isBlocked) {
+      // Check dedup. findDuplicate normalizes the title internally.
     const dup = await findDuplicate(kind, category, platform, title);
     if (dup) {
       if (!dup.locked) {
@@ -155,6 +186,8 @@ if (Astro.request.method === 'POST') {
         category,
         platform,
         appVersion: appVersion || null,
+        releaseChannel,
+        pluginVersion: pluginVersion || null,
         // Keep the user's original casing/punctuation for display; the
         // normalized copy drives the dedup index (see reports_dedup).
         title: title,
@@ -220,6 +253,7 @@ if (Astro.request.method === 'POST') {
       }
       return Astro.redirect(`/report/${created.id}?filed=1`, 303);
     }
+    }
   }
 
   // For AJAX requests with validation errors, return JSON instead of re-rendering.
@@ -241,11 +275,17 @@ if (draft) {
 const queryKind = Astro.url.searchParams.get('kind') ?? '';
 const kindLocked = queryKind === 'bug' || queryKind === 'suggestion' || queryKind === 'extension';
 
+const env = (Astro.locals.runtime?.env ?? (process as any).env) as { SESSION?: KVNamespace };
+const kv = env.SESSION as KVNamespace | undefined;
+const releases = await getCachedReleases(kv);
+
 const shown = {
   kind: posted?.kind || draft?.kind || queryKind || 'bug',
   category: posted?.category || draft?.category || '',
   platform: posted?.platform || draft?.platform || '',
   appVersion: posted?.appVersion || draft?.appVersion || '',
+  releaseChannel: posted?.releaseChannel || draft?.releaseChannel || (Astro.url.searchParams.get('channel') === 'beta' ? 'beta' : 'stable'),
+  pluginVersion: posted?.pluginVersion || draft?.pluginVersion || '',
   title: posted?.title || draft?.title || '',
   body: posted?.body || draft?.body || '',
   stepsToReproduce: posted?.stepsToReproduce || draft?.stepsToReproduce || '',
@@ -406,20 +446,87 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       </div>
 
       {shown.kind !== 'suggestion' && (
-        <div class="field">
-          <label class="label" for="appVersion">App version</label>
-          <input
-            class="input"
-            id="appVersion"
-            name="appVersion"
-            type="text"
-            maxlength="32"
-            inputmode="numeric"
-            value={shown.appVersion}
-            placeholder="e.g. 3.1.7+39"
-          />
-          <p class="field-hint">Found in AnymeX → Settings → About. Optional but very helpful.</p>
-        </div>
+        <>
+          <div class="field">
+            <label class="label">Release channel</label>
+            <div class="segmented channel-segmented" role="radiogroup">
+              <label class:active={shown.releaseChannel !== 'beta'}>
+                <input class="sr-only" type="radio" name="releaseChannel" value="stable" checked={shown.releaseChannel !== 'beta'} />
+                <span>Stable</span>
+              </label>
+              <label class:active={shown.releaseChannel === 'beta'}>
+                <input class="sr-only" type="radio" name="releaseChannel" value="beta" checked={shown.releaseChannel === 'beta'} />
+                <span class="channel-beta-text">Beta (Preview)</span>
+              </label>
+            </div>
+            <p class="field-hint">Select whether you encountered this issue on the official stable release or the preview beta.</p>
+          </div>
+
+          <div class="field">
+            <label class="label" for="appVersion">App version</label>
+            <div class="version-input-wrap">
+              <input
+                class="input"
+                id="appVersion"
+                name="appVersion"
+                type="text"
+                maxlength="32"
+                list="app-versions-list"
+                value={shown.appVersion}
+                placeholder={shown.releaseChannel === 'beta' ? 'e.g. 3.1.6+4-beta' : 'e.g. 3.1.7'}
+                autocomplete="off"
+              />
+              <datalist id="app-versions-list">
+                {(shown.releaseChannel === 'beta' ? releases.beta : releases.stable).map((r) => (
+                  <option value={r.version}>{r.name}{r.isLatest ? ` (Latest ${shown.releaseChannel === 'beta' ? 'Beta' : 'Stable'})` : ''}</option>
+                ))}
+              </datalist>
+            </div>
+            <p class="field-hint">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 3px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              Check <strong>Settings → About</strong> in AnymeX to confirm your version.
+            </p>
+            <div id="version-advisory" class="advisory-box" style="display: none;"></div>
+          </div>
+
+          <div
+            id="plugin-version-group"
+            class="field"
+            style={(shown.kind === 'extension' || shown.category === 'extension_bridge') && shown.platform !== 'ios' ? '' : 'display: none;'}
+          >
+            <label class="label" for="pluginVersion">Extension Runtime Bridge (Plugin) version</label>
+            <div class="version-input-wrap">
+              <input
+                class="input"
+                id="pluginVersion"
+                name="pluginVersion"
+                type="text"
+                maxlength="32"
+                list="plugin-versions-list"
+                value={shown.pluginVersion}
+                placeholder="e.g. 2.4.0"
+                autocomplete="off"
+              />
+              <datalist id="plugin-versions-list">
+                {releases.plugin.map((r) => (
+                  <option value={r.version}>{r.name}{r.isLatest ? ' (Latest)' : ''}</option>
+                ))}
+              </datalist>
+            </div>
+            <p class="field-hint">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 3px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              Check <strong>Settings → Extensions → Settings icon (gear) on top right</strong> for plugin version.
+            </p>
+            <div id="plugin-advisory" class="advisory-box" style="display: none;"></div>
+          </div>
+          <div
+            id="ios-plugin-note"
+            class="ios-plugin-note"
+            style={(shown.kind === 'extension' || shown.category === 'extension_bridge') && shown.platform === 'ios' ? '' : 'display: none;'}
+          >
+            ℹ️ iOS does not use the extension runtime bridge plugin.
+          </div>
+        </>
       )}
 
       {shown.kind === 'extension' && (
@@ -538,7 +645,12 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     </div>
   </form>
 
+  <script id="releases-json" type="application/json" set:html={JSON.stringify(releases)}></script>
+
   <script>
+    import { checkAppVersionAdvisory, checkPluginVersionAdvisory } from '../lib/version';
+    import type { ReleasesPayload } from '../lib/github-releases';
+
     // Select the report form specifically. The header renders a search form
     // and a logout form BEFORE the report form in the DOM, so
     // document.querySelector('form') returns the search form — and attaching
@@ -550,6 +662,189 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     const fileList = document.getElementById('file-list');
     const submitBtn = document.getElementById('submit-btn') as HTMLButtonElement;
     const selectedFiles: File[] = [];
+
+    // ── GitHub Releases & Version Advisories ───────────────────────────
+    const releasesJsonEl = document.getElementById('releases-json');
+    let releasesData: ReleasesPayload | null = null;
+    if (releasesJsonEl?.textContent) {
+      try {
+        releasesData = JSON.parse(releasesJsonEl.textContent);
+      } catch {}
+    }
+
+    const appVerInput = document.getElementById('appVersion') as HTMLInputElement | null;
+    const appVerDatalist = document.getElementById('app-versions-list') as HTMLDataListElement | null;
+    const versionAdvisory = document.getElementById('version-advisory') as HTMLDivElement | null;
+    const pluginVerInput = document.getElementById('pluginVersion') as HTMLInputElement | null;
+    const pluginVerDatalist = document.getElementById('plugin-versions-list') as HTMLDataListElement | null;
+    const pluginAdvisory = document.getElementById('plugin-advisory') as HTMLDivElement | null;
+    const pluginGroup = document.getElementById('plugin-version-group');
+    const iosPluginNote = document.getElementById('ios-plugin-note');
+
+    function getSelectedChannel(): 'stable' | 'beta' {
+      const checked = document.querySelector('input[name="releaseChannel"]:checked') as HTMLInputElement | null;
+      return checked?.value === 'beta' ? 'beta' : 'stable';
+    }
+
+    function updateAppVersionDatalist() {
+      if (!appVerDatalist || !releasesData) return;
+      const channel = getSelectedChannel();
+      const list = channel === 'beta' ? releasesData.beta : releasesData.stable;
+      appVerDatalist.innerHTML = list.map((item) => `
+        <option value="${item.version}">${item.name}${item.isLatest ? ' (Latest ' + (channel === 'beta' ? 'Beta' : 'Stable') + ')' : ''}</option>
+      `).join('');
+      if (appVerInput) {
+        appVerInput.placeholder = channel === 'beta' ? 'e.g. 3.1.6+4-beta' : 'e.g. 3.1.7';
+      }
+    }
+
+    let isVersionBlocked = false;
+
+    function updateAppVersionAdvisory() {
+      if (!appVerInput || !versionAdvisory || !releasesData) return;
+      const currentKind = (document.querySelector('input[name="kind"]:checked') as HTMLInputElement | null)?.value ?? 'bug';
+      if (currentKind === 'suggestion') {
+        isVersionBlocked = false;
+        versionAdvisory.style.display = 'none';
+        versionAdvisory.innerHTML = '';
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.title = '';
+        }
+        return;
+      }
+
+      const val = appVerInput.value.trim();
+      const channel = getSelectedChannel();
+
+      if (!val) {
+        isVersionBlocked = false;
+        versionAdvisory.style.display = 'none';
+        versionAdvisory.innerHTML = '';
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.title = '';
+        }
+        return;
+      }
+
+      const advisory = checkAppVersionAdvisory({
+        channel,
+        version: val,
+        allStable: releasesData.stable,
+        allBeta: releasesData.beta,
+        latestStable: releasesData.latest.stable,
+        latestBeta: releasesData.latest.beta,
+      });
+
+      isVersionBlocked = advisory.blocked;
+
+      if (advisory.message) {
+        let icon = '';
+        if (advisory.type === 'blocked') {
+          icon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`;
+        } else if (advisory.type === 'warning') {
+          icon = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+        } else {
+          icon = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+        }
+
+        versionAdvisory.className = `advisory-box ${advisory.type}`;
+        versionAdvisory.innerHTML = `${icon}<span>${advisory.message}</span>`;
+        versionAdvisory.style.display = 'flex';
+
+        if (submitBtn) {
+          if (advisory.blocked) {
+            submitBtn.disabled = true;
+            submitBtn.title = 'Please update your app to the latest release before submitting a bug report.';
+          } else {
+            submitBtn.disabled = false;
+            submitBtn.title = '';
+          }
+        }
+      } else {
+        versionAdvisory.style.display = 'none';
+        versionAdvisory.innerHTML = '';
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.title = '';
+        }
+      }
+    }
+
+    function updatePluginVersionAdvisory() {
+      if (!pluginVerInput || !pluginAdvisory || !releasesData) return;
+      const val = pluginVerInput.value.trim();
+
+      if (!val) {
+        pluginAdvisory.style.display = 'none';
+        pluginAdvisory.innerHTML = '';
+        return;
+      }
+
+      const advisory = checkPluginVersionAdvisory(val, releasesData.latest.plugin);
+      if (advisory.message) {
+        const icon = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+        pluginAdvisory.className = `advisory-box ${advisory.type}`;
+        pluginAdvisory.innerHTML = `${icon}<span>${advisory.message}</span>`;
+        pluginAdvisory.style.display = 'flex';
+      } else {
+        pluginAdvisory.style.display = 'none';
+        pluginAdvisory.innerHTML = '';
+      }
+    }
+
+    function updatePluginVisibility() {
+      const currentKind = (document.querySelector('input[name="kind"]:checked') as HTMLInputElement | null)?.value ?? 'bug';
+      const currentCat = (document.querySelector('input[name="category"]:checked') as HTMLInputElement | null)?.value ?? '';
+      const currentPlat = (document.querySelector('input[name="platform"]:checked') as HTMLInputElement | null)?.value ?? '';
+
+      const isExtensionRelevant = currentKind === 'extension' || currentCat === 'extension_bridge';
+      const isIos = currentPlat === 'ios';
+
+      if (pluginGroup) {
+        pluginGroup.style.display = isExtensionRelevant && !isIos ? '' : 'none';
+      }
+      if (iosPluginNote) {
+        iosPluginNote.style.display = isExtensionRelevant && isIos ? '' : 'none';
+      }
+    }
+
+    // Initialize datalists and advisories
+    updateAppVersionDatalist();
+    updateAppVersionAdvisory();
+    updatePluginVersionAdvisory();
+    updatePluginVisibility();
+
+    // Channel change listener
+    const channelRadios = document.querySelectorAll<HTMLInputElement>('input[name="releaseChannel"]');
+    channelRadios.forEach((r) => {
+      r.addEventListener('change', () => {
+        updateAppVersionDatalist();
+        updateAppVersionAdvisory();
+      });
+    });
+
+    appVerInput?.addEventListener('input', () => {
+      const val = appVerInput.value;
+      if (/beta|preview/i.test(val)) {
+        const betaRadio = document.querySelector('input[name="releaseChannel"][value="beta"]') as HTMLInputElement | null;
+        if (betaRadio && !betaRadio.checked) {
+          betaRadio.checked = true;
+          updateAppVersionDatalist();
+        }
+      }
+      updateAppVersionAdvisory();
+    });
+
+    pluginVerInput?.addEventListener('input', updatePluginVersionAdvisory);
+
+    // Platform and Category change listeners for plugin visibility
+    const platRadios = document.querySelectorAll<HTMLInputElement>('input[name="platform"]');
+    platRadios.forEach((r) => r.addEventListener('change', updatePluginVisibility));
+
+    const catRadios = document.querySelectorAll<HTMLInputElement>('input[name="category"]');
+    catRadios.forEach((r) => r.addEventListener('change', updatePluginVisibility));
 
     // ── Dynamic Kind Switcher ──────────────────────────────────────────
     const kindRadios = document.querySelectorAll<HTMLInputElement>('input[name="kind"]');
@@ -610,7 +905,6 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     const logInput = document.getElementById('diagnostics-input') as HTMLTextAreaElement | null;
     const parseBtn = document.getElementById('parse-log-btn') as HTMLButtonElement | null;
     const logStatus = document.getElementById('log-status');
-    const appVerInput = document.getElementById('appVersion') as HTMLInputElement | null;
     const bodyInput = document.getElementById('body') as HTMLTextAreaElement | null;
 
     parseBtn?.addEventListener('click', () => {
@@ -618,8 +912,16 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       if (!raw) return;
 
       const verMatch = raw.match(/(?:AnymeX|version|app[_\s-]?ver|build)[\s:=v]+([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:[+-_a-zA-Z0-9]+)?)/i);
-      if (verMatch && appVerInput && !appVerInput.value) {
+      if (verMatch && appVerInput) {
         appVerInput.value = verMatch[1].trim();
+        if (/beta|preview/i.test(verMatch[1])) {
+          const betaRadio = document.querySelector('input[name="releaseChannel"][value="beta"]') as HTMLInputElement | null;
+          if (betaRadio) {
+            betaRadio.checked = true;
+            updateAppVersionDatalist();
+          }
+        }
+        updateAppVersionAdvisory();
       }
 
       const androidMatch = raw.match(/Android[\s:]+([0-9]+(?:\.[0-9]+)?)/i);
@@ -682,10 +984,12 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     // Form submission with file upload
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (selectedFiles.length > 0) {
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Submitting…';
+      if (isVersionBlocked) {
+        alert('Cannot submit bug report: your reported app version is outdated. Please update your app or test on the latest release before filing a bug report.');
+        return;
       }
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Submitting…';
 
       try {
         const fd = new FormData(form);
@@ -699,6 +1003,8 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
         });
 
         if (!res.ok) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = submitBtn.dataset.label ?? 'Submit';
           // Try to get error from JSON, fall back to redirect (non-JSON error)
           const ct = res.headers.get('content-type');
           if (ct?.includes('application/json')) {
@@ -867,6 +1173,68 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     font-size: var(--text-sm);
     font-weight: var(--weight-normal);
     padding: var(--space-1) var(--space-2);
+  }
+
+  .channel-segmented {
+    inline-size: fit-content;
+  }
+  .channel-beta-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .channel-beta-text::after {
+    content: 'Beta';
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    background: rgba(234, 179, 8, 0.18);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.35);
+    letter-spacing: 0.04em;
+  }
+  .version-input-wrap {
+    position: relative;
+  }
+  .advisory-box {
+    margin-block-start: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    line-height: 1.4;
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    animation: fadeIn 0.2s ease-in-out;
+  }
+  .advisory-box.blocked {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-inline-start: 3px solid #ef4444;
+    color: var(--text-primary);
+  }
+  .advisory-box.warning {
+    background: rgba(234, 179, 8, 0.12);
+    border: 1px solid rgba(234, 179, 8, 0.35);
+    border-inline-start: 3px solid #eab308;
+    color: var(--text-primary);
+  }
+  .advisory-box.info {
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    border-inline-start: 3px solid #3b82f6;
+    color: var(--text-primary);
+  }
+  .ios-plugin-note {
+    margin-block-start: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    font-size: var(--text-xs);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-tertiary);
   }
 
   .submit-row {

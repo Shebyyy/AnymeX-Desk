@@ -306,7 +306,11 @@ export async function buildReportEmbed(report: Report, origin: string) {
     fields.push({ name: 'Platform', value: platformLabel(report.platform), inline: true });
   }
   if (!isSuggestion && report.appVersion) {
-    fields.push({ name: 'App Version', value: report.appVersion, inline: true });
+    const chan = report.releaseChannel === 'beta' ? ' [Beta]' : '';
+    fields.push({ name: 'App Version', value: `${report.appVersion}${chan}`, inline: true });
+  }
+  if (report.pluginVersion) {
+    fields.push({ name: 'Plugin Version', value: report.pluginVersion, inline: true });
   }
 
   if (report.kind === 'extension') {

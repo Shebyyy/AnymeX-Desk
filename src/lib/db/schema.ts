@@ -71,6 +71,11 @@ export const EXTENSION_SOURCES = [
 
 export const PLATFORMS = ['android', 'ios', 'windows', 'macos', 'linux', 'all'] as const;
 
+// ─── Release channels ───────────────────────────────────────────────────────
+
+export const RELEASE_CHANNELS = ['stable', 'beta'] as const;
+export type ReleaseChannel = (typeof RELEASE_CHANNELS)[number];
+
 // ─── Statuses ───────────────────────────────────────────────────────────────
 
 export const STATUSES = [
@@ -197,6 +202,12 @@ export const reports = sqliteTable(
 
     /** The AnymeX app version, e.g. "3.1.7+39". */
     appVersion: text('app_version'),
+
+    /** Release channel: 'stable' | 'beta'. Defaults to 'stable'. */
+    releaseChannel: text('release_channel', { enum: RELEASE_CHANNELS }).notNull().default('stable'),
+
+    /** Extension runtime bridge plugin version, e.g. "2.4.0". */
+    pluginVersion: text('plugin_version'),
 
     title: text('title').notNull(),
     /**

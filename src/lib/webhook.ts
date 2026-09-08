@@ -113,7 +113,7 @@ export async function announceDemand(reportId: number, origin: string) {
 export async function announceFiled(
   report: Pick<
     Report,
-    'id' | 'kind' | 'title' | 'body' | 'category' | 'platform' | 'appVersion' | 'reporterId'
+    'id' | 'kind' | 'title' | 'body' | 'category' | 'platform' | 'appVersion' | 'releaseChannel' | 'pluginVersion' | 'reporterId'
   >,
   origin: string,
   cfg?: Config,
@@ -129,7 +129,13 @@ export async function announceFiled(
   fields.push({ name: 'Type', value: kindLabel(report.kind), inline: true });
   if (report.category) fields.push({ name: 'Category', value: categoryLabel(report.category), inline: true });
   if (report.platform) fields.push({ name: 'Platform', value: platformLabel(report.platform), inline: true });
-  if (report.appVersion) fields.push({ name: 'App version', value: report.appVersion, inline: true });
+  if (report.appVersion) {
+    const chan = report.releaseChannel === 'beta' ? ' [Beta]' : '';
+    fields.push({ name: 'App version', value: `${report.appVersion}${chan}`, inline: true });
+  }
+  if (report.pluginVersion) {
+    fields.push({ name: 'Plugin version', value: report.pluginVersion, inline: true });
+  }
 
   const color = report.kind === 'bug' ? RED : YELLOW;
 

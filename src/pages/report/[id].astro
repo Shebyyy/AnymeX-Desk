@@ -575,7 +575,12 @@ Astro.response.headers.set(
               {l.name}
             </span>
           ))}
-          {report.appVersion && <span class="ver">v{report.appVersion}</span>}
+          {report.appVersion && (
+            <span class="ver">
+              v{report.appVersion}
+              {report.releaseChannel === 'beta' && <span class="badge-beta">Beta</span>}
+            </span>
+          )}
           <span class="by"> · filed by </span>
           <span class="filed-by">
             {(() => {
@@ -621,7 +626,19 @@ Astro.response.headers.set(
       <div><dt class="label">Category</dt><dd>{categoryLabel(report.category)}</dd></div>
       <div><dt class="label">Platform</dt><dd>{platformLabel(report.platform)}</dd></div>
       {report.appVersion && (
-        <div><dt class="label">App version</dt><dd class="num">v{report.appVersion}</dd></div>
+        <div>
+          <dt class="label">App version</dt>
+          <dd class="num">
+            v{report.appVersion}
+            {report.releaseChannel === 'beta' && <span class="badge-beta">Beta</span>}
+          </dd>
+        </div>
+      )}
+      {report.pluginVersion && (
+        <div>
+          <dt class="label">Plugin version</dt>
+          <dd class="num">v{report.pluginVersion}</dd>
+        </div>
       )}
       <div><dt class="label">{report.kind === 'suggestion' ? 'Suggested' : 'Reported'}</dt><dd>{relativeAge(report.createdAt)} ago</dd></div>
       {report.duplicateOf && dupTarget && (
@@ -2193,6 +2210,22 @@ Astro.response.headers.set(
   }
 
   /* ── Labels & Tags ── */
+  .badge-beta {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: rgba(234, 179, 8, 0.15);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.35);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    vertical-align: middle;
+    margin-inline-start: 5px;
+    line-height: 1.2;
+  }
   .label-badge {
     display: inline-flex;
     align-items: center;
