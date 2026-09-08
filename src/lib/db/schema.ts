@@ -27,7 +27,6 @@ export const BUG_CATEGORIES = [
   'ui_ux',
   'login_auth',
   'manga_reader',
-  'extension_bridge',
   'crash',
   'performance',
   'novel_reader',
@@ -64,7 +63,13 @@ export const EXTENSION_SOURCES = [
   'lnreader',
   'cloudstream',
   'kotatsu',
-  'other',
+] as const;
+
+/** Extension sources that do not exist or run on iOS (Android/JVM exclusive). */
+export const NON_IOS_EXTENSION_SOURCES = [
+  'mihon_aniyomi',
+  'cloudstream',
+  'kotatsu',
 ] as const;
 
 // ─── Platforms ──────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import {
   BUG_CATEGORIES,
   SUGGESTION_CATEGORIES,
   EXTENSION_SOURCES,
+  NON_IOS_EXTENSION_SOURCES,
   CATEGORY_LABELS,
   PLATFORMS,
   PLATFORM_LABELS,
@@ -128,6 +129,8 @@ if (Astro.request.method === 'POST') {
     error = kind === 'extension' ? 'Pick which source the extension is for.' : 'Pick a category.';
   } else if (!validPlatforms.includes(platform)) {
     error = 'Pick a platform.';
+  } else if (kind === 'extension' && platform === 'ios' && (NON_IOS_EXTENSION_SOURCES as readonly string[]).includes(category)) {
+    error = `${CATEGORY_LABELS[category] ?? category} extensions are not available on iOS.`;
   } else if (!title || title.length < 5) {
     error = 'Give your report a title, at least 5 characters.';
   } else if (kind === 'extension' && !testedNativeApp) {
@@ -391,12 +394,19 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     <section class="step">
       <h2 class="step-h"><span class="step-n">{kindLocked ? 2 : 3}</span> Platform</h2>
       <div class="segmented plats">
-        {PLATFORMS.map((p) => (
-          <label class:active={shown.platform === p}>
-            <input class="sr-only" type="radio" name="platform" value={p} checked={shown.platform === p} required />
-            <span>{PLATFORM_LABELS[p]}</span>
-          </label>
-        ))}
+        {PLATFORMS.map((p) => {
+          const isIosHidden = activeKind === 'extension' && p === 'ios' && (NON_IOS_EXTENSION_SOURCES as readonly string[]).includes(shown.category);
+          return (
+            <label
+              class:active={shown.platform === p}
+              data-platform={p}
+              style={isIosHidden ? 'display: none;' : ''}
+            >
+              <input class="sr-only" type="radio" name="platform" value={p} checked={shown.platform === p} required={!isIosHidden} />
+              <span>{PLATFORM_LABELS[p]}</span>
+            </label>
+          );
+        })}
       </div>
     </section>
 
@@ -507,7 +517,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           <div
             id="plugin-version-group"
             class="field"
-            style={(activeKind === 'extension' || shown.category === 'extension_bridge') && shown.platform !== 'ios' ? '' : 'display: none;'}
+            style={activeKind === 'extension' && shown.platform !== 'ios' ? '' : 'display: none;'}
           >
             <label class="label" for="pluginVersion">Extension Runtime Bridge (Plugin) version</label>
             <div class="custom-combobox" id="plugin-combobox">
@@ -552,7 +562,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           <div
             id="ios-plugin-note"
             class="ios-plugin-note"
-            style={(activeKind === 'extension' || shown.category === 'extension_bridge') && shown.platform === 'ios' ? '' : 'display: none;'}
+            style={activeKind === 'extension' && shown.platform === 'ios' ? '' : 'display: none;'}
           >
             ℹ️ iOS does not use the extension runtime bridge plugin.
           </div>
@@ -994,12 +1004,34 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       return 'bug';
     }
 
+    const NON_IOS_SOURCES = ['mihon_aniyomi', 'cloudstream', 'kotatsu'];
+
+    function updatePlatformVisibility() {
+      const currentKind = getSelectedKind();
+      const currentCat = (document.querySelector('input[name="category"]:checked') as HTMLInputElement | null)?.value ?? '';
+      const iosLabel = document.querySelector('label[data-platform="ios"]') as HTMLLabelElement | null;
+      const iosRadio = document.querySelector('input[name="platform"][value="ios"]') as HTMLInputElement | null;
+
+      const hideIos = currentKind === 'extension' && NON_IOS_SOURCES.includes(currentCat);
+
+      if (iosLabel) {
+        iosLabel.style.display = hideIos ? 'none' : '';
+      }
+
+      if (hideIos && iosRadio?.checked) {
+        iosRadio.checked = false;
+        iosLabel?.classList.remove('active');
+      }
+
+      updatePluginVisibility();
+    }
+
     function updatePluginVisibility() {
       const currentKind = getSelectedKind();
       const currentCat = (document.querySelector('input[name="category"]:checked') as HTMLInputElement | null)?.value ?? '';
       const currentPlat = (document.querySelector('input[name="platform"]:checked') as HTMLInputElement | null)?.value ?? '';
 
-      const isExtensionRelevant = currentKind === 'extension' || currentCat === 'extension_bridge';
+      const isExtensionRelevant = currentKind === 'extension';
       const isIos = currentPlat === 'ios';
 
       if (pluginGroup) {
@@ -1070,7 +1102,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     // Initialize initial advisory and visibility state
     updateAppVersionAdvisory();
     updatePluginVersionAdvisory();
-    updatePluginVisibility();
+    updatePlatformVisibility();
 
     // Channel change listener: empty version, reset placeholder, close combobox, update advisory
     const channelRadios = document.querySelectorAll<HTMLInputElement>('input[name="releaseChannel"]');
@@ -1107,13 +1139,13 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     platRadios.forEach((r) => r.addEventListener('change', updatePluginVisibility));
 
     const catRadios = document.querySelectorAll<HTMLInputElement>('input[name="category"]');
-    catRadios.forEach((r) => r.addEventListener('change', updatePluginVisibility));
+    catRadios.forEach((r) => r.addEventListener('change', updatePlatformVisibility));
 
     // Delegated listener on form to catch all platform / category changes reliably
     form?.addEventListener('change', (e) => {
       const target = e.target as HTMLElement | null;
       if (target && (target.matches('input[name="platform"]') || target.matches('input[name="category"]') || target.matches('input[name="kind"]'))) {
-        updatePluginVisibility();
+        updatePlatformVisibility();
       }
     });
 
