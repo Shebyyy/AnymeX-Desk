@@ -572,7 +572,7 @@ Astro.response.headers.set(
     )}
     <header class="head">
       <VoteButton reportId={report.id} votes={report.votes} mine={mine} closed={!isLive} locked={isLocked} />
-      <div>
+      <div class="head-main">
         <h1>{report.title}</h1>
         <p class="meta-line">
           <span class="tag">{kindLabel(report.kind)}</span>
@@ -619,6 +619,32 @@ Astro.response.headers.set(
           </span>
         </p>
       </div>
+      {(canEdit || canModerate) && (
+        <div class="head-actions">
+          {canEdit && (
+            <button
+              type="button"
+              class="btn btn-sm btn-head-action"
+              id="toggle-edit-report-btn"
+              title="Edit report title, description, or details"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              <span>Edit</span>
+            </button>
+          )}
+          {canModerate && (
+            <button
+              type="button"
+              class="btn btn-sm btn-head-action btn-staff-pill active"
+              id="toggle-staff-panel-btn"
+              title="Toggle staff moderation controls"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span>Staff Controls</span>
+            </button>
+          )}
+        </div>
+      )}
     </header>
 
     <dl class="facts">
@@ -675,167 +701,429 @@ Astro.response.headers.set(
       )}
     </dl>
 
-    {report.body && (
-      <div class="body" set:html={bodyRich?.html ?? ''} />
-    )}
-    {(bodyRich?.previewUrls ?? []).map((u) => {
-      const p = linkPreviews.get(u);
-      if (!p) return null;
-      return (
-        <a class="link-preview-card" href={u} target="_blank" rel="noopener noreferrer nofollow">
-          {p.image && <img class="link-preview-thumb" src={p.image} alt="" loading="lazy" />}
-          <div class="link-preview-text">
-            {p.siteName && <span class="link-preview-site">{p.siteName}</span>}
-            {p.title && <span class="link-preview-title">{p.title}</span>}
-            {p.description && <span class="link-preview-desc">{p.description}</span>}
-          </div>
-        </a>
-      );
-    })}
-
-    {report.stepsToReproduce && (
-      <div class="steps">
-        <h2>Steps to reproduce</h2>
-        <div class="steps-body" set:html={stepsRich?.html ?? ''} />
-      </div>
-    )}
-    {(stepsRich?.previewUrls ?? []).map((u) => {
-      const p = linkPreviews.get(u);
-      if (!p) return null;
-      return (
-        <a class="link-preview-card" href={u} target="_blank" rel="noopener noreferrer nofollow">
-          {p.image && <img class="link-preview-thumb" src={p.image} alt="" loading="lazy" />}
-          <div class="link-preview-text">
-            {p.siteName && <span class="link-preview-site">{p.siteName}</span>}
-            {p.title && <span class="link-preview-title">{p.title}</span>}
-            {p.description && <span class="link-preview-desc">{p.description}</span>}
-          </div>
-        </a>
-      );
-    })}
-
-    {report.kind === 'extension' && (
-      <dl class="grid extension-details">
-        <div class="wide">
-          <dt class="label">Tested in native app</dt>
-          <dd>{report.testedNativeApp ? 'Yes — only occurs in AnymeX' : 'Not confirmed'}</dd>
-        </div>
-        {report.extensionNames && (() => {
-          const exts = parseExtensionEntries(report.extensionNames);
-          const hasAnyIssue = exts.some((e) => Boolean(e.issue));
-          return (
-            <div class="wide">
-              <dt class="label">Affected Extension(s)</dt>
-              <dd>
-                {hasAnyIssue ? (
-                  <div class="ext-detail-cards">
-                    {exts.map((e) => (
-                      <div class="ext-detail-card">
-                        <div class="ext-detail-header">
-                          <span class="ext-detail-name">{e.name}</span>
-                          {e.version && (
-                            <span class="ext-detail-ver">v{e.version.replace(/^v/i, '')}</span>
-                          )}
-                        </div>
-                        {e.issue && (
-                          <div class="ext-detail-issue">{e.issue}</div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div class="ext-chips-grid">
-                    {exts.map((e) => (
-                      <div class="ext-chip">
-                        <span class="ext-chip-name">{e.name}</span>
-                        {e.version && (
-                          <span class="ext-chip-ver">v{e.version.replace(/^v/i, '')}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </dd>
+    {/* ── Top-level Moderator controls (Mod+ only) ────────────────────── */}
+    {
+      canModerate && (
+        <section class="mod-top-panel" id="staff-controls-panel">
+          <div class="mod-panel-header">
+            <div class="mod-panel-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span>Staff Controls</span>
             </div>
-          );
-        })()}
-        {report.extensionRepo && (
-          <div class="wide">
-            <dt class="label">Extension repository</dt>
-            <dd><a href={report.extensionRepo} rel="noopener noreferrer nofollow">{report.extensionRepo}</a></dd>
+            <span class="mod-staff-badge">Moderator View</span>
           </div>
-        )}
-      </dl>
-    )}
 
-    {/* ── Attachments gallery ──────────────────────────────────────────── */}
-    {reportAttachments.length > 0 && (
-      <section class="attachments-section">
-        <h2>Attachments ({reportAttachments.length})</h2>
-        <div class="gallery">
-          {reportAttachments.map((att) => (
-            <div class="gallery-item" data-type={att.fileType}>
-              {att.fileType === 'image' ? (
-                <button
-                  type="button"
-                  class="gallery-preview-btn"
-                  data-lightbox-src={resolveAttUrl(att.filePath)}
-                  data-lightbox-type="image"
-                  data-lightbox-name={att.fileName}
-                  aria-label={`View ${att.fileName}`}
-                >
-                  <img
-                    src={resolveAttUrl(att.filePath)}
-                    alt={att.fileName}
-                    loading="lazy"
-                    class="gallery-img"
-                  />
-                  <span class="gallery-zoom-badge" aria-hidden="true">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                  </span>
-                </button>
-              ) : att.fileType === 'video' ? (
-                <div class="gallery-video-wrap">
-                  <video
-                    controls
-                    preload="metadata"
-                    class="gallery-video"
-                    poster={att.thumbnailPath ? `/${att.thumbnailPath}` : undefined}
-                    data-lightbox-src={resolveAttUrl(att.filePath)}
-                    data-lightbox-type="video"
-                    data-lightbox-name={att.fileName}
-                  >
-                    <source src={resolveAttUrl(att.filePath)} type={att.mimeType} />
-                    Your browser does not support the video element.
-                  </video>
+          <div class="mod-panel-body">
+            {/* Quick Status Bar */}
+            <form method="POST" class="mod-status-form">
+              <div class="mod-section-header">
+                <span class="mod-label">Change Status</span>
+                <span class="mod-hint">Move report to a new state</span>
+              </div>
+              <div class="field">
+                <input id="note" name="note" class="input input-sm" maxlength="500" placeholder="Optional status note (shown publicly and in notifications)..." />
+              </div>
+              <div class="mod-status-pills">
+                {STATUSES.map((st) => (
                   <button
-                    type="button"
-                    class="gallery-expand-btn"
-                    data-lightbox-src={resolveAttUrl(att.filePath)}
-                    data-lightbox-type="video"
-                    data-lightbox-name={att.fileName}
-                    aria-label={`Open ${att.fileName} in full screen lightbox`}
-                    title="Fullscreen in-app lightbox"
+                    class:list={['btn btn-sm mod-status-btn', { 'btn-status-active': st === report.status }]}
+                    type="submit"
+                    name="status"
+                    value={st}
+                    disabled={st === report.status}
+                    data-status={st}
                   >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                    {statusLabel(st, report.kind)}
                   </button>
-                </div>
-              ) : (
-                <a href={resolveAttUrl(att.filePath)} class="gallery-file" download={att.fileName}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                  <span>{att.fileName} ({(att.fileSize / 1024).toFixed(0)} KB)</span>
-                </a>
-              )}
-              <span class="gallery-label">
-                {att.fileName} ({(att.fileSize / 1024).toFixed(0)} KB)
-              </span>
+                ))}
+              </div>
+            </form>
+
+            {/* Lock / Unlock */}
+            <div class="mod-quick-row">
+              <div class="mod-lock-box">
+                <button
+                  class="btn btn-sm lock-btn"
+                  type="button"
+                  id="lock-toggle-btn"
+                  data-report-id={report.id}
+                  data-locked={report.locked ? 'true' : 'false'}>
+                  {report.locked ? (
+                    <>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+                      </svg>
+                      <span>Unlock report</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                      </svg>
+                      <span>Lock report</span>
+                    </>
+                  )}
+                </button>
+                <input
+                  id="lock-reason-input"
+                  class="input input-sm lock-reason-input"
+                  type="text"
+                  placeholder="Optional lock reason..."
+                  maxlength="500"
+                  style={report.locked ? 'display: none;' : ''}
+                />
+              </div>
             </div>
-          ))}
+
+            {/* Labels Manager */}
+            <div class="mod-labels-box">
+              <div class="mod-section-header">
+                <span class="mod-label">Labels</span>
+              </div>
+              <div class="mod-labels-current">
+                {currentLabels.length === 0 ? (
+                  <span class="mod-hint">No labels applied.</span>
+                ) : (
+                  currentLabels.map((l) => (
+                    <form method="POST" class="label-chip-form">
+                      <input type="hidden" name="intent" value="label_remove" />
+                      <input type="hidden" name="label_id" value={l.id} />
+                      <span class="tag label-badge" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color};`}>
+                        {l.name}
+                        <button class="label-remove-btn" type="submit" title={`Remove ${l.name}`}>×</button>
+                      </span>
+                    </form>
+                  ))
+                )}
+                {allLabels.filter((al) => !currentLabels.some((cl) => cl.id === al.id)).length > 0 && (
+                  <form method="POST" class="label-add-inline">
+                    <input type="hidden" name="intent" value="label_add" />
+                    <select name="label_id" class="select select-sm" required onchange="this.form.submit()">
+                      <option value="" disabled selected>+ Add label…</option>
+                      {allLabels
+                        .filter((al) => !currentLabels.some((cl) => cl.id === al.id))
+                        .map((l) => <option value={l.id}>{l.name}</option>)}
+                    </select>
+                  </form>
+                )}
+              </div>
+            </div>
+
+            {/* Collapsible details for Roadmap, Duplicate, and Danger Zone */}
+            <div class="mod-accordion-grid">
+              <details class="mod-sub-details">
+                <summary class="mod-sub-summary">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                  <span>Roadmap &amp; Milestone</span>
+                </summary>
+                <form method="POST" class="mod-sub-content">
+                  <input type="hidden" name="intent" value="roadmap" />
+                  <div class="field-row">
+                    <div class="field">
+                      <label class="label" for="roadmap-stage">Stage</label>
+                      <select id="roadmap-stage" name="roadmap_stage" class="select select-sm">
+                        <option value="" selected={!report.roadmapStage}>None (Not on roadmap)</option>
+                        {ROADMAP_STAGES.map((st) => (
+                          <option value={st} selected={st === report.roadmapStage}>
+                            {ROADMAP_STAGE_LABELS[st]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label class="label" for="milestone">Milestone</label>
+                      <input
+                        id="milestone"
+                        name="milestone"
+                        class="input input-sm"
+                        type="text"
+                        maxlength="32"
+                        placeholder="e.g. v2.4.0"
+                        value={report.milestone ?? ''}
+                      />
+                    </div>
+                  </div>
+                  <button class="btn btn-sm" type="submit">Update roadmap</button>
+                </form>
+              </details>
+
+              {report.status !== 'duplicate' && (
+                <details class="mod-sub-details">
+                  <summary class="mod-sub-summary">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    <span>Mark as Duplicate</span>
+                  </summary>
+                  <form method="POST" class="mod-sub-content">
+                    <div class="field-row">
+                      <input class="input input-sm num" name="duplicate_of" type="number" inputmode="numeric" placeholder="Target Report #" min="1" required />
+                      <button class="btn btn-sm" type="submit">Mark duplicate</button>
+                    </div>
+                  </form>
+                </details>
+              )}
+
+              <details class="mod-sub-details mod-danger-details">
+                <summary class="mod-sub-summary text-danger">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                  <span>Danger Zone: Delete Report</span>
+                </summary>
+                <div class="mod-sub-content">
+                  <p class="mod-hint">Permanently delete this report and all its votes, comments, and attachments. Cannot be undone.</p>
+                  <button class="btn btn-danger btn-sm" type="button" id="delete-btn">Delete report permanently</button>
+                </div>
+              </details>
+            </div>
+          </div>
+        </section>
+      )
+    }
+
+    {/* ── Top-level In-place Edit report ─────────────────────────────── */}
+    {canEdit && (
+      <section class="edit-top-panel" id="report-edit-panel" style="display: none;">
+        <div class="edit-panel-header">
+          <div class="edit-panel-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            <span>Editing Report</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="cancel-edit-btn">Cancel</button>
         </div>
+        <form method="POST" class="edit-form">
+          <input type="hidden" name="intent" value="edit" />
+
+          <div class="field">
+            <label class="label" for="edit-title">Title</label>
+            <input
+              id="edit-title"
+              name="title"
+              class="input"
+              type="text"
+              required
+              maxlength="200"
+              value={report.title}
+            />
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label class="label" for="edit-category">Category</label>
+              <select id="edit-category" name="category" class="select">
+                {categories.map((c) => (
+                  <option value={c} selected={c === report.category}>{CATEGORY_LABELS[c] ?? c}</option>
+                ))}
+              </select>
+            </div>
+            <div class="field">
+              <label class="label" for="edit-platform">Platform</label>
+              <select id="edit-platform" name="platform" class="select">
+                {(['android','ios','windows','macos','linux','all'] as const).map((p) => (
+                  <option value={p} selected={p === report.platform}>{PLATFORM_LABELS[p]}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="label" for="edit-body">Description</label>
+            <textarea
+              id="edit-body"
+              name="body"
+              class="textarea"
+              rows="6"
+              maxlength="5000"
+            >{report.body ?? ''}</textarea>
+          </div>
+
+          {report.kind === 'bug' && (
+            <div class="field">
+              <label class="label" for="edit-steps">Steps to reproduce</label>
+              <textarea
+                id="edit-steps"
+                name="stepsToReproduce"
+                class="textarea"
+                rows="4"
+                maxlength="5000"
+              >{report.stepsToReproduce ?? ''}</textarea>
+            </div>
+          )}
+
+          <div class="edit-form-foot">
+            <p class="mod-hint">Changes are recorded in the audit trail.</p>
+            <div class="edit-actions">
+              <button type="button" class="btn btn-ghost btn-sm" id="cancel-edit-btn-foot">Cancel</button>
+              <button class="btn btn-primary btn-sm" type="submit">Save changes</button>
+            </div>
+          </div>
+        </form>
       </section>
     )}
+
+    {/* ── Main report view content (toggled off when editing) ────────── */}
+    <div class="report-view-content" id="report-view-content">
+      {report.body && (
+        <div class="body" set:html={bodyRich?.html ?? ''} />
+      )}
+      {(bodyRich?.previewUrls ?? []).map((u) => {
+        const p = linkPreviews.get(u);
+        if (!p) return null;
+        return (
+          <a class="link-preview-card" href={u} target="_blank" rel="noopener noreferrer nofollow">
+            {p.image && <img class="link-preview-thumb" src={p.image} alt="" loading="lazy" />}
+            <div class="link-preview-text">
+              {p.siteName && <span class="link-preview-site">{p.siteName}</span>}
+              {p.title && <span class="link-preview-title">{p.title}</span>}
+              {p.description && <span class="link-preview-desc">{p.description}</span>}
+            </div>
+          </a>
+        );
+      })}
+
+      {report.stepsToReproduce && (
+        <div class="steps">
+          <h2>Steps to reproduce</h2>
+          <div class="steps-body" set:html={stepsRich?.html ?? ''} />
+        </div>
+      )}
+      {(stepsRich?.previewUrls ?? []).map((u) => {
+        const p = linkPreviews.get(u);
+        if (!p) return null;
+        return (
+          <a class="link-preview-card" href={u} target="_blank" rel="noopener noreferrer nofollow">
+            {p.image && <img class="link-preview-thumb" src={p.image} alt="" loading="lazy" />}
+            <div class="link-preview-text">
+              {p.siteName && <span class="link-preview-site">{p.siteName}</span>}
+              {p.title && <span class="link-preview-title">{p.title}</span>}
+              {p.description && <span class="link-preview-desc">{p.description}</span>}
+            </div>
+          </a>
+        );
+      })}
+
+      {report.kind === 'extension' && (
+        <dl class="grid extension-details">
+          <div class="wide">
+            <dt class="label">Tested in native app</dt>
+            <dd>{report.testedNativeApp ? 'Yes — only occurs in AnymeX' : 'Not confirmed'}</dd>
+          </div>
+          {report.extensionNames && (() => {
+            const exts = parseExtensionEntries(report.extensionNames);
+            const hasAnyIssue = exts.some((e) => Boolean(e.issue));
+            return (
+              <div class="wide">
+                <dt class="label">Affected Extension(s)</dt>
+                <dd>
+                  {hasAnyIssue ? (
+                    <div class="ext-detail-cards">
+                      {exts.map((e) => (
+                        <div class="ext-detail-card">
+                          <div class="ext-detail-header">
+                            <span class="ext-detail-name">{e.name}</span>
+                            {e.version && (
+                              <span class="ext-detail-ver">v{e.version.replace(/^v/i, '')}</span>
+                            )}
+                          </div>
+                          {e.issue && (
+                            <div class="ext-detail-issue">{e.issue}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div class="ext-chips-grid">
+                      {exts.map((e) => (
+                        <div class="ext-chip">
+                          <span class="ext-chip-name">{e.name}</span>
+                          {e.version && (
+                            <span class="ext-chip-ver">v{e.version.replace(/^v/i, '')}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </dd>
+              </div>
+            );
+          })()}
+          {report.extensionRepo && (
+            <div class="wide">
+              <dt class="label">Extension repository</dt>
+              <dd><a href={report.extensionRepo} rel="noopener noreferrer nofollow">{report.extensionRepo}</a></dd>
+            </div>
+          )}
+        </dl>
+      )}
+
+      {/* ── Attachments gallery ──────────────────────────────────────────── */}
+      {reportAttachments.length > 0 && (
+        <section class="attachments-section">
+          <h2>Attachments ({reportAttachments.length})</h2>
+          <div class="gallery">
+            {reportAttachments.map((att) => (
+              <div class="gallery-item" data-type={att.fileType}>
+                {att.fileType === 'image' ? (
+                  <button
+                    type="button"
+                    class="gallery-preview-btn"
+                    data-lightbox-src={resolveAttUrl(att.filePath)}
+                    data-lightbox-type="image"
+                    data-lightbox-name={att.fileName}
+                    aria-label={`View ${att.fileName}`}
+                  >
+                    <img
+                      src={resolveAttUrl(att.filePath)}
+                      alt={att.fileName}
+                      loading="lazy"
+                      class="gallery-img"
+                    />
+                    <span class="gallery-zoom-badge" aria-hidden="true">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                    </span>
+                  </button>
+                ) : att.fileType === 'video' ? (
+                  <div class="gallery-video-wrap">
+                    <video
+                      controls
+                      preload="metadata"
+                      class="gallery-video"
+                      poster={att.thumbnailPath ? `/${att.thumbnailPath}` : undefined}
+                      data-lightbox-src={resolveAttUrl(att.filePath)}
+                      data-lightbox-type="video"
+                      data-lightbox-name={att.fileName}
+                    >
+                      <source src={resolveAttUrl(att.filePath)} type={att.mimeType} />
+                      Your browser does not support the video element.
+                    </video>
+                    <button
+                      type="button"
+                      class="gallery-expand-btn"
+                      data-lightbox-src={resolveAttUrl(att.filePath)}
+                      data-lightbox-type="video"
+                      data-lightbox-name={att.fileName}
+                      aria-label={`Open ${att.fileName} in full screen lightbox`}
+                      title="Fullscreen in-app lightbox"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                    </button>
+                  </div>
+                ) : (
+                  <a href={resolveAttUrl(att.filePath)} class="gallery-file" download={att.fileName}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                    <span>{att.fileName} ({(att.fileSize / 1024).toFixed(0)} KB)</span>
+                  </a>
+                )}
+                <span class="gallery-label">
+                  {att.fileName} ({(att.fileSize / 1024).toFixed(0)} KB)
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
 
     {/* ── Comments section ─────────────────────────────────────────────── */}
     <section class="comments-section">
@@ -1118,224 +1406,7 @@ Astro.response.headers.set(
       )}
     </section>
 
-    {/* ── Edit report (reporter on live report, or mod always) ─────────── */}
-    {canEdit && (
-      <details class="edit-section">
-        <summary class="edit-summary">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          Edit report
-        </summary>
-        <form method="POST" class="edit-form">
-          <input type="hidden" name="intent" value="edit" />
-
-          <div class="field">
-            <label class="label" for="edit-title">Title</label>
-            <input
-              id="edit-title"
-              name="title"
-              class="input"
-              type="text"
-              required
-              maxlength="200"
-              value={report.title}
-            />
-          </div>
-
-          <div class="field">
-            <label class="label" for="edit-body">Description</label>
-            <textarea
-              id="edit-body"
-              name="body"
-              class="textarea"
-              rows="5"
-              maxlength="5000"
-            >{report.body ?? ''}</textarea>
-          </div>
-
-          {report.kind === 'bug' && (
-            <div class="field">
-              <label class="label" for="edit-steps">Steps to reproduce</label>
-              <textarea
-                id="edit-steps"
-                name="stepsToReproduce"
-                class="textarea"
-                rows="4"
-                maxlength="5000"
-              >{report.stepsToReproduce ?? ''}</textarea>
-            </div>
-          )}
-
-          <div class="field-row">
-            <div class="field">
-              <label class="label" for="edit-category">Category</label>
-              <select id="edit-category" name="category" class="select">
-                {categories.map((c) => (
-                  <option value={c} selected={c === report.category}>{CATEGORY_LABELS[c] ?? c}</option>
-                ))}
-              </select>
-            </div>
-            <div class="field">
-              <label class="label" for="edit-platform">Platform</label>
-              <select id="edit-platform" name="platform" class="select">
-                {(['android','ios','windows','macos','linux','all'] as const).map((p) => (
-                  <option value={p} selected={p === report.platform}>{PLATFORM_LABELS[p]}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div class="edit-form-foot">
-            <p class="mod-hint">Changes are logged in the audit trail.</p>
-            <button class="btn btn-primary" type="submit">Save changes</button>
-          </div>
-        </form>
-      </details>
-    )}
-
-    {/* ── Moderator controls ──────────────────────────────────────────── */}
-    {
-      canModerate && (
-        <section class="mod">
-          {/* Lock / Unlock — manual toggle, independent of status. Locking
-              freezes comments, reactions, edits, attachments, and voting for members. */}
-          <div class="mod-lock-box">
-            <div class="mod-lock-row">
-              <button
-                class="btn lock-btn"
-                type="button"
-                id="lock-toggle-btn"
-                data-report-id={report.id}
-                data-locked={report.locked ? 'true' : 'false'}>
-                {report.locked ? (
-                  <>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                      <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
-                    </svg>
-                    <span>Unlock report</span>
-                  </>
-                ) : (
-                  <>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                      <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                    </svg>
-                    <span>Lock report</span>
-                  </>
-                )}
-              </button>
-              <input
-                id="lock-reason-input"
-                class="input lock-reason-input"
-                type="text"
-                placeholder="Optional lock reason..."
-                maxlength="500"
-                style={report.locked ? 'display: none;' : ''}
-              />
-            </div>
-            <span class="mod-hint">Freezes comments, reactions, edits, attachments, and voting for members.</span>
-          </div>
-
-          <form method="POST">
-            <p class="mod-label">Move this report</p>
-            <div class="field">
-              <label class="label" for="note">Reason</label>
-              <textarea id="note" name="note" class="textarea" rows="2" maxlength="500" placeholder="Optional — shown on the report and in notifications"></textarea>
-            </div>
-            <div class="mod-row">
-              {STATUSES.filter((st) => st !== report.status).map((st) => (
-                <button class="btn" type="submit" name="status" value={st}>
-                  {statusLabel(st, report.kind)}
-                </button>
-              ))}
-            </div>
-            <p class="mod-hint">Marking it fixed announces it to Discord if a webhook is set, once.</p>
-          </form>
-
-          <div class="mod-extra">
-            <p class="mod-label">Labels / tags</p>
-            <div class="mod-labels-current">
-              {currentLabels.length === 0 ? (
-                <span class="mod-hint">No labels applied yet.</span>
-              ) : (
-                currentLabels.map((l) => (
-                  <form method="POST" class="label-chip-form">
-                    <input type="hidden" name="intent" value="label_remove" />
-                    <input type="hidden" name="label_id" value={l.id} />
-                    <span class="tag label-badge" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color};`}>
-                      {l.name}
-                      <button class="label-remove-btn" type="submit" title={`Remove ${l.name}`}>×</button>
-                    </span>
-                  </form>
-                ))
-              )}
-            </div>
-            {allLabels.filter((al) => !currentLabels.some((cl) => cl.id === al.id)).length > 0 && (
-              <form method="POST" class="mod-row" style="margin-block-start: var(--space-2);">
-                <input type="hidden" name="intent" value="label_add" />
-                <select name="label_id" class="select" required>
-                  <option value="" disabled selected>Select label to add…</option>
-                  {allLabels
-                    .filter((al) => !currentLabels.some((cl) => cl.id === al.id))
-                    .map((l) => <option value={l.id}>{l.name}</option>)}
-                </select>
-                <button class="btn" type="submit">Add label</button>
-              </form>
-            )}
-          </div>
-
-          {report.status !== 'duplicate' && (
-            <form method="POST" class="mod-extra">
-              <p class="mod-label">Mark as duplicate</p>
-              <div class="mod-row">
-                <input class="input num" name="duplicate_of" type="number" inputmode="numeric" placeholder="Report #" min="1" />
-                <button class="btn" type="submit">Mark duplicate</button>
-              </div>
-              <p class="mod-hint">Enter the report id this is a duplicate of. The reporter and voters will be notified.</p>
-            </form>
-          )}
-
-          <form method="POST" class="mod-extra">
-            <input type="hidden" name="intent" value="roadmap" />
-            <p class="mod-label">Roadmap &amp; Milestone</p>
-            <div class="field-row">
-              <div class="field">
-                <label class="label" for="roadmap-stage">Stage</label>
-                <select id="roadmap-stage" name="roadmap_stage" class="select">
-                  <option value="" selected={!report.roadmapStage}>None (Not on roadmap)</option>
-                  {ROADMAP_STAGES.map((st) => (
-                    <option value={st} selected={st === report.roadmapStage}>
-                      {ROADMAP_STAGE_LABELS[st]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div class="field">
-                <label class="label" for="milestone">Target Release / Milestone</label>
-                <input
-                  id="milestone"
-                  name="milestone"
-                  class="input"
-                  type="text"
-                  maxlength="32"
-                  placeholder="e.g. v2.4.0"
-                  value={report.milestone ?? ''}
-                />
-              </div>
-            </div>
-            <div class="mod-row" style="margin-block-start: var(--space-2);">
-              <button class="btn" type="submit">Update roadmap</button>
-            </div>
-          </form>
-
-          <div class="mod-extra mod-danger">
-            <p class="mod-label">Danger zone</p>
-            <p class="mod-hint">Permanently delete this report and all its votes, comments, and attachments. This cannot be undone.</p>
-            <button class="btn btn-danger" type="button" id="delete-btn">Delete report</button>
-          </div>
-        </section>
-      )
-    }
+    {/* Edit report and Moderator controls are placed at the top of the report */}
   </article>
 
   <MediaLightbox />
@@ -1847,6 +1918,44 @@ Astro.response.headers.set(
       lockBtn.disabled = false;
     }
   });
+
+  // ── In-place Edit Report Toggle ──────────────────────────────────────
+  const editToggleBtn = document.getElementById('toggle-edit-report-btn');
+  const editPanel = document.getElementById('report-edit-panel');
+  const reportViewContent = document.getElementById('report-view-content');
+  const cancelEditBtn = document.getElementById('cancel-edit-btn');
+  const cancelEditBtnFoot = document.getElementById('cancel-edit-btn-foot');
+
+  function openEdit() {
+    if (editPanel) editPanel.style.display = 'block';
+    if (reportViewContent) reportViewContent.style.display = 'none';
+    editPanel?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    (document.getElementById('edit-title') as HTMLInputElement | null)?.focus();
+    editToggleBtn?.classList.add('active');
+  }
+
+  function closeEdit() {
+    if (editPanel) editPanel.style.display = 'none';
+    if (reportViewContent) reportViewContent.style.display = 'block';
+    editToggleBtn?.classList.remove('active');
+  }
+
+  editToggleBtn?.addEventListener('click', () => {
+    if (editPanel?.style.display === 'none') openEdit();
+    else closeEdit();
+  });
+  cancelEditBtn?.addEventListener('click', closeEdit);
+  cancelEditBtnFoot?.addEventListener('click', closeEdit);
+
+  // ── Staff Controls Panel Toggle ──────────────────────────────────────
+  const staffToggleBtn = document.getElementById('toggle-staff-panel-btn');
+  const staffPanel = document.getElementById('staff-controls-panel');
+  staffToggleBtn?.addEventListener('click', () => {
+    if (!staffPanel) return;
+    const isHidden = staffPanel.style.display === 'none';
+    staffPanel.style.display = isHidden ? 'block' : 'none';
+    staffToggleBtn.classList.toggle('active', isHidden);
+  });
 </script>
 
 <style>
@@ -1951,7 +2060,217 @@ Astro.response.headers.set(
     font-size: var(--text-sm);
     color: var(--text-primary);
   }
-  .head { display: flex; align-items: flex-start; gap: var(--space-4); }
+  .head {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+    position: relative;
+  }
+  .head-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .head-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    margin-inline-start: auto;
+  }
+  .btn-head-action {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--border-default);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--dur-fast) var(--ease-standard);
+  }
+  .btn-head-action:hover {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+  }
+  .btn-head-action.active {
+    border-color: var(--signal);
+    background: var(--signal-fill);
+    color: var(--signal-ink);
+  }
+  .btn-staff-pill {
+    border-color: color-mix(in srgb, var(--signal, #5865f2) 30%, transparent);
+  }
+  .btn-staff-pill svg {
+    color: var(--signal, #5865f2);
+  }
+
+  /* ── Top Staff Controls Panel ── */
+  .mod-top-panel {
+    margin-block: var(--space-4);
+    border: 1px solid color-mix(in srgb, var(--signal, #5865f2) 30%, var(--border-default));
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--surface-raised) 92%, var(--signal, #5865f2) 8%);
+    overflow: hidden;
+  }
+  .mod-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-4);
+    background: color-mix(in srgb, var(--surface-raised) 80%, var(--signal, #5865f2) 20%);
+    border-block-end: 1px solid color-mix(in srgb, var(--signal, #5865f2) 20%, var(--border-subtle));
+  }
+  .mod-panel-title {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-weight: 600;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+  .mod-panel-title svg {
+    color: var(--signal, #5865f2);
+  }
+  .mod-staff-badge {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--signal, #5865f2) 20%, transparent);
+    color: var(--signal, #5865f2);
+    border: 1px solid color-mix(in srgb, var(--signal, #5865f2) 35%, transparent);
+  }
+  .mod-panel-body {
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .mod-section-header {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin-block-end: var(--space-2);
+  }
+  .mod-status-pills {
+    display: flex;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+    margin-block-start: var(--space-2);
+  }
+  .mod-status-btn {
+    border-radius: var(--radius-full);
+    font-size: var(--text-xs);
+    padding: 3px 10px;
+  }
+  .btn-status-active {
+    background: var(--signal);
+    color: #fff !important;
+    border-color: var(--signal);
+    font-weight: 600;
+  }
+  .mod-quick-row {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+    flex-wrap: wrap;
+    padding-block-start: var(--space-2);
+    border-block-start: 1px solid var(--border-subtle);
+  }
+  .mod-labels-box {
+    padding-block-start: var(--space-2);
+    border-block-start: 1px solid var(--border-subtle);
+  }
+  .label-add-inline {
+    display: inline-flex;
+    margin-inline-start: var(--space-1);
+  }
+  .mod-accordion-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-block-start: var(--space-2);
+    border-block-start: 1px solid var(--border-subtle);
+  }
+  .mod-sub-details {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
+    overflow: hidden;
+  }
+  .mod-sub-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-xs);
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+  .mod-sub-summary::-webkit-details-marker { display: none; }
+  .mod-sub-summary:hover {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+  }
+  .mod-sub-details[open] .mod-sub-summary {
+    border-block-end: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+  }
+  .mod-sub-content {
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .mod-danger-details {
+    border-color: color-mix(in srgb, var(--dead, #ed4245) 25%, var(--border-subtle));
+  }
+  .text-danger {
+    color: var(--dead, #ed4245);
+  }
+  .text-danger svg {
+    color: var(--dead, #ed4245);
+  }
+
+  /* ── Top In-Place Edit Panel ── */
+  .edit-top-panel {
+    margin-block: var(--space-4);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    overflow: hidden;
+  }
+  .edit-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-4);
+    border-block-end: 1px solid var(--border-subtle);
+    background: var(--surface-inset);
+  }
+  .edit-panel-title {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-weight: 600;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+  .edit-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
   h1 { font-size: var(--text-xl); letter-spacing: var(--track-tight); }
   .meta-line {
     margin-block-start: var(--space-1);

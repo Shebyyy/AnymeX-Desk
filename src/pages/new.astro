@@ -85,6 +85,10 @@ if (Astro.request.method === 'POST') {
   const testedNativeApp = form.get('testedNativeApp') === 'on';
   const extensionRepo = String(form.get('extensionRepo') ?? '').trim().slice(0, 2000);
 
+  const rawFiles = form.getAll('files').filter((f): f is File => f instanceof File && f.size > 0);
+  const declaredAttachments = form.get('attachmentCount') ? Number(form.get('attachmentCount')) : null;
+  const attachmentCount = declaredAttachments !== null ? declaredAttachments : rawFiles.length;
+
   // Dynamic extension cards (name + version + issue description)
   const rawExtNames = form.getAll('extensionName').map((v) => String(v).trim());
   const rawExtVers = form.getAll('extensionVersion').map((v) => String(v).trim());
@@ -192,6 +196,18 @@ if (Astro.request.method === 'POST') {
     error = 'Add at least one affected extension with its version and problem description.';
   } else if (kind !== 'extension' && !body) {
     error = kind === 'suggestion' ? 'Describe your suggestion.' : 'Describe the bug.';
+  } else if ((kind === 'bug' || kind === 'extension') && !appVersion) {
+    error = 'App version is required.';
+  } else if (kind === 'bug' && !stepsToReproduce) {
+    error = 'Steps to reproduce are required for bug reports.';
+  } else if (kind === 'extension' && platform !== 'ios' && !pluginVersion) {
+    error = 'Extension Runtime Bridge (Plugin) version is required.';
+  } else if (kind === 'extension' && !extensionRepo) {
+    error = 'Extension repository URL is required.';
+  } else if ((kind === 'bug' || kind === 'extension') && attachmentCount < 1) {
+    error = kind === 'extension'
+      ? 'At least one attachment is required (side-by-side comparison showing native app vs AnymeX).'
+      : 'At least one attachment (screenshot, recording, or log file) is required.';
   } else if (await overFilingLimit(user.id)) {
     error = FILING_COOLDOWN_MESSAGE;
   } else {
@@ -463,42 +479,52 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     )}
     {kindLocked && <input type="hidden" name="kind" value={activeKind} />}
 
-    {/* Step {kindLocked ? 1 : 2}: Category */}
+    {/* Step {kindLocked ? 1 : 2}: Category & Platform */}
     <section class="step">
-      <h2 class="step-h"><span class="step-n">{kindLocked ? 1 : 2}</span> {CATEGORY_STEP_LABELS[activeKind]}</h2>
-      <div class="segmented cats">
-        {categories.map((c) => (
-          <label class:active={shown.category === c}>
-            <input class="sr-only" type="radio" name="category" value={c} checked={shown.category === c} required />
-            <span>{CATEGORY_LABELS[c] ?? c}</span>
+      <h2 class="step-h"><span class="step-n">{kindLocked ? 1 : 2}</span> {CATEGORY_STEP_LABELS[activeKind]} &amp; Platform</h2>
+      <div class="field-row">
+        <div class="field">
+          <label class="label" for="category-select">
+            {CATEGORY_STEP_LABELS[activeKind]} <span class="required-star">*</span>
           </label>
-        ))}
+          <select id="category-select" name="category" class="select" required>
+            <option value="" disabled selected={!shown.category}>Select {CATEGORY_STEP_LABELS[activeKind].toLowerCase()}...</option>
+            {categories.map((c) => (
+              <option value={c} selected={shown.category === c}>
+                {CATEGORY_LABELS[c] ?? c}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="label" for="platform-select">
+            Platform <span class="required-star">*</span>
+          </label>
+          <select id="platform-select" name="platform" class="select" required>
+            <option value="" disabled selected={!shown.platform}>Select platform...</option>
+            {PLATFORMS.map((p) => {
+              const isIosHidden = activeKind === 'extension' && p === 'ios' && (NON_IOS_EXTENSION_SOURCES as readonly string[]).includes(shown.category);
+              return (
+                <option
+                  value={p}
+                  selected={shown.platform === p}
+                  disabled={isIosHidden}
+                  hidden={isIosHidden}
+                  data-platform={p}
+                >
+                  {PLATFORM_LABELS[p]}
+                </option>
+              );
+            })}
+          </select>
+        </div>
       </div>
     </section>
 
-    {/* Step {kindLocked ? 2 : 3}: Platform */}
+    {/* Step {kindLocked ? 2 : 3}: Details */}
     <section class="step">
-      <h2 class="step-h"><span class="step-n">{kindLocked ? 2 : 3}</span> Platform</h2>
-      <div class="segmented plats">
-        {PLATFORMS.map((p) => {
-          const isIosHidden = activeKind === 'extension' && p === 'ios' && (NON_IOS_EXTENSION_SOURCES as readonly string[]).includes(shown.category);
-          return (
-            <label
-              class:active={shown.platform === p}
-              data-platform={p}
-              style={isIosHidden ? 'display: none;' : ''}
-            >
-              <input class="sr-only" type="radio" name="platform" value={p} checked={shown.platform === p} required={!isIosHidden} />
-              <span>{PLATFORM_LABELS[p]}</span>
-            </label>
-          );
-        })}
-      </div>
-    </section>
-
-    {/* Step {kindLocked ? 3 : 4}: Details */}
-    <section class="step">
-      <h2 class="step-h"><span class="step-n">{kindLocked ? 3 : 4}</span> Details</h2>
+      <h2 class="step-h"><span class="step-n">{kindLocked ? 2 : 3}</span> Details</h2>
 
       {shown.kind === 'extension' && (
         <div class="field checkbox-field">
@@ -544,7 +570,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       {activeKind !== 'suggestion' && (
         <>
           <div class="field">
-            <label class="label">Release channel</label>
+            <label class="label">Release channel <span class="required-star">*</span></label>
             <div class="segmented channel-segmented" role="radiogroup">
               <label class:active={shown.releaseChannel !== 'beta'}>
                 <input class="sr-only" type="radio" name="releaseChannel" value="stable" checked={shown.releaseChannel !== 'beta'} />
@@ -559,7 +585,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           </div>
 
           <div class="field">
-            <label class="label" for="appVersion">App version</label>
+            <label class="label" for="appVersion">App version <span class="required-star">*</span></label>
             <div class="custom-combobox" id="app-combobox">
               <div class="combobox-input-wrap">
                 <input
@@ -568,6 +594,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
                   name="appVersion"
                   type="text"
                   maxlength="32"
+                  required
                   value={shown.appVersion}
                   placeholder={shown.releaseChannel === 'beta' ? 'e.g. 3.1.6+4-beta' : 'e.g. 3.1.7'}
                   autocomplete="off"
@@ -605,7 +632,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
             class="field"
             style={activeKind === 'extension' && shown.platform !== 'ios' ? '' : 'display: none;'}
           >
-            <label class="label" for="pluginVersion">Extension Runtime Bridge (Plugin) version</label>
+            <label class="label" for="pluginVersion">Extension Runtime Bridge (Plugin) version <span class="required-star">*</span></label>
             <div class="custom-combobox" id="plugin-combobox">
               <div class="combobox-input-wrap">
                 <input
@@ -650,7 +677,8 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
             class="ios-plugin-note"
             style={activeKind === 'extension' && shown.platform === 'ios' ? '' : 'display: none;'}
           >
-            ℹ️ iOS does not use the extension runtime bridge plugin.
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align: -2px; margin-right: 4px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            iOS does not use the extension runtime bridge plugin.
           </div>
         </>
       )}
@@ -766,17 +794,20 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
 
       {shown.kind === 'extension' && (
         <div class="field">
-          <label class="label" for="extensionRepo">Extension repository</label>
+          <label class="label" for="extensionRepo">
+            Extension repository <span class="required-star">*</span>
+          </label>
           <input
             class="input"
             id="extensionRepo"
             name="extensionRepo"
             type="text"
             maxlength="2000"
+            required
             value={shown.extensionRepo}
             placeholder="Paste the extension repository URL"
           />
-          <p class="field-hint">Optional.</p>
+          <p class="field-hint">Link to the extension source repository.</p>
         </div>
       )}
 
@@ -803,26 +834,33 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
 
       {shown.kind === 'bug' && (
         <div class="field">
-          <label class="label" for="stepsToReproduce">Steps to reproduce</label>
+          <label class="label" for="stepsToReproduce">
+            Steps to reproduce <span class="required-star">*</span>
+          </label>
           <textarea
             class="textarea"
             id="stepsToReproduce"
             name="stepsToReproduce"
             rows="3"
             maxlength="5000"
+            required
             placeholder="1. Open the app&#10;2. Go to...&#10;3. Tap on..."
           >{shown.stepsToReproduce}</textarea>
-          <p class="field-hint">Optional, but the most useful thing you can include for a bug.</p>
+          <p class="field-hint">Describe step-by-step how to reproduce the bug.</p>
         </div>
       )}
     </section>
 
-    {/* Step {kindLocked ? 4 : 5}: Attachments */}
+    {/* Step {kindLocked ? 3 : 4}: Attachments */}
     <section class="step">
-      <h2 class="step-h"><span class="step-n">{kindLocked ? 4 : 5}</span> Attachments</h2>
+      <h2 class="step-h"><span class="step-n">{kindLocked ? 3 : 4}</span> Attachments {(activeKind === 'bug' || activeKind === 'extension') && <span class="required-star">*</span>}</h2>
       <p class="field-hint">
-        Any file type is accepted — images (JPG, PNG, WebP, GIF, HEIC, AVIF) up to 5 MB, videos (MP4, WebM) up to 50 MB, other files up to 50 MB. Up to 10 attachments per report. You can also add more after submitting.
-        {shown.kind === 'extension' && ' A screenshot from the native app alongside one from AnymeX helps a lot.'}
+        {activeKind === 'extension'
+          ? 'At least 1 attachment is required (side-by-side screenshots/videos showing the extension working in its native app vs failing in AnymeX).'
+          : activeKind === 'bug'
+            ? 'At least 1 attachment is required (screenshot, recording, or log file demonstrating the bug).'
+            : 'Attachments are optional for suggestions.'}
+        {' '}Any file type is accepted — images (JPG, PNG, WebP, GIF, HEIC, AVIF) up to 5 MB, videos (MP4, WebM) up to 50 MB, other files up to 50 MB. Up to 10 attachments per report.
       </p>
       <div class="upload-area" id="upload-area">
         <label class="upload-dropzone" for="file-input">
@@ -1168,11 +1206,23 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
 
     function updatePlatformVisibility() {
       const currentKind = getSelectedKind();
-      const currentCat = (document.querySelector('input[name="category"]:checked') as HTMLInputElement | null)?.value ?? '';
+      const catSelect = document.querySelector('select[name="category"]') as HTMLSelectElement | null;
+      const platSelect = document.querySelector('select[name="platform"]') as HTMLSelectElement | null;
+
+      const currentCat = catSelect ? catSelect.value : ((document.querySelector('input[name="category"]:checked') as HTMLInputElement | null)?.value ?? '');
+      const iosOption = platSelect ? (platSelect.querySelector('option[data-platform="ios"]') as HTMLOptionElement | null) : null;
       const iosLabel = document.querySelector('label[data-platform="ios"]') as HTMLLabelElement | null;
       const iosRadio = document.querySelector('input[name="platform"][value="ios"]') as HTMLInputElement | null;
 
       const hideIos = currentKind === 'extension' && NON_IOS_SOURCES.includes(currentCat);
+
+      if (iosOption) {
+        iosOption.disabled = hideIos;
+        iosOption.hidden = hideIos;
+        if (hideIos && platSelect && platSelect.value === 'ios') {
+          platSelect.value = '';
+        }
+      }
 
       if (iosLabel) {
         iosLabel.style.display = hideIos ? 'none' : '';
@@ -1188,14 +1238,20 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
 
     function updatePluginVisibility() {
       const currentKind = getSelectedKind();
-      const currentCat = (document.querySelector('input[name="category"]:checked') as HTMLInputElement | null)?.value ?? '';
-      const currentPlat = (document.querySelector('input[name="platform"]:checked') as HTMLInputElement | null)?.value ?? '';
+      const catSelect = document.querySelector('select[name="category"]') as HTMLSelectElement | null;
+      const platSelect = document.querySelector('select[name="platform"]') as HTMLSelectElement | null;
+
+      const currentCat = catSelect ? catSelect.value : ((document.querySelector('input[name="category"]:checked') as HTMLInputElement | null)?.value ?? '');
+      const currentPlat = platSelect ? platSelect.value : ((document.querySelector('input[name="platform"]:checked') as HTMLInputElement | null)?.value ?? '');
 
       const isExtensionRelevant = currentKind === 'extension';
       const isIos = currentPlat === 'ios';
 
       if (pluginGroup) {
         pluginGroup.style.display = isExtensionRelevant && !isIos ? '' : 'none';
+      }
+      if (pluginVerInput) {
+        pluginVerInput.required = isExtensionRelevant && !isIos;
       }
       if (iosPluginNote) {
         iosPluginNote.style.display = isExtensionRelevant && isIos ? '' : 'none';
@@ -1301,10 +1357,16 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     const catRadios = document.querySelectorAll<HTMLInputElement>('input[name="category"]');
     catRadios.forEach((r) => r.addEventListener('change', updatePlatformVisibility));
 
+    const catSelectEl = document.getElementById('category-select');
+    catSelectEl?.addEventListener('change', updatePlatformVisibility);
+
+    const platSelectEl = document.getElementById('platform-select');
+    platSelectEl?.addEventListener('change', updatePluginVisibility);
+
     // Delegated listener on form to catch all platform / category changes reliably
     form?.addEventListener('change', (e) => {
       const target = e.target as HTMLElement | null;
-      if (target && (target.matches('input[name="platform"]') || target.matches('input[name="category"]') || target.matches('input[name="kind"]'))) {
+      if (target && (target.matches('input[name="platform"], select[name="platform"]') || target.matches('input[name="category"], select[name="category"]') || target.matches('input[name="kind"]'))) {
         updatePlatformVisibility();
       }
     });
@@ -1564,6 +1626,17 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
         alert('Cannot submit bug report: your reported app version is outdated. Please update your app or test on the latest release before filing a bug report.');
         return;
       }
+
+      const activeKindValue = getSelectedKind();
+      if ((activeKindValue === 'bug' || activeKindValue === 'extension') && selectedFiles.length === 0) {
+        alert(activeKindValue === 'extension'
+          ? 'At least one attachment is required (side-by-side comparison showing native app vs AnymeX).'
+          : 'At least one attachment (screenshot, recording, or log file) is required.'
+        );
+        document.getElementById('upload-area')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+
       submitBtn.disabled = true;
       submitBtn.textContent = 'Submitting…';
 
@@ -1571,6 +1644,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
         const fd = new FormData(form);
         // Remove file input from form data (we upload separately)
         fd.delete('files');
+        fd.set('attachmentCount', String(selectedFiles.length));
 
         const res = await fetch('/new', {
           method: 'POST',
