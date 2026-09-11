@@ -632,7 +632,18 @@ Astro.response.headers.set(
 
                   {/* Lock / Unlock */}
                   <div class="staff-section">
+                    <div class="staff-section-label">
+                      <span>Report Lock</span>
+                    </div>
                     <div class="staff-lock-row">
+                      <input
+                        id="lock-reason-input"
+                        class="input input-sm lock-reason-input"
+                        type="text"
+                        placeholder="Lock reason (optional)..."
+                        maxlength="500"
+                        style={report.locked ? 'display: none;' : ''}
+                      />
                       <button
                         class="btn btn-sm staff-lock-btn"
                         type="button"
@@ -657,14 +668,6 @@ Astro.response.headers.set(
                           </>
                         )}
                       </button>
-                      <input
-                        id="lock-reason-input"
-                        class="input input-sm lock-reason-input"
-                        type="text"
-                        placeholder="Lock reason (optional)..."
-                        maxlength="500"
-                        style={report.locked ? 'display: none;' : ''}
-                      />
                     </div>
                   </div>
 
