@@ -411,6 +411,89 @@
     background: rgba(235, 69, 158, 0.15);
     color: #f472b6;
   }
+
+  /* PWA iOS Guide Dialog */
+  .pwa-ios-dialog {
+    padding: 0;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    background: var(--surface-modal);
+    color: var(--text-primary);
+    inline-size: min(92vw, 420px);
+    margin: auto;
+    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.7);
+  }
+  .pwa-ios-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+  }
+  .pwa-ios-window {
+    padding: var(--space-5);
+  }
+  .pwa-ios-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-block-end: var(--space-4);
+  }
+  .pwa-ios-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .pwa-ios-brand h3 {
+    font-size: var(--text-md);
+    margin: 0;
+  }
+  .pwa-ios-brand p {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    margin: 0;
+  }
+  .pwa-ios-close {
+    font-size: 20px;
+    line-height: 1;
+    color: var(--text-tertiary);
+    padding: 4px;
+  }
+  .pwa-ios-close:hover {
+    color: var(--text-primary);
+  }
+  .pwa-ios-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-block-end: var(--space-5);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+  .pwa-ios-step {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    background: var(--surface-inset);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+  }
+  .pwa-step-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 22px;
+    block-size: 22px;
+    border-radius: 50%;
+    background: var(--signal-fill);
+    color: var(--signal);
+    font-weight: var(--weight-semi);
+    font-size: var(--text-xs);
+    flex-shrink: 0;
+  }
+  .pwa-ios-foot {
+    display: flex;
+    justify-content: flex-end;
+  }
 }
 
 /* ========================================================================== */

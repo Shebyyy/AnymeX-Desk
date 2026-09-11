@@ -130,6 +130,22 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
         </svg>
       </button>
 
+      <!-- PWA Install Button -->
+      <button
+        class="btn btn-ghost btn-icon pwa-install-btn"
+        id="pwa-install-btn"
+        type="button"
+        style="display: none;"
+        aria-label="Install AnymeX Desk"
+        title="Install AnymeX Desk"
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <line x1="12" y1="15" x2="12" y2="3" />
+        </svg>
+      </button>
+
       <!-- User Chip or Sign In -->
       {
         maybeSignedIn ? (
@@ -182,6 +198,23 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
               </a>
             ))
           }
+          <button
+            type="button"
+            class="dropdown-item pwa-mobile-install-btn"
+            id="pwa-mobile-install-btn"
+            style="display: none; width: 100%; text-align: left; background: none; border: none; font: inherit; cursor: pointer;"
+            role="menuitem"
+          >
+            <div class="dropdown-item-title flex-between">
+              <span>Install App</span>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </div>
+            <div class="dropdown-item-desc">Install AnymeX Desk on your device</div>
+          </button>
           <div class="mobile-menu-divider" />
           <a href="https://github.com/RyanYuuki/AnymeX" target="_blank" rel="noopener noreferrer" class="dropdown-item" role="menuitem">
             <div class="dropdown-item-title flex-between">
@@ -491,6 +524,15 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     .mobile-search-btn {
       display: none;
     }
+  }
+
+  .pwa-install-btn {
+    color: var(--text-secondary);
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .pwa-install-btn:hover {
+    color: var(--signal, #e5a93c);
+    background: var(--surface-hover);
   }
 
   .signin-pill-btn {
