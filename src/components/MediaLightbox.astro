@@ -43,6 +43,12 @@
           <source id="lightbox-video-source" src="" />
           Your browser does not support the video tag.
         </video>
+
+        <!-- Tap zones for tapping left / right side of attachment to navigate -->
+        <div class="lightbox-tap-zones" id="lightbox-tap-zones" style="display: none;">
+          <button type="button" class="lightbox-tap-zone lightbox-tap-left" id="lightbox-tap-left" aria-label="Previous attachment" title="Previous"></button>
+          <button type="button" class="lightbox-tap-zone lightbox-tap-right" id="lightbox-tap-right" aria-label="Next attachment" title="Next"></button>
+        </div>
       </div>
 
       <button type="button" class="lightbox-nav-btn lightbox-next" id="lightbox-next" aria-label="Next attachment" title="Next (Right arrow)">
@@ -75,11 +81,21 @@
     const closeBtn = document.getElementById('lightbox-close-btn');
     const prevBtn = document.getElementById('lightbox-prev') as HTMLButtonElement;
     const nextBtn = document.getElementById('lightbox-next') as HTMLButtonElement;
+    const tapZones = document.getElementById('lightbox-tap-zones');
+    const tapLeft = document.getElementById('lightbox-tap-left');
+    const tapRight = document.getElementById('lightbox-tap-right');
     const stage = document.getElementById('lightbox-stage');
 
     let items: LightboxItem[] = [];
     let currentIndex = 0;
     let historyPushed = false;
+
+    function unlockBodyScroll() {
+      document.body.style.overflow = '';
+      document.body.style.removeProperty('overflow');
+      document.documentElement.style.overflow = '';
+      document.documentElement.style.removeProperty('overflow');
+    }
 
     function refreshItems(): LightboxItem[] {
       const triggers = Array.from(document.querySelectorAll<HTMLElement>('[data-lightbox-src]'));
@@ -111,6 +127,7 @@
         video.style.display = 'block';
         videoSource.src = item.src;
         video.load();
+        if (tapZones) tapZones.style.display = 'none';
       } else {
         video.pause();
         video.style.display = 'none';
@@ -118,6 +135,8 @@
         img.style.display = 'block';
         img.src = item.src;
         img.alt = item.name;
+        // Show tap zones on image when multiple attachments exist
+        if (tapZones) tapZones.style.display = items.length > 1 ? 'flex' : 'none';
       }
 
       // Prev / Next button visibility
@@ -149,15 +168,10 @@
     }
 
     function closeLightbox(fromPopState = false) {
-      if (!dialog?.open) return;
-
-      video.pause();
-      video.style.display = 'none';
-      videoSource.src = '';
-      img.src = '';
-
-      dialog.close();
-      document.body.style.overflow = '';
+      unlockBodyScroll();
+      if (dialog?.open) {
+        dialog.close();
+      }
 
       // Clean up browser history state if closed manually
       if (historyPushed && !fromPopState) {
@@ -181,6 +195,37 @@
       currentIndex = (currentIndex + 1) % items.length;
       renderCurrent();
     }
+
+    // Direct tap on left/right side of attachment for Previous / Next navigation
+    tapLeft?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      prevItem();
+    });
+
+    tapRight?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      nextItem();
+    });
+
+    // Native dialog close & cancel events: ALWAYS unlock page scrolling
+    dialog.addEventListener('close', () => {
+      unlockBodyScroll();
+      video.pause();
+      video.style.display = 'none';
+      videoSource.src = '';
+      img.src = '';
+
+      if (historyPushed) {
+        historyPushed = false;
+        try {
+          history.back();
+        } catch (_) {}
+      }
+    });
+
+    dialog.addEventListener('cancel', () => {
+      unlockBodyScroll();
+    });
 
     // Click triggers across the page
     document.addEventListener('click', (e) => {
@@ -220,10 +265,12 @@
       }
     });
 
-    // Hardware Back Button / PopState support (Critical for PWA)
+    // Hardware Back Button / PopState support (Critical for PWA & mobile devices)
     window.addEventListener('popstate', () => {
+      unlockBodyScroll();
+      historyPushed = false;
       if (dialog.open) {
-        closeLightbox(true);
+        dialog.close();
       }
     });
 
@@ -367,6 +414,32 @@
     height: 100%;
     max-height: calc(100dvh - 80px);
     position: relative;
+  }
+
+  /* Left and right tap zones for previous / next navigation */
+  .lightbox-tap-zones {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    pointer-events: none;
+    z-index: 8;
+  }
+  .lightbox-tap-zone {
+    flex: 1;
+    height: 100%;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    pointer-events: auto;
+    -webkit-tap-highlight-color: transparent;
+    outline: none;
+  }
+  .lightbox-tap-left {
+    cursor: w-resize;
+  }
+  .lightbox-tap-right {
+    cursor: e-resize;
   }
 
   .lightbox-img {
