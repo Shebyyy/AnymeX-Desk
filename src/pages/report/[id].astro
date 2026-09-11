@@ -604,30 +604,30 @@ Astro.response.headers.set(
                 </div>
 
                 <div class="staff-popover-scroll">
-                  {/* Quick Status Bar */}
-                  <form method="POST" class="staff-section">
+                  {/* Status Change Form with explicit Save Status button */}
+                  <form method="POST" class="staff-section" id="staff-status-form">
                     <div class="staff-section-label">
                       <span>Change Status</span>
                     </div>
-                    <div class="staff-note-wrap">
-                      <input id="note" name="note" class="input input-sm staff-note-input" maxlength="500" placeholder="Status change note (optional)..." />
-                    </div>
-                    <div class="staff-status-grid">
+                    <input type="hidden" name="status" id="staff-selected-status" value={report.status} />
+                    <div class="staff-status-grid" id="staff-status-picker">
                       {STATUSES.map((st) => (
                         <button
                           class:list={['btn btn-sm staff-status-btn', { 'is-active': st === report.status }]}
-                          type="submit"
-                          name="status"
-                          value={st}
-                          disabled={st === report.status}
-                          data-status={st}
+                          type="button"
+                          data-status-value={st}
+                          title={`Select ${statusLabel(st, report.kind)}`}
                         >
                           <span class="status-indicator-dot" data-status={st}></span>
                           <span>{statusLabel(st, report.kind)}</span>
-                          {st === report.status && <span class="active-badge">✓</span>}
+                          <span class="active-badge" style={st === report.status ? '' : 'display: none;'}>✓</span>
                         </button>
                       ))}
                     </div>
+                    <div class="staff-note-wrap">
+                      <input id="note" name="note" class="input input-sm staff-note-input" maxlength="500" placeholder="Optional status change note..." />
+                    </div>
+                    <button class="btn btn-primary btn-sm staff-save-btn" type="submit" id="staff-save-status-btn">Save Status</button>
                   </form>
 
                   {/* Lock / Unlock */}
@@ -691,12 +691,15 @@ Astro.response.headers.set(
                       {allLabels.filter((al) => !currentLabels.some((cl) => cl.id === al.id)).length > 0 && (
                         <form method="POST" class="label-add-inline">
                           <input type="hidden" name="intent" value="label_add" />
-                          <select name="label_id" class="select select-sm staff-label-select" required onchange="this.form.submit()">
-                            <option value="" disabled selected>+ Add label…</option>
-                            {allLabels
-                              .filter((al) => !currentLabels.some((cl) => cl.id === al.id))
-                              .map((l) => <option value={l.id}>{l.name}</option>)}
-                          </select>
+                          <div class="label-add-group">
+                            <select name="label_id" class="select select-sm staff-label-select" required>
+                              <option value="" disabled selected>Select label…</option>
+                              {allLabels
+                                .filter((al) => !currentLabels.some((cl) => cl.id === al.id))
+                                .map((l) => <option value={l.id}>{l.name}</option>)}
+                            </select>
+                            <button class="btn btn-sm staff-add-btn" type="submit">+ Add</button>
+                          </div>
                         </form>
                       )}
                     </div>
@@ -2009,6 +2012,25 @@ Astro.response.headers.set(
       closeStaffPopover();
     }
   });
+
+  // ── Staff Status Picker (select status without auto-submitting) ─────
+  const statusInput = document.getElementById('staff-selected-status') as HTMLInputElement | null;
+  const statusBtns = document.querySelectorAll<HTMLButtonElement>('#staff-status-picker .staff-status-btn');
+  statusBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const val = btn.dataset.statusValue;
+      if (!val || !statusInput) return;
+      statusInput.value = val;
+      statusBtns.forEach((b) => {
+        b.classList.remove('is-active');
+        const check = b.querySelector('.active-badge') as HTMLElement | null;
+        if (check) check.style.display = 'none';
+      });
+      btn.classList.add('is-active');
+      const check = btn.querySelector('.active-badge') as HTMLElement | null;
+      if (check) check.style.display = '';
+    });
+  });
 </script>
 
 <style>
@@ -2340,6 +2362,21 @@ Astro.response.headers.set(
   .staff-note-input {
     width: 100%;
     font-size: var(--text-xs);
+  }
+  .staff-save-btn {
+    align-self: flex-start;
+    margin-block-start: 2px;
+  }
+  .label-add-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .staff-add-btn {
+    padding: 2px 8px;
+    font-size: var(--text-xs);
+    height: 24px;
+    line-height: 1;
   }
   .staff-lock-row {
     display: flex;
