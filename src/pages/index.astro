@@ -108,21 +108,23 @@ Astro.response.headers.set(
     )
   }
 
-  {/* Kind tabs: Bugs / Suggestions */}
+  {/* Kind tabs: Bugs / Suggestions / Extensions */}
   <div class="kind-tabs" role="tablist">
-    {KINDS.map((k) => (
-      <a
-        class:list={['kind-tab', { active: kind === k }]}
-        href={pageHref(1, k as BoardKind)}
-        role="tab"
-        aria-selected={kind === k}>
-        {KIND_LABELS[k]}
-        <span class="kind-count">
-          {counts[k].open + counts[k].fixed + counts[k].other}
-        </span>
-      </a>
-    ))}
-    <a class="btn btn-primary" href={`/new?kind=${kind}`}>
+    <div class="kind-tabs-group">
+      {KINDS.map((k) => (
+        <a
+          class:list={['kind-tab', { active: kind === k }]}
+          href={pageHref(1, k as BoardKind)}
+          role="tab"
+          aria-selected={kind === k}>
+          <span class="kind-name">{KIND_LABELS[k]}</span>
+          <span class="kind-count">
+            {counts[k].open + counts[k].fixed + counts[k].other}
+          </span>
+        </a>
+      ))}
+    </div>
+    <a class="btn btn-primary kind-new-btn" href={`/new?kind=${kind}`}>
       New {KIND_LABELS[kind].toLowerCase()}
     </a>
   </div>
@@ -260,50 +262,97 @@ Astro.response.headers.set(
   .kind-tabs {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    padding-block: var(--space-3) var(--space-2);
-    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding-block: var(--space-4) var(--space-2);
+  }
+  .kind-tabs-group {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--surface-inset, rgba(0, 0, 0, 0.2));
+    padding: 3px;
+    border-radius: var(--radius-lg, 8px);
+    border: 1px solid var(--border-subtle);
   }
   .kind-tab {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-1);
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-md);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-1-5, 6px);
+    padding: 6px 14px;
+    border-radius: var(--radius-md, 6px);
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
+    text-align: center;
+    white-space: nowrap;
     transition: color var(--dur-fast) var(--ease-standard),
       background var(--dur-fast) var(--ease-standard);
   }
   .kind-tab:hover {
-    color: var(--text-secondary);
+    color: var(--text-primary);
     background: var(--surface-hover);
   }
   .kind-tab.active {
     color: var(--text-primary);
     background: var(--surface-active);
+    font-weight: var(--weight-semi);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  }
+  .kind-name {
+    line-height: var(--leading-none);
   }
   .kind-count {
     font-family: var(--font-data);
     font-size: var(--text-xs);
     color: var(--text-muted);
+    background: var(--surface-raised);
+    padding: 1px 6px;
+    border-radius: var(--radius-full);
+    line-height: var(--leading-none);
   }
-  .kind-tabs .btn { margin-inline-start: auto; }
+  .kind-tab.active .kind-count {
+    color: var(--text-secondary);
+    background: var(--surface-inset);
+  }
+  .kind-new-btn {
+    flex-shrink: 0;
+  }
 
   @media (max-width: 640px) {
     .kind-tabs {
-      gap: var(--space-1);
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-2);
+    }
+    .kind-tabs-group {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 3px;
+      width: 100%;
     }
     .kind-tab {
-      padding: var(--space-1) var(--space-2);
-      font-size: var(--text-xs);
-    }
-    .kind-tabs .btn {
+      flex: 1;
       width: 100%;
-      margin-inline-start: 0;
-      order: 10;
-      margin-block-start: var(--space-1);
+      padding: 8px 4px;
+      font-size: var(--text-xs);
+      flex-direction: column;
+      gap: 3px;
+      text-align: center;
+    }
+    .kind-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+    .kind-count {
+      font-size: 10.5px;
+      padding: 1px 5px;
+    }
+    .kind-new-btn {
+      width: 100%;
+      height: 36px;
     }
   }
 
