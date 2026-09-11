@@ -554,6 +554,227 @@ Astro.response.headers.set(
   }
 
   <article>
+    <div class="report-top-bar">
+      <a href={`/?kind=${report.kind}`} class="report-back-link">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+        <span>Back to {report.kind === 'suggestion' ? 'Suggestions' : report.kind === 'extension' ? 'Extensions' : 'Bugs'}</span>
+      </a>
+
+      {(canEdit || canModerate) && (
+        <div class="head-actions">
+          {canEdit && (
+            <button
+              type="button"
+              class="btn btn-sm btn-head-action"
+              id="toggle-edit-report-btn"
+              title="Edit report title, description, or details"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              <span>Edit</span>
+            </button>
+          )}
+          {canModerate && (
+            <div class="staff-popover-anchor">
+              <button
+                type="button"
+                class="btn btn-sm btn-head-action btn-staff-trigger"
+                id="toggle-staff-panel-btn"
+                title="Staff moderation controls"
+                aria-expanded="false"
+                aria-controls="staff-controls-panel"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <span>Staff Controls</span>
+                <svg class="chevron-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+
+              {/* Floating Staff Controls Popover — Closed by default */}
+              <div class="staff-popover-menu" id="staff-controls-panel" style="display: none;" role="region" aria-label="Staff moderation controls">
+                <div class="staff-popover-head">
+                  <div class="staff-popover-title">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    <span>Staff Controls</span>
+                  </div>
+                  <div class="staff-popover-actions">
+                    <span class="staff-badge">MOD</span>
+                    <button type="button" class="staff-close-btn" id="close-staff-panel-btn" aria-label="Close staff controls">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="staff-popover-scroll">
+                  {/* Quick Status Bar */}
+                  <form method="POST" class="staff-section">
+                    <div class="staff-section-label">
+                      <span>Change Status</span>
+                    </div>
+                    <div class="staff-note-wrap">
+                      <input id="note" name="note" class="input input-sm staff-note-input" maxlength="500" placeholder="Status change note (optional)..." />
+                    </div>
+                    <div class="staff-status-grid">
+                      {STATUSES.map((st) => (
+                        <button
+                          class:list={['btn btn-sm staff-status-btn', { 'is-active': st === report.status }]}
+                          type="submit"
+                          name="status"
+                          value={st}
+                          disabled={st === report.status}
+                          data-status={st}
+                        >
+                          <span class="status-indicator-dot" data-status={st}></span>
+                          <span>{statusLabel(st, report.kind)}</span>
+                          {st === report.status && <span class="active-badge">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </form>
+
+                  {/* Lock / Unlock */}
+                  <div class="staff-section">
+                    <div class="staff-lock-row">
+                      <button
+                        class="btn btn-sm staff-lock-btn"
+                        type="button"
+                        id="lock-toggle-btn"
+                        data-report-id={report.id}
+                        data-locked={report.locked ? 'true' : 'false'}>
+                        {report.locked ? (
+                          <>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                              <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+                            </svg>
+                            <span>Unlock report</span>
+                          </>
+                        ) : (
+                          <>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                            </svg>
+                            <span>Lock report</span>
+                          </>
+                        )}
+                      </button>
+                      <input
+                        id="lock-reason-input"
+                        class="input input-sm lock-reason-input"
+                        type="text"
+                        placeholder="Lock reason (optional)..."
+                        maxlength="500"
+                        style={report.locked ? 'display: none;' : ''}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Labels Manager */}
+                  <div class="staff-section">
+                    <div class="staff-section-label">
+                      <span>Labels</span>
+                    </div>
+                    <div class="staff-labels-flex">
+                      {currentLabels.length === 0 ? (
+                        <span class="staff-empty-hint">No labels applied.</span>
+                      ) : (
+                        currentLabels.map((l) => (
+                          <form method="POST" class="label-chip-form">
+                            <input type="hidden" name="intent" value="label_remove" />
+                            <input type="hidden" name="label_id" value={l.id} />
+                            <span class="tag label-badge" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color};`}>
+                              {l.name}
+                              <button class="label-remove-btn" type="submit" title={`Remove ${l.name}`}>×</button>
+                            </span>
+                          </form>
+                        ))
+                      )}
+                      {allLabels.filter((al) => !currentLabels.some((cl) => cl.id === al.id)).length > 0 && (
+                        <form method="POST" class="label-add-inline">
+                          <input type="hidden" name="intent" value="label_add" />
+                          <select name="label_id" class="select select-sm staff-label-select" required onchange="this.form.submit()">
+                            <option value="" disabled selected>+ Add label…</option>
+                            {allLabels
+                              .filter((al) => !currentLabels.some((cl) => cl.id === al.id))
+                              .map((l) => <option value={l.id}>{l.name}</option>)}
+                          </select>
+                        </form>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Collapsible details for Roadmap, Duplicate, and Danger Zone */}
+                  <div class="staff-collapsibles">
+                    <details class="staff-sub-details">
+                      <summary class="staff-sub-summary">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                        <span>Roadmap &amp; Milestone</span>
+                        <svg class="details-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                      </summary>
+                      <form method="POST" class="staff-sub-content">
+                        <input type="hidden" name="intent" value="roadmap" />
+                        <div class="field">
+                          <label class="label" for="roadmap-stage">Stage</label>
+                          <select id="roadmap-stage" name="roadmap_stage" class="select select-sm">
+                            <option value="" selected={!report.roadmapStage}>None (Not on roadmap)</option>
+                            {ROADMAP_STAGES.map((st) => (
+                              <option value={st} selected={st === report.roadmapStage}>
+                                {ROADMAP_STAGE_LABELS[st]}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div class="field">
+                          <label class="label" for="milestone">Milestone</label>
+                          <input
+                            id="milestone"
+                            name="milestone"
+                            class="input input-sm"
+                            type="text"
+                            maxlength="32"
+                            placeholder="e.g. v2.4.0"
+                            value={report.milestone ?? ''}
+                          />
+                        </div>
+                        <button class="btn btn-sm staff-apply-btn" type="submit">Update roadmap</button>
+                      </form>
+                    </details>
+
+                    {report.status !== 'duplicate' && (
+                      <details class="staff-sub-details">
+                        <summary class="staff-sub-summary">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                          <span>Mark as Duplicate</span>
+                          <svg class="details-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                        </summary>
+                        <form method="POST" class="staff-sub-content">
+                          <div class="duplicate-input-group">
+                            <input class="input input-sm num" name="duplicate_of" type="number" inputmode="numeric" placeholder="Target Report #" min="1" required />
+                            <button class="btn btn-sm" type="submit">Mark duplicate</button>
+                          </div>
+                        </form>
+                      </details>
+                    )}
+
+                    <details class="staff-sub-details staff-danger-details">
+                      <summary class="staff-sub-summary staff-danger-summary">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                        <span>Delete Report</span>
+                        <svg class="details-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                      </summary>
+                      <div class="staff-sub-content">
+                        <p class="staff-hint-text">Permanently delete this report and all its votes, comments, and attachments. Cannot be undone.</p>
+                        <button class="btn btn-danger btn-sm" type="button" id="delete-btn">Delete report permanently</button>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+
     {isLocked && (
       <div class="locked-banner" role="status">
         <span class="locked-icon">
@@ -574,266 +795,50 @@ Astro.response.headers.set(
       <VoteButton reportId={report.id} votes={report.votes} mine={mine} closed={!isLive} locked={isLocked} />
       <div class="head-main">
         <h1>{report.title}</h1>
-        <div class="head-meta-bar">
-          <p class="meta-line">
-            <span class="tag">{kindLabel(report.kind)}</span>
-            <span class="tag">{categoryLabel(report.category)}</span>
-            <span class="tag">{platformLabel(report.platform)}</span>
-            {currentLabels.map((l) => (
-              <span class="tag label-badge" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color}; font-weight: 500;`}>
-                {l.name}
-              </span>
-            ))}
-            {report.appVersion && (
-              <span class="ver">
-                v{report.appVersion}
-                {report.releaseChannel === 'beta' && <span class="badge-beta">Beta</span>}
-              </span>
-            )}
-            <span class="by"> · filed by </span>
-            <span class="filed-by">
-              {(() => {
-                const a = reporter ? avatarUrl({ id: reporter.discordId, avatarHash: reporter.avatarHash }, 20) : null;
-                return (
-                  <div class:list={[{ 'avatar-presence-wrap': canModerate && reporterPresence }]}>
-                    {a ? (
-                      <img class="avatar" src={a} alt="" width="20" height="20" />
-                    ) : (
-                      <span class="avatar avatar-blank" aria-hidden="true" />
-                    )}
-                    {canModerate && reporterPresence && (
-                      <span
-                        class:list={['presence-cutout-dot', `presence-${reporterPresence.status}`]}
-                        title={`Staff telemetry: ${reporterPresence.label}`}
-                      ></span>
-                    )}
-                  </div>
-                );
-              })()}
-              {report.reporterId ? (
-                <a href={`/user/${report.reporterId}`} class="reporter-link">
-                  {reporterMeta(report.reporterId, reporter).display}
-                </a>
-              ) : (
-                <span>{reporterMeta(report.reporterId, reporter).display}</span>
-              )}
+        <p class="meta-line">
+          <span class="tag">{kindLabel(report.kind)}</span>
+          <span class="tag">{categoryLabel(report.category)}</span>
+          <span class="tag">{platformLabel(report.platform)}</span>
+          {currentLabels.map((l) => (
+            <span class="tag label-badge" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color}; font-weight: 500;`}>
+              {l.name}
             </span>
-          </p>
-
-          {(canEdit || canModerate) && (
-            <div class="head-actions">
-              {canEdit && (
-                <button
-                  type="button"
-                  class="btn btn-sm btn-head-action"
-                  id="toggle-edit-report-btn"
-                  title="Edit report title, description, or details"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                  <span>Edit</span>
-                </button>
-              )}
-              {canModerate && (
-                <div class="staff-popover-anchor">
-                  <button
-                    type="button"
-                    class="btn btn-sm btn-head-action btn-staff-trigger"
-                    id="toggle-staff-panel-btn"
-                    title="Staff moderation controls"
-                    aria-expanded="false"
-                    aria-controls="staff-controls-panel"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                    <span>Staff Controls</span>
-                    <svg class="chevron-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-                  </button>
-
-                  {/* Floating Staff Controls Popover — Closed by default */}
-                  <div class="staff-popover-menu" id="staff-controls-panel" style="display: none;" role="region" aria-label="Staff moderation controls">
-                    <div class="staff-popover-head">
-                      <div class="staff-popover-title">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                        <span>Staff Controls</span>
-                      </div>
-                      <div class="staff-popover-actions">
-                        <span class="staff-badge">MOD</span>
-                        <button type="button" class="staff-close-btn" id="close-staff-panel-btn" aria-label="Close staff controls">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                        </button>
-                      </div>
-                    </div>
-
-                    <div class="staff-popover-scroll">
-                      {/* Quick Status Bar */}
-                      <form method="POST" class="staff-section">
-                        <div class="staff-section-label">
-                          <span>Change Status</span>
-                        </div>
-                        <div class="staff-note-wrap">
-                          <input id="note" name="note" class="input input-sm staff-note-input" maxlength="500" placeholder="Status change note (optional)..." />
-                        </div>
-                        <div class="staff-status-grid">
-                          {STATUSES.map((st) => (
-                            <button
-                              class:list={['btn btn-sm staff-status-btn', { 'is-active': st === report.status }]}
-                              type="submit"
-                              name="status"
-                              value={st}
-                              disabled={st === report.status}
-                              data-status={st}
-                            >
-                              <span class="status-indicator-dot" data-status={st}></span>
-                              <span>{statusLabel(st, report.kind)}</span>
-                              {st === report.status && <span class="active-badge">✓</span>}
-                            </button>
-                          ))}
-                        </div>
-                      </form>
-
-                      {/* Lock / Unlock */}
-                      <div class="staff-section">
-                        <div class="staff-lock-row">
-                          <button
-                            class="btn btn-sm staff-lock-btn"
-                            type="button"
-                            id="lock-toggle-btn"
-                            data-report-id={report.id}
-                            data-locked={report.locked ? 'true' : 'false'}>
-                            {report.locked ? (
-                              <>
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                                  <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
-                                </svg>
-                                <span>Unlock report</span>
-                              </>
-                            ) : (
-                              <>
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                                </svg>
-                                <span>Lock report</span>
-                              </>
-                            )}
-                          </button>
-                          <input
-                            id="lock-reason-input"
-                            class="input input-sm lock-reason-input"
-                            type="text"
-                            placeholder="Lock reason (optional)..."
-                            maxlength="500"
-                            style={report.locked ? 'display: none;' : ''}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Labels Manager */}
-                      <div class="staff-section">
-                        <div class="staff-section-label">
-                          <span>Labels</span>
-                        </div>
-                        <div class="staff-labels-flex">
-                          {currentLabels.length === 0 ? (
-                            <span class="staff-empty-hint">No labels applied.</span>
-                          ) : (
-                            currentLabels.map((l) => (
-                              <form method="POST" class="label-chip-form">
-                                <input type="hidden" name="intent" value="label_remove" />
-                                <input type="hidden" name="label_id" value={l.id} />
-                                <span class="tag label-badge" style={`background: ${l.color}22; border-color: ${l.color}; color: ${l.color};`}>
-                                  {l.name}
-                                  <button class="label-remove-btn" type="submit" title={`Remove ${l.name}`}>×</button>
-                                </span>
-                              </form>
-                            ))
-                          )}
-                          {allLabels.filter((al) => !currentLabels.some((cl) => cl.id === al.id)).length > 0 && (
-                            <form method="POST" class="label-add-inline">
-                              <input type="hidden" name="intent" value="label_add" />
-                              <select name="label_id" class="select select-sm staff-label-select" required onchange="this.form.submit()">
-                                <option value="" disabled selected>+ Add label…</option>
-                                {allLabels
-                                  .filter((al) => !currentLabels.some((cl) => cl.id === al.id))
-                                  .map((l) => <option value={l.id}>{l.name}</option>)}
-                              </select>
-                            </form>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Collapsible details for Roadmap, Duplicate, and Danger Zone */}
-                      <div class="staff-collapsibles">
-                        <details class="staff-sub-details">
-                          <summary class="staff-sub-summary">
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                            <span>Roadmap &amp; Milestone</span>
-                            <svg class="details-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                          </summary>
-                          <form method="POST" class="staff-sub-content">
-                            <input type="hidden" name="intent" value="roadmap" />
-                            <div class="field">
-                              <label class="label" for="roadmap-stage">Stage</label>
-                              <select id="roadmap-stage" name="roadmap_stage" class="select select-sm">
-                                <option value="" selected={!report.roadmapStage}>None (Not on roadmap)</option>
-                                {ROADMAP_STAGES.map((st) => (
-                                  <option value={st} selected={st === report.roadmapStage}>
-                                    {ROADMAP_STAGE_LABELS[st]}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div class="field">
-                              <label class="label" for="milestone">Milestone</label>
-                              <input
-                                id="milestone"
-                                name="milestone"
-                                class="input input-sm"
-                                type="text"
-                                maxlength="32"
-                                placeholder="e.g. v2.4.0"
-                                value={report.milestone ?? ''}
-                              />
-                            </div>
-                            <button class="btn btn-sm staff-apply-btn" type="submit">Update roadmap</button>
-                          </form>
-                        </details>
-
-                        {report.status !== 'duplicate' && (
-                          <details class="staff-sub-details">
-                            <summary class="staff-sub-summary">
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                              <span>Mark as Duplicate</span>
-                              <svg class="details-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                            </summary>
-                            <form method="POST" class="staff-sub-content">
-                              <div class="duplicate-input-group">
-                                <input class="input input-sm num" name="duplicate_of" type="number" inputmode="numeric" placeholder="Target Report #" min="1" required />
-                                <button class="btn btn-sm" type="submit">Mark duplicate</button>
-                              </div>
-                            </form>
-                          </details>
-                        )}
-
-                        <details class="staff-sub-details staff-danger-details">
-                          <summary class="staff-sub-summary staff-danger-summary">
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-                            <span>Delete Report</span>
-                            <svg class="details-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                          </summary>
-                          <div class="staff-sub-content">
-                            <p class="staff-hint-text">Permanently delete this report and all its votes, comments, and attachments. Cannot be undone.</p>
-                            <button class="btn btn-danger btn-sm" type="button" id="delete-btn">Delete report permanently</button>
-                          </div>
-                        </details>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+          ))}
+          {report.appVersion && (
+            <span class="ver">
+              v{report.appVersion}
+              {report.releaseChannel === 'beta' && <span class="badge-beta">Beta</span>}
+            </span>
           )}
-        </div>
+          <span class="by"> · filed by </span>
+          <span class="filed-by">
+            {(() => {
+              const a = reporter ? avatarUrl({ id: reporter.discordId, avatarHash: reporter.avatarHash }, 20) : null;
+              return (
+                <div class:list={[{ 'avatar-presence-wrap': canModerate && reporterPresence }]}>
+                  {a ? (
+                    <img class="avatar" src={a} alt="" width="20" height="20" />
+                  ) : (
+                    <span class="avatar avatar-blank" aria-hidden="true" />
+                  )}
+                  {canModerate && reporterPresence && (
+                    <span
+                      class:list={['presence-cutout-dot', `presence-${reporterPresence.status}`]}
+                      title={`Staff telemetry: ${reporterPresence.label}`}
+                    ></span>
+                  )}
+                </div>
+              );
+            })()}
+            {report.reporterId ? (
+              <a href={`/user/${report.reporterId}`} class="reporter-link">
+                {reporterMeta(report.reporterId, reporter).display}
+              </a>
+            ) : (
+              <span>{reporterMeta(report.reporterId, reporter).display}</span>
+            )}
+          </span>
+        </p>
       </div>
     </header>
 
@@ -2466,6 +2471,30 @@ Astro.response.headers.set(
     gap: var(--space-2);
   }
 
+  .report-top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-block-end: var(--space-4);
+    min-height: 32px;
+  }
+  .report-back-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--text-xs);
+    font-weight: 500;
+    color: var(--text-tertiary);
+    text-decoration: none;
+    transition: color var(--dur-fast);
+  }
+  .report-back-link:hover {
+    color: var(--text-primary);
+  }
+  .report-back-link svg {
+    color: var(--text-muted);
+  }
   .head-main h1 {
     width: 100%;
     margin: 0;
@@ -2474,24 +2503,14 @@ Astro.response.headers.set(
     line-height: var(--leading-tight);
     word-break: break-word;
   }
-  .head-meta-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    flex-wrap: wrap;
-    margin-block-start: var(--space-2);
-  }
   .meta-line {
-    margin: 0;
+    margin-block-start: var(--space-1);
     color: var(--text-tertiary);
     font-size: var(--text-sm);
     display: flex;
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
-    flex: 1;
-    min-width: 0;
   }
   .tag {
     padding-inline: var(--space-1);
