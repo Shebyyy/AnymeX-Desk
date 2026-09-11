@@ -45,7 +45,7 @@ const sorts =
       ]
     : [
         { key: 'demand', label: 'Most wanted' },
-        { key: 'fixed', label: state === 'other' ? 'Recently closed' : 'Recently fixed' },
+        { key: 'fixed', label: state === 'other' ? 'Recently closed' : kind === 'suggestion' ? 'Recently completed' : 'Recently fixed' },
       ];
 
 const activeSort =

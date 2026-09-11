@@ -92,11 +92,14 @@ Astro.response.headers.set(
         <dd class="num">{countsForKind.open}</dd>
       </div>
       <div class="tally-item">
-        <dt class="label">Fixed</dt>
+        <dt class="label">{kind === 'suggestion' ? 'Done' : 'Fixed'}</dt>
         <dd class="num">{countsForKind.fixed}</dd>
       </div>
-      <div class="tally-item" title="Stalled for 90 days or more">
-        <dt class="label"><span class="label-full">Stalled 90d+</span><span class="label-short">Stalled</span></dt>
+      <div class="tally-item" title={kind === 'suggestion' ? 'Waiting for 90 days or more' : 'Stalled for 90 days or more'}>
+        <dt class="label">
+          <span class="label-full">{kind === 'suggestion' ? 'Waiting 90d+' : 'Stalled 90d+'}</span>
+          <span class="label-short">{kind === 'suggestion' ? 'Waiting' : 'Stalled'}</span>
+        </dt>
         <dd class="num rotting">{countsForKind.stalled}</dd>
       </div>
     </dl>

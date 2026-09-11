@@ -51,11 +51,12 @@ export function fixedLabel(
   status: string,
   statusChangedAt: number | null,
   now = Date.now() / 1000,
+  kind?: string,
 ): string | null {
   if (!statusChangedAt) return null;
   const closed = status === 'fixed' || (OTHER_STATUSES as readonly string[]).includes(status);
   if (!closed) return null;
-  return `${statusLabel(status)} ${relativeAge(statusChangedAt, now)} ago`;
+  return `${statusLabel(status, kind)} ${relativeAge(statusChangedAt, now)} ago`;
 }
 
 /** Display label for a report status, tailored to kind if provided. */
@@ -65,7 +66,7 @@ export function statusLabel(status: string, kind?: string): string {
     if (status === 'under_review') return 'Under Review';
     if (status === 'confirmed') return 'Planned';
     if (status === 'in_progress') return 'In Progress';
-    if (status === 'fixed') return 'Completed';
+    if (status === 'fixed') return 'Done';
     if (status === 'wont_fix') return 'Declined';
     if (status === 'duplicate') return 'Duplicate';
   }
