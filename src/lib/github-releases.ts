@@ -64,8 +64,8 @@ export const FALLBACK_RELEASES: ReleasesPayload = {
 };
 
 const KV_CACHE_KEY = 'gh_releases:all:v1';
-const CACHE_TTL_SECONDS = 900; // 15 minutes
-const MEMORY_TTL_MS = 300_000; // 5 minutes in worker memory
+const CACHE_TTL_SECONDS = 60 * 60 * 6; // 6 hours (saves KV daily write quota)
+const MEMORY_TTL_MS = 60 * 60 * 1000; // 1 hour in worker memory
 
 let inMemoryCache: { data: ReleasesPayload; expiry: number } | null = null;
 

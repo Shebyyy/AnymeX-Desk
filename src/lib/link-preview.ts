@@ -16,10 +16,13 @@ export interface LinkPreview {
   siteName: string | null;
 }
 
-const CACHE_OK_TTL = 60 * 60 * 24 * 7; // 7 days
-const CACHE_FAIL_TTL = 60 * 60 * 24; // 1 day
+const CACHE_OK_TTL = 60 * 60 * 24 * 30; // 30 days
+const MEMORY_TTL_MS = 60 * 60 * 2 * 1000; // 2 hours in isolate memory
 const FETCH_TIMEOUT_MS = 3000;
 const MAX_BYTES = 60_000; // head metadata is always near the top of the document
+
+// In-memory cache to prevent repetitive KV reads and writes within the same worker isolate
+const memoryCache = new Map<string, { preview: LinkPreview | null; expiry: number }>();
 
 // Blocks the obvious SSRF targets: localhost, loopback, link-local, and the
 // private IPv4 ranges. Not exhaustive DNS-rebinding protection, but stops a
@@ -55,12 +58,25 @@ export async function fetchLinkPreview(url: string): Promise<LinkPreview | null>
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
   if (PRIVATE_HOST_RE.test(parsed.hostname)) return null;
 
+  // Tier 1: Check in-memory isolate cache
+  const now = Date.now();
+  const memCached = memoryCache.get(url);
+  if (memCached && memCached.expiry > now) {
+    return memCached.preview;
+  }
+
   const kv = env.SESSION as KVNamespace | undefined;
   const cacheKey = `ogcache:${await sha256Hex(url)}`;
 
+  // Tier 2: Check KV cache
   if (kv) {
-    const cached = await kv.get<LinkPreview & { failed?: boolean }>(cacheKey, 'json');
-    if (cached) return cached.failed ? null : cached;
+    try {
+      const cached = await kv.get<LinkPreview>(cacheKey, 'json');
+      if (cached) {
+        memoryCache.set(url, { preview: cached, expiry: now + MEMORY_TTL_MS });
+        return cached;
+      }
+    } catch {}
   }
 
   try {
@@ -70,8 +86,6 @@ export async function fetchLinkPreview(url: string): Promise<LinkPreview | null>
       signal: controller.signal,
       redirect: 'follow',
       headers: {
-        // Identifies the fetch and gives the target site somewhere to
-        // complain, the way most link-unfurling bots do.
         'user-agent': 'Mozilla/5.0 (compatible; AnymeXDeskBot/1.0; +https://anymex-desk.asheby.workers.dev)',
         accept: 'text/html',
       },
@@ -98,8 +112,6 @@ export async function fetchLinkPreview(url: string): Promise<LinkPreview | null>
 
     const titleFallback = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() ?? null;
     let image = pickMeta(html, 'image');
-    // Relative image URLs are technically against the OG spec, but some
-    // sites do it anyway — resolve against the page's own URL just in case.
     if (image && !/^https?:\/\//i.test(image)) {
       try {
         image = new URL(image, parsed).toString();
@@ -115,13 +127,19 @@ export async function fetchLinkPreview(url: string): Promise<LinkPreview | null>
       siteName: pickMeta(html, 'site_name') ?? parsed.hostname,
     };
 
-    // Nothing worth showing — treat like a failure rather than an empty card.
     if (!preview.title && !preview.image && !preview.description) throw new Error('no metadata');
 
-    if (kv) await kv.put(cacheKey, JSON.stringify(preview), { expirationTtl: CACHE_OK_TTL });
+    // Cache successful preview in memory and KV (30-day TTL)
+    memoryCache.set(url, { preview, expiry: now + MEMORY_TTL_MS });
+    if (kv) {
+      try {
+        await kv.put(cacheKey, JSON.stringify(preview), { expirationTtl: CACHE_OK_TTL });
+      } catch {}
+    }
     return preview;
   } catch {
-    if (kv) await kv.put(cacheKey, JSON.stringify({ failed: true }), { expirationTtl: CACHE_FAIL_TTL });
+    // DO NOT write failures to KV (saves KV daily write limit) — only cache in memory
+    memoryCache.set(url, { preview: null, expiry: now + 1000 * 60 * 30 }); // 30 mins in memory
     return null;
   }
 }

@@ -167,8 +167,6 @@ export const POST: APIRoute = async (ctx) => {
     // Store Discord attachments — cache to KV so links do not break after CDN URL expiry
     const incomingAttachments: Array<{ url: string; filename: string; content_type?: string; size?: number }> =
       body.attachments || [];
-    const kv = env.SESSION as KVNamespace | undefined;
-
     for (const att of incomingAttachments) {
       if (!att.url) continue;
       const mime = att.content_type || 'application/octet-stream';
@@ -176,31 +174,8 @@ export const POST: APIRoute = async (ctx) => {
       if (mime.startsWith('image/')) fileType = 'image';
       else if (mime.startsWith('video/')) fileType = 'video';
 
-      let filePath = att.url;
-      let fileSize = Number(att.size) || 0;
-
-      // Try caching attachment to KV so it doesn't expire when Discord's CDN URL expires
-      if (kv) {
-        try {
-          const resp = await fetch(att.url, { signal: AbortSignal.timeout(8000) });
-          if (resp.ok) {
-            const buf = await resp.arrayBuffer();
-            if (buf.byteLength > 0 && buf.byteLength < 25 * 1024 * 1024) {
-              const uuid = crypto.randomUUID();
-              const safeName = att.filename || 'attachment';
-              const kvPath = `uploads/${uuid}/${safeName}`;
-              await kv.put(`upload:${kvPath}`, buf, {
-                metadata: { mimeType: mime, fileName: safeName },
-                expirationTtl: 60 * 60 * 24 * 365,
-              });
-              filePath = kvPath;
-              fileSize = buf.byteLength;
-            }
-          }
-        } catch (e) {
-          console.warn('[Sync] Could not cache Discord attachment to KV, falling back to CDN URL:', e);
-        }
-      }
+      const filePath = att.url;
+      const fileSize = Number(att.size) || 0;
 
       try {
         await d.insert(attachments).values({
