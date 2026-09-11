@@ -328,7 +328,7 @@ Astro.response.headers.set(
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: var(--space-1-5, 6px);
+    gap: var(--space-2, 8px);
     padding: 6px 14px;
     border-radius: var(--radius-md, 6px);
     font-size: var(--text-sm);
@@ -350,16 +350,20 @@ Astro.response.headers.set(
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
   }
   .kind-name {
-    line-height: var(--leading-none);
+    line-height: var(--leading-normal);
   }
   .kind-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-family: var(--font-data);
     font-size: var(--text-xs);
     color: var(--text-muted);
     background: var(--surface-raised);
-    padding: 1px 6px;
+    padding: 2px 7px;
     border-radius: var(--radius-full);
-    line-height: var(--leading-none);
+    line-height: 1;
+    flex-shrink: 0;
   }
   .kind-tab.active .kind-count {
     color: var(--text-secondary);
@@ -385,20 +389,27 @@ Astro.response.headers.set(
       flex: 1;
       width: 100%;
       min-width: 0;
-      padding: 8px 4px;
-      font-size: var(--text-xs);
-      flex-direction: column;
-      gap: 3px;
+      padding: 8px 3px;
+      font-size: clamp(11px, 2.7vw, 12.5px);
+      flex-direction: row;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
       text-align: center;
     }
     .kind-name {
       overflow: hidden;
       text-overflow: ellipsis;
-      max-width: 100%;
+      white-space: nowrap;
+      min-width: 0;
+      flex-shrink: 1;
+      line-height: var(--leading-normal);
     }
     .kind-count {
-      font-size: 10.5px;
-      padding: 1px 5px;
+      font-size: 10px;
+      padding: 1.5px 5px;
+      flex-shrink: 0;
+      line-height: 1;
     }
     .kind-new-btn {
       width: 100%;
