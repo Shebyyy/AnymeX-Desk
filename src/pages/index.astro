@@ -86,14 +86,17 @@ Astro.response.headers.set(
       <h1>{view.heading}</h1>
       <p class="sub">{view.lede}</p>
     </div>
-    <dl class="tallies">
-      <div><dt class="label">Open</dt><dd class="num">{countsForKind.open}</dd></div>
-      <div>
+    <dl class="tallies" aria-label="Report counts summary">
+      <div class="tally-item">
+        <dt class="label">Open</dt>
+        <dd class="num">{countsForKind.open}</dd>
+      </div>
+      <div class="tally-item">
         <dt class="label">Fixed</dt>
         <dd class="num">{countsForKind.fixed}</dd>
       </div>
-      <div>
-        <dt class="label">Stalled 90d+</dt>
+      <div class="tally-item" title="Stalled for 90 days or more">
+        <dt class="label"><span class="label-full">Stalled 90d+</span><span class="label-short">Stalled</span></dt>
         <dd class="num rotting">{countsForKind.stalled}</dd>
       </div>
     </dl>
@@ -203,16 +206,22 @@ Astro.response.headers.set(
 <style>
   .head {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
-    gap: var(--space-8);
-    flex-wrap: wrap;
+    gap: var(--space-4);
     padding-block-end: var(--space-4);
     border-block-end: 1px solid var(--border-subtle);
+  }
+  .head-text {
+    min-width: 0;
+    flex-shrink: 1;
   }
   h1 {
     font-size: var(--text-xl);
     letter-spacing: var(--track-tight);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .sub {
     max-inline-size: 52ch;
@@ -222,25 +231,65 @@ Astro.response.headers.set(
   }
   .tallies {
     display: flex;
-    gap: var(--space-6);
+    align-items: center;
+    gap: var(--space-5);
+    flex-shrink: 0;
+  }
+  .tally-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+  .tally-item .label {
+    white-space: nowrap;
+  }
+  .label-short {
+    display: none;
+  }
+  .label-full {
+    display: inline;
   }
   .tallies dd {
     font-family: var(--font-data);
-    font-size: var(--text-2xl);
+    font-size: var(--text-xl);
     font-weight: var(--weight-semi);
     line-height: var(--leading-none);
     letter-spacing: var(--track-tighter);
-    margin-block-start: var(--space-1);
+    margin-block-start: 2px;
   }
   .rotting {
     color: var(--stalled);
   }
 
   @media (max-width: 640px) {
+    .head {
+      align-items: center;
+      gap: var(--space-2);
+      padding-block-end: var(--space-3);
+    }
+    h1 {
+      font-size: var(--text-lg);
+    }
     .sub { display: none; }
-    .tallies { gap: var(--space-5); }
-    .tallies dd { font-size: var(--text-xl); }
-    .head { padding-block-end: var(--space-3); }
+    .label-full { display: none; }
+    .label-short { display: inline; }
+    .tallies {
+      gap: var(--space-2);
+      background: var(--surface-inset, rgba(0, 0, 0, 0.2));
+      padding: 4px 10px;
+      border-radius: var(--radius-md, 6px);
+      border: 1px solid var(--border-subtle);
+    }
+    .tally-item {
+      align-items: center;
+    }
+    .tally-item .label {
+      font-size: 10px;
+    }
+    .tallies dd {
+      font-size: var(--text-sm);
+      margin-block-start: 1px;
+    }
   }
 
   .error {
