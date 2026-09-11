@@ -52,7 +52,7 @@ function showIosInstructions() {
             <img src="/icons/icon-192.png" width="36" height="36" alt="AnymeX Desk" style="border-radius: 8px;" />
             <div>
               <h3>Install AnymeX Desk</h3>
-              <p>Add to Home Screen for the full app experience</p>
+              <p>Install as an app for the full experience</p>
             </div>
           </div>
           <button type="button" class="pwa-ios-close" aria-label="Close">×</button>
