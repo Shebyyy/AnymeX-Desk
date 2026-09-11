@@ -174,16 +174,19 @@ const states = (['open', 'fixed', 'other'] as const).map((key) => ({
     margin-inline-end: var(--space-1);
     flex: none;
   }
-  @media (max-width: 640px) {
+  @media (max-width: 960px) {
     .categories {
       flex-wrap: nowrap;
       overflow-x: auto;
       scrollbar-width: none;
       margin-inline: calc(-1 * var(--space-4));
       padding-inline: var(--space-4);
+      -webkit-overflow-scrolling: touch;
     }
     .categories::-webkit-scrollbar { display: none; }
     .categories .chip { flex: none; }
+  }
+  @media (max-width: 640px) {
     .sorts { inline-size: 100%; }
     .segmented .chip { flex: 1; text-align: center; }
     .states {
@@ -194,6 +197,7 @@ const states = (['open', 'fixed', 'other'] as const).map((key) => ({
       scrollbar-width: none;
       margin-inline-start: calc(-1 * var(--space-4));
       padding-inline-start: var(--space-4);
+      -webkit-overflow-scrolling: touch;
     }
     .states::-webkit-scrollbar { display: none; }
     .states .chip { flex: none; }

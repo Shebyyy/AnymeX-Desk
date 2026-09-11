@@ -176,14 +176,9 @@
      User Personalization & Preferences Token Overrides
      ========================================================================== */
 
-  /* --- UI Scales --- */
+  /* --- UI Scales (Proportional rem scaling matching preference labels: 88%, 100%, 112%, 125%) --- */
   :root[data-scale="compact"] {
-    --text-xs: 0.70rem;
-    --text-sm: 0.75rem;
-    --text-base: 0.8125rem;
-    --text-md: 0.875rem;
-    --text-lg: 1.0rem;
-    --text-xl: 1.125rem;
+    font-size: 88%;
     --row-height: 30px;
     --control-height: 26px;
     --space-3: 8px;
@@ -192,12 +187,7 @@
     --space-6: 20px;
   }
   :root[data-scale="comfortable"] {
-    --text-xs: 0.8125rem;
-    --text-sm: 0.875rem;
-    --text-base: 0.9375rem;
-    --text-md: 1.0rem;
-    --text-lg: 1.20rem;
-    --text-xl: 1.35rem;
+    font-size: 112%;
     --row-height: 38px;
     --control-height: 34px;
     --space-3: 14px;
@@ -205,12 +195,7 @@
     --space-5: 24px;
   }
   :root[data-scale="large"] {
-    --text-xs: 0.875rem;
-    --text-sm: 0.9375rem;
-    --text-base: 1.0625rem;
-    --text-md: 1.125rem;
-    --text-lg: 1.30rem;
-    --text-xl: 1.50rem;
+    font-size: 125%;
     --row-height: 42px;
     --control-height: 38px;
     --space-3: 16px;

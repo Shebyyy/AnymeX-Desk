@@ -110,13 +110,17 @@ const ogImage = reportIdMatch
 
     <style>
       main {
-        padding-block: var(--space-6) var(--space-16);
+        flex: 1 0 auto;
+        inline-size: 100%;
+        padding-block: var(--space-5) clamp(var(--space-6), 5vh, var(--space-12));
       }
       main.prose {
         max-inline-size: var(--measure-prose);
       }
       .foot {
-        padding-block: var(--space-6);
+        margin-block-start: auto;
+        inline-size: 100%;
+        padding-block: var(--space-5);
         border-block-start: 1px solid var(--border-subtle);
         font-size: var(--text-sm);
         color: var(--text-muted);

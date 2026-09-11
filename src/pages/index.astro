@@ -261,7 +261,8 @@ Astro.response.headers.set(
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding-block: var(--space-4) var(--space-2);
+    padding-block: var(--space-3) var(--space-2);
+    flex-wrap: wrap;
   }
   .kind-tab {
     display: flex;
@@ -289,6 +290,22 @@ Astro.response.headers.set(
     color: var(--text-muted);
   }
   .kind-tabs .btn { margin-inline-start: auto; }
+
+  @media (max-width: 640px) {
+    .kind-tabs {
+      gap: var(--space-1);
+    }
+    .kind-tab {
+      padding: var(--space-1) var(--space-2);
+      font-size: var(--text-xs);
+    }
+    .kind-tabs .btn {
+      width: 100%;
+      margin-inline-start: 0;
+      order: 10;
+      margin-block-start: var(--space-1);
+    }
+  }
 
   .pager {
     display: flex;

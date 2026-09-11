@@ -506,30 +506,93 @@ export async function updateForumThread(
   try {
     const threadName = `[#${report.id}] ${report.title}`.slice(0, 100);
 
-    // Update thread name
-    await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {
+    // Resolve updated tags for category, platform, or source
+    const channelId = getForumChannelId(report.kind, c);
+    let desiredTags: string[] | undefined;
+    if (channelId) {
+      try {
+        const tagsMap = await ensureForumTags(channelId, botToken, report.kind);
+        const applied: string[] = [];
+
+        // Status tag
+        const statusTagName = statusToTagName(report.status, report.kind);
+        const statusTagId = tagsMap.get(statusTagName);
+        if (statusTagId) applied.push(statusTagId);
+
+        // Category / platform / source tags
+        if (report.kind === 'extension') {
+          const sourceTagId = tagsMap.get(extensionSourceToTagName(report.category));
+          if (sourceTagId) applied.push(sourceTagId);
+        } else if (report.kind === 'suggestion') {
+          const catTagId = tagsMap.get(suggestionCategoryToTagName(report.category));
+          if (catTagId) applied.push(catTagId);
+        } else {
+          if (report.category) {
+            const catTagId = tagsMap.get(bugCategoryToTagName(report.category));
+            if (catTagId) applied.push(catTagId);
+          }
+          if (report.platform) {
+            const platformTagId = tagsMap.get(platformToTagName(report.platform));
+            if (platformTagId) applied.push(platformTagId);
+          }
+        }
+        if (applied.length > 0) desiredTags = applied;
+      } catch (tagErr) {
+        console.warn(`[ForumSync] Could not resolve tags for report #${report.id}:`, tagErr);
+      }
+    }
+
+    const threadPatchBody: Record<string, unknown> = { name: threadName };
+    if (desiredTags) threadPatchBody.applied_tags = desiredTags;
+
+    // Update thread name and tags
+    const threadRes = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {
       method: 'PATCH',
       headers: {
         Authorization: `Bot ${botToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ name: threadName }),
+      body: JSON.stringify(threadPatchBody),
     });
+    if (!threadRes.ok) {
+      console.error(`[ForumSync] Failed to update thread name/tags for #${report.id}: ${threadRes.status} ${await threadRes.text()}`);
+    }
 
-    // Update starter message embed if recorded
-    if (report.discordStarterMessageId) {
+    // In Discord forum channels, the starter message ID is the thread ID if not explicitly saved
+    const starterMessageId = report.discordStarterMessageId || report.discordThreadId;
+    if (starterMessageId) {
       const embed = await buildReportEmbed(report, origin);
-      await fetch(
-        `${DISCORD_API}/channels/${report.discordThreadId}/messages/${report.discordStarterMessageId}`,
+      const msgRes = await fetch(
+        `${DISCORD_API}/channels/${report.discordThreadId}/messages/${starterMessageId}`,
         {
           method: 'PATCH',
           headers: {
             Authorization: `Bot ${botToken}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ embeds: [embed] }),
+          body: JSON.stringify({
+            embeds: [embed],
+            components: [
+              {
+                type: 1, // ActionRow
+                components: [
+                  {
+                    type: 2, // Button
+                    style: 5, // Link
+                    label: 'View on AnymeX Desk',
+                    url: `${origin}/report/${report.id}`,
+                  },
+                ],
+              },
+            ],
+          }),
         },
       );
+      if (!msgRes.ok) {
+        console.error(`[ForumSync] Failed to update starter embed for report #${report.id} (message ${starterMessageId}): ${msgRes.status} ${await msgRes.text()}`);
+      } else {
+        console.log(`[ForumSync] Successfully updated starter embed for report #${report.id} in thread ${report.discordThreadId}`);
+      }
     }
 
     return true;

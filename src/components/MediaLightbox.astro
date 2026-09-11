@@ -1,0 +1,436 @@
+---
+/**
+ * MediaLightbox.astro
+ * High-performance, gesture-friendly in-app media viewer.
+ * Fixes PWA reset and external URL navigation with browser History API integration.
+ */
+---
+
+<dialog id="media-lightbox" class="lightbox-dialog" aria-label="Media preview">
+  <div class="lightbox-container" id="lightbox-container">
+    <header class="lightbox-topbar">
+      <div class="lightbox-info">
+        <span class="lightbox-filename" id="lightbox-filename"></span>
+        <span class="lightbox-counter" id="lightbox-counter"></span>
+      </div>
+      <div class="lightbox-controls">
+        <a id="lightbox-download" class="lightbox-icon-btn" download title="Download original media" target="_blank" rel="noopener" aria-label="Download original media">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+        </a>
+        <button type="button" id="lightbox-close-btn" class="lightbox-icon-btn lightbox-close" aria-label="Close preview (Esc)" title="Close (Esc)">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="lightbox-stage" id="lightbox-stage">
+      <button type="button" class="lightbox-nav-btn lightbox-prev" id="lightbox-prev" aria-label="Previous attachment" title="Previous (Left arrow)">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+      </button>
+
+      <div class="lightbox-media-wrapper" id="lightbox-media-wrapper">
+        <img id="lightbox-img" class="lightbox-img" src="" alt="" style="display: none;" />
+        <video id="lightbox-video" class="lightbox-video" controls preload="metadata" playsinline style="display: none;">
+          <source id="lightbox-video-source" src="" />
+          Your browser does not support the video tag.
+        </video>
+      </div>
+
+      <button type="button" class="lightbox-nav-btn lightbox-next" id="lightbox-next" aria-label="Next attachment" title="Next (Right arrow)">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+  (() => {
+    interface LightboxItem {
+      src: string;
+      type: 'image' | 'video' | 'file';
+      name: string;
+      element: HTMLElement;
+    }
+
+    const dialog = document.getElementById('media-lightbox') as HTMLDialogElement | null;
+    if (!dialog) return;
+
+    const img = document.getElementById('lightbox-img') as HTMLImageElement;
+    const video = document.getElementById('lightbox-video') as HTMLVideoElement;
+    const videoSource = document.getElementById('lightbox-video-source') as HTMLSourceElement;
+    const filenameEl = document.getElementById('lightbox-filename');
+    const counterEl = document.getElementById('lightbox-counter');
+    const downloadBtn = document.getElementById('lightbox-download') as HTMLAnchorElement;
+    const closeBtn = document.getElementById('lightbox-close-btn');
+    const prevBtn = document.getElementById('lightbox-prev') as HTMLButtonElement;
+    const nextBtn = document.getElementById('lightbox-next') as HTMLButtonElement;
+    const stage = document.getElementById('lightbox-stage');
+
+    let items: LightboxItem[] = [];
+    let currentIndex = 0;
+    let historyPushed = false;
+
+    function refreshItems(): LightboxItem[] {
+      const triggers = Array.from(document.querySelectorAll<HTMLElement>('[data-lightbox-src]'));
+      items = triggers.map((el) => ({
+        src: el.getAttribute('data-lightbox-src') || '',
+        type: (el.getAttribute('data-lightbox-type') || 'image') as any,
+        name: el.getAttribute('data-lightbox-name') || 'Attachment',
+        element: el,
+      })).filter((it) => it.src && it.type !== 'file');
+      return items;
+    }
+
+    function renderCurrent() {
+      if (!items[currentIndex]) return;
+      const item = items[currentIndex];
+
+      if (filenameEl) filenameEl.textContent = item.name;
+      if (counterEl) {
+        counterEl.textContent = items.length > 1 ? `${currentIndex + 1} / ${items.length}` : '';
+      }
+      if (downloadBtn) {
+        downloadBtn.href = item.src;
+        downloadBtn.setAttribute('download', item.name);
+      }
+
+      if (item.type === 'video') {
+        img.style.display = 'none';
+        img.src = '';
+        video.style.display = 'block';
+        videoSource.src = item.src;
+        video.load();
+      } else {
+        video.pause();
+        video.style.display = 'none';
+        videoSource.src = '';
+        img.style.display = 'block';
+        img.src = item.src;
+        img.alt = item.name;
+      }
+
+      // Prev / Next button visibility
+      if (items.length <= 1) {
+        prevBtn.style.display = 'none';
+        nextBtn.style.display = 'none';
+      } else {
+        prevBtn.style.display = 'flex';
+        nextBtn.style.display = 'flex';
+      }
+    }
+
+    function openLightbox(index: number) {
+      refreshItems();
+      if (items.length === 0) return;
+      currentIndex = Math.max(0, Math.min(index, items.length - 1));
+      renderCurrent();
+
+      if (!dialog?.open) {
+        dialog?.showModal();
+        document.body.style.overflow = 'hidden';
+
+        // Push state to browser history for Android / iOS Back-button & PWA support
+        try {
+          history.pushState({ anymexLightbox: true }, '');
+          historyPushed = true;
+        } catch (_) {}
+      }
+    }
+
+    function closeLightbox(fromPopState = false) {
+      if (!dialog?.open) return;
+
+      video.pause();
+      video.style.display = 'none';
+      videoSource.src = '';
+      img.src = '';
+
+      dialog.close();
+      document.body.style.overflow = '';
+
+      // Clean up browser history state if closed manually
+      if (historyPushed && !fromPopState) {
+        historyPushed = false;
+        try {
+          history.back();
+        } catch (_) {}
+      } else {
+        historyPushed = false;
+      }
+    }
+
+    function prevItem() {
+      if (items.length <= 1) return;
+      currentIndex = (currentIndex - 1 + items.length) % items.length;
+      renderCurrent();
+    }
+
+    function nextItem() {
+      if (items.length <= 1) return;
+      currentIndex = (currentIndex + 1) % items.length;
+      renderCurrent();
+    }
+
+    // Click triggers across the page
+    document.addEventListener('click', (e) => {
+      const target = (e.target as Element).closest<HTMLElement>('[data-lightbox-src]');
+      if (!target) return;
+      const type = target.getAttribute('data-lightbox-type');
+      if (type === 'file') return; // let files download directly
+
+      e.preventDefault();
+      refreshItems();
+      const idx = items.findIndex((it) => it.element === target || it.src === target.getAttribute('data-lightbox-src'));
+      openLightbox(idx >= 0 ? idx : 0);
+    });
+
+    // Close buttons and backdrop
+    closeBtn?.addEventListener('click', () => closeLightbox());
+    prevBtn?.addEventListener('click', (e) => { e.stopPropagation(); prevItem(); });
+    nextBtn?.addEventListener('click', (e) => { e.stopPropagation(); nextItem(); });
+
+    dialog.addEventListener('click', (e) => {
+      // Clicking the dim overlay outside the media/controls closes it
+      if (e.target === dialog || e.target === stage) {
+        closeLightbox();
+      }
+    });
+
+    // Keyboard support
+    window.addEventListener('keydown', (e) => {
+      if (!dialog.open) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeLightbox();
+      } else if (e.key === 'ArrowLeft') {
+        prevItem();
+      } else if (e.key === 'ArrowRight') {
+        nextItem();
+      }
+    });
+
+    // Hardware Back Button / PopState support (Critical for PWA)
+    window.addEventListener('popstate', () => {
+      if (dialog.open) {
+        closeLightbox(true);
+      }
+    });
+
+    // Mobile touch swipe gestures
+    let touchStartX = 0;
+    let touchStartY = 0;
+    stage?.addEventListener('touchstart', (e) => {
+      touchStartX = e.changedTouches[0].screenX;
+      touchStartY = e.changedTouches[0].screenY;
+    }, { passive: true });
+
+    stage?.addEventListener('touchend', (e) => {
+      const touchEndX = e.changedTouches[0].screenX;
+      const touchEndY = e.changedTouches[0].screenY;
+      const dx = touchEndX - touchStartX;
+      const dy = touchEndY - touchStartY;
+
+      // Horizontal swipe
+      if (Math.abs(dx) > 50 && Math.abs(dy) < 60) {
+        if (dx < 0) nextItem();
+        else prevItem();
+      }
+      // Swipe down to dismiss on mobile
+      else if (dy > 80 && Math.abs(dx) < 60) {
+        closeLightbox();
+      }
+    }, { passive: true });
+  })();
+</script>
+
+<style>
+  .lightbox-dialog {
+    padding: 0;
+    border: none;
+    background: transparent;
+    max-width: 100vw;
+    max-height: 100dvh;
+    width: 100vw;
+    height: 100dvh;
+    color: var(--text-primary, #fff);
+    outline: none;
+  }
+  .lightbox-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .lightbox-container {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    position: relative;
+    user-select: none;
+  }
+
+  .lightbox-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3, 12px) var(--space-5, 20px);
+    background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 100%);
+    z-index: 10;
+    flex-shrink: 0;
+    gap: var(--space-3);
+  }
+
+  .lightbox-info {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3, 12px);
+    overflow: hidden;
+    min-width: 0;
+  }
+  .lightbox-filename {
+    font-size: var(--text-sm, 13.5px);
+    font-weight: 500;
+    color: var(--text-primary, #fff);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .lightbox-counter {
+    font-size: var(--text-xs, 12px);
+    font-family: var(--font-data, monospace);
+    color: var(--text-tertiary, #aaa);
+    flex-shrink: 0;
+  }
+
+  .lightbox-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2, 8px);
+    flex-shrink: 0;
+  }
+
+  .lightbox-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border-radius: var(--radius-full, 9999px);
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary, #fff);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.1s ease;
+    text-decoration: none;
+  }
+  .lightbox-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
+  }
+  .lightbox-close:hover {
+    background: rgba(239, 68, 68, 0.3);
+    border-color: rgba(239, 68, 68, 0.5);
+  }
+
+  .lightbox-stage {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+    padding: var(--space-2) var(--space-4);
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .lightbox-media-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    max-height: calc(100dvh - 80px);
+    position: relative;
+  }
+
+  .lightbox-img {
+    max-width: 96vw;
+    max-height: calc(100dvh - 90px);
+    object-fit: contain;
+    border-radius: var(--radius-md, 6px);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    animation: zoomIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .lightbox-video {
+    max-width: 96vw;
+    max-height: calc(100dvh - 90px);
+    border-radius: var(--radius-md, 6px);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    outline: none;
+    background: #000;
+  }
+
+  .lightbox-nav-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.65);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: var(--text-primary, #fff);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 10;
+    backdrop-filter: blur(8px);
+    transition: background 0.15s ease, transform 0.15s ease;
+  }
+  .lightbox-nav-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: translateY(-50%) scale(1.1);
+  }
+  .lightbox-prev { left: 16px; }
+  .lightbox-next { right: 16px; }
+
+  @media (max-width: 640px) {
+    .lightbox-nav-btn {
+      width: 36px;
+      height: 36px;
+      background: rgba(0, 0, 0, 0.5);
+    }
+    .lightbox-prev { left: 8px; }
+    .lightbox-next { right: 8px; }
+    .lightbox-img,
+    .lightbox-video {
+      max-height: calc(100dvh - 70px);
+    }
+  }
+
+  @keyframes zoomIn {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+</style>
