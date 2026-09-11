@@ -335,14 +335,36 @@ const kindLocked = queryKind === 'bug' || queryKind === 'suggestion' || queryKin
 const kv = env.SESSION as KVNamespace | undefined;
 const releases = await getCachedReleases(kv);
 
+// Support direct link pre-selection: ?channel=beta, ?channel=stable, ?channel=preview, or ?beta
+const channelQuery = (
+  Astro.url.searchParams.get('channel') ||
+  Astro.url.searchParams.get('releaseChannel') ||
+  Astro.url.searchParams.get('release') ||
+  ''
+).toLowerCase().trim();
+
+const isBeta = channelQuery === 'beta' || channelQuery === 'preview' || Astro.url.searchParams.has('beta');
+const defaultChannel: 'stable' | 'beta' = isBeta ? 'beta' : 'stable';
+
+// Support optional prefill: ?version=... or ?version=latest
+const versionQuery = (
+  Astro.url.searchParams.get('version') ||
+  Astro.url.searchParams.get('appVersion') ||
+  ''
+).trim().slice(0, 32);
+
+const resolvedVersion = versionQuery === 'latest'
+  ? (isBeta ? releases.latest.beta?.version : releases.latest.stable?.version) || ''
+  : versionQuery;
+
 const shown = {
   kind: posted?.kind || draft?.kind || queryKind || 'bug',
-  category: posted?.category || draft?.category || '',
-  platform: posted?.platform || draft?.platform || '',
-  appVersion: posted?.appVersion || draft?.appVersion || '',
-  releaseChannel: posted?.releaseChannel || draft?.releaseChannel || (Astro.url.searchParams.get('channel') === 'beta' ? 'beta' : 'stable'),
-  pluginVersion: posted?.pluginVersion || draft?.pluginVersion || '',
-  title: posted?.title || draft?.title || '',
+  category: posted?.category || draft?.category || (Astro.url.searchParams.get('category') || '').trim(),
+  platform: posted?.platform || draft?.platform || (Astro.url.searchParams.get('platform') || '').trim(),
+  appVersion: posted?.appVersion || draft?.appVersion || resolvedVersion || '',
+  releaseChannel: posted?.releaseChannel || draft?.releaseChannel || defaultChannel,
+  pluginVersion: posted?.pluginVersion || draft?.pluginVersion || (Astro.url.searchParams.get('pluginVersion') || '').trim().slice(0, 32),
+  title: posted?.title || draft?.title || (Astro.url.searchParams.get('title') || '').trim().slice(0, 200),
   body: posted?.body || draft?.body || '',
   stepsToReproduce: posted?.stepsToReproduce || draft?.stepsToReproduce || '',
   testedNativeApp: posted?.testedNativeApp || draft?.testedNativeApp || false,
