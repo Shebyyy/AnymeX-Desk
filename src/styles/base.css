@@ -5,7 +5,13 @@
   *, *::before, *::after { box-sizing: border-box; }
   * { margin: 0; }
   html { -webkit-text-size-adjust: 100%; }
-  body { min-height: 100dvh; display: flex; flex-direction: column; -webkit-font-smoothing: antialiased; }
+  body {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
   img, svg, video { display: block; max-width: 100%; }
   input, button, textarea, select { font: inherit; color: inherit; }
   button { background: none; border: none; padding: 0; cursor: pointer; }
@@ -507,7 +513,10 @@
     .btn-icon { inline-size: 38px; }
     .btn-lg { block-size: 44px; }
     .chip { block-size: 34px; padding-inline: var(--space-2); }
-    .input, .select, .textarea { block-size: 44px; }
+    .input, .select, .textarea {
+      block-size: 44px;
+      font-size: 16px; /* Prevents iOS Safari auto-zoom on focus */
+    }
     .textarea { block-size: auto; }
   }
 

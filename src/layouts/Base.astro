@@ -36,7 +36,7 @@ const ogImage = reportIdMatch
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>{title} · AnymeX Desk</title>
     <meta name="description" content={description} />
     <link rel="icon" type="image/gif" href="/favicon.gif" />
@@ -110,7 +110,8 @@ const ogImage = reportIdMatch
 
     <style>
       main {
-        flex: 1 0 auto;
+        flex: 1 1 auto;
+        min-height: 0;
         inline-size: 100%;
         padding-block: var(--space-5) clamp(var(--space-6), 5vh, var(--space-12));
       }
@@ -120,7 +121,7 @@ const ogImage = reportIdMatch
       .foot {
         margin-block-start: auto;
         inline-size: 100%;
-        padding-block: var(--space-5);
+        padding-block: var(--space-5) calc(var(--space-5) + env(safe-area-inset-bottom, 0px));
         border-block-start: 1px solid var(--border-subtle);
         font-size: var(--text-sm);
         color: var(--text-muted);
