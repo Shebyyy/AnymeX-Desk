@@ -4,6 +4,7 @@ import '../styles/tokens.css';
 import '../styles/base.css';
 import Header from '../components/Header.astro';
 import PreferencesModal from '../components/PreferencesModal.astro';
+import InstallBanner from '../components/InstallBanner.astro';
 import RolePreviewBanner from '../components/RolePreviewBanner.astro';
 import { currentUser } from '../lib/auth';
 import { effectiveStaffLevel } from '../lib/staff';
@@ -105,6 +106,7 @@ const ogImage = reportIdMatch
     </footer>
 
     <PreferencesModal />
+    <InstallBanner />
 
     <style>
       main {

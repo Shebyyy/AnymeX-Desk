@@ -1,5 +1,5 @@
 /**
- * Service Worker registration and PWA install prompt handler.
+ * Service Worker registration, PWA install prompt, and smart floating banner handler.
  */
 
 interface BeforeInstallPromptEvent extends Event {
@@ -8,6 +8,10 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 let deferredPrompt: BeforeInstallPromptEvent | null = null;
+
+const BANNER_DISMISSED_KEY = 'anymex_pwa_banner_dismissed_at';
+const BANNER_COUNT_KEY = 'anymex_pwa_banner_dismiss_count';
+const SNOOZE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function isAppStandalone(): boolean {
   if (typeof window === 'undefined') return false;
@@ -89,12 +93,83 @@ function handleInstallTrigger() {
     deferredPrompt.userChoice.then((choice) => {
       if (choice.outcome === 'accepted') {
         updateInstallButtons(false);
+        dismissBanner(true);
       }
       deferredPrompt = null;
     });
   } else if (isIos()) {
     showIosInstructions();
   }
+}
+
+function shouldShowBanner(): boolean {
+  if (isAppStandalone()) return false;
+
+  try {
+    const count = parseInt(localStorage.getItem(BANNER_COUNT_KEY) || '0', 10);
+    if (count >= 2) return false;
+
+    const lastDismissed = parseInt(localStorage.getItem(BANNER_DISMISSED_KEY) || '0', 10);
+    if (lastDismissed && Date.now() - lastDismissed < SNOOZE_MS) {
+      return false;
+    }
+  } catch {}
+
+  return true;
+}
+
+function dismissBanner(permanent = false) {
+  const banner = document.getElementById('pwa-install-banner');
+  if (banner) {
+    banner.style.display = 'none';
+  }
+  try {
+    localStorage.setItem(BANNER_DISMISSED_KEY, Date.now().toString());
+    const count = parseInt(localStorage.getItem(BANNER_COUNT_KEY) || '0', 10);
+    localStorage.setItem(BANNER_COUNT_KEY, permanent ? '99' : (count + 1).toString());
+  } catch {}
+}
+
+function showBanner() {
+  if (!shouldShowBanner()) return;
+  const banner = document.getElementById('pwa-install-banner');
+  if (banner) {
+    banner.style.display = 'flex';
+  }
+}
+
+function initBanner() {
+  const banner = document.getElementById('pwa-install-banner');
+  if (!banner) return;
+
+  const installBtn = document.getElementById('pwa-banner-install-btn');
+  const dismissBtn = document.getElementById('pwa-banner-dismiss-btn');
+  const closeBtn = document.getElementById('pwa-banner-close-btn');
+
+  if (installBtn && !installBtn.hasAttribute('data-bound')) {
+    installBtn.setAttribute('data-bound', 'true');
+    installBtn.addEventListener('click', () => {
+      dismissBanner();
+      handleInstallTrigger();
+    });
+  }
+
+  if (dismissBtn && !dismissBtn.hasAttribute('data-bound')) {
+    dismissBtn.setAttribute('data-bound', 'true');
+    dismissBtn.addEventListener('click', () => dismissBanner(false));
+  }
+
+  if (closeBtn && !closeBtn.hasAttribute('data-bound')) {
+    closeBtn.setAttribute('data-bound', 'true');
+    closeBtn.addEventListener('click', () => dismissBanner(false));
+  }
+
+  // 10-second delay on page load before presenting the floating banner
+  setTimeout(() => {
+    if (deferredPrompt || isIos()) {
+      showBanner();
+    }
+  }, 10000);
 }
 
 // Wire up click handlers
@@ -110,6 +185,8 @@ function initInstallButtons() {
     mobileBtn.setAttribute('data-pwa-bound', 'true');
     mobileBtn.addEventListener('click', handleInstallTrigger);
   }
+
+  initBanner();
 
   if (isAppStandalone()) {
     updateInstallButtons(false);
@@ -134,6 +211,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
 window.addEventListener('appinstalled', () => {
   deferredPrompt = null;
   updateInstallButtons(false);
+  dismissBanner(true);
   console.debug('[PWA] AnymeX Desk installed');
 });
 
