@@ -1,0 +1,79 @@
+---
+import Base from '../layouts/Base.astro';
+
+export const prerender = false;
+---
+
+<Base title="Offline" narrow>
+  <div class="offline-box">
+    <div class="offline-icon" aria-hidden="true">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="1" y1="1" x2="23" y2="23"></line>
+        <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
+        <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
+        <path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path>
+        <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
+        <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+        <line x1="12" y1="20" x2="12.01" y2="20"></line>
+      </svg>
+    </div>
+    <h1>You're currently offline</h1>
+    <p>
+      AnymeX Desk requires an active internet connection to load live reports, votes, and discussions.
+      Check your connection and try again.
+    </p>
+
+    <div class="actions">
+      <button type="button" class="btn btn-primary btn-lg" id="retry-btn">
+        Retry Connection
+      </button>
+      <a class="btn btn-lg" href="/">
+        Return to Home
+      </a>
+    </div>
+  </div>
+</Base>
+
+<script>
+  const retryBtn = document.getElementById('retry-btn');
+  if (retryBtn) {
+    retryBtn.addEventListener('click', function() {
+      retryBtn.textContent = 'Checking...';
+      if (navigator.onLine) {
+        window.location.reload();
+      } else {
+        setTimeout(function() {
+          retryBtn.textContent = 'Still Offline — Retry';
+        }, 600);
+      }
+    });
+  }
+
+  window.addEventListener('online', function() {
+    window.location.reload();
+  });
+</script>
+
+<style>
+  .offline-box {
+    padding-block: var(--space-8);
+  }
+  .offline-icon {
+    color: var(--text-muted);
+    margin-block-end: var(--space-4);
+  }
+  h1 {
+    font-size: var(--text-xl);
+    margin-block-end: var(--space-3);
+  }
+  p {
+    color: var(--text-secondary);
+    line-height: var(--leading-normal);
+  }
+  .actions {
+    display: flex;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-block-start: var(--space-6);
+  }
+</style>
