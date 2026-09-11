@@ -275,6 +275,16 @@ export function extensionSourceToTagName(source: string): string {
 }
 
 /**
+ * Formats thread title with vote badge, report ID, and clean title.
+ * Strips any previous vote badges to avoid duplicate prefixes.
+ */
+export function formatForumThreadTitle(id: number, title: string, votes: number): string {
+  const cleanTitle = title.replace(/^\[(?:👍|▲)\s*\d+\]\s*/i, '').trim();
+  const voteBadge = votes > 0 ? `[👍 ${votes}] ` : '';
+  return `${voteBadge}[#${id}] ${cleanTitle}`.slice(0, 100);
+}
+
+/**
  * Formats starter embed for a report forum thread
  */
 export async function buildReportEmbed(report: Report, origin: string) {
@@ -298,6 +308,7 @@ export async function buildReportEmbed(report: Report, origin: string) {
     { name: isSuggestion ? 'Suggested By' : 'Filed By', value: who, inline: true },
     { name: 'Type', value: kindLabel(report.kind), inline: true },
     { name: 'Status', value: displayStatus, inline: true },
+    { name: 'Votes', value: `👍 **${report.votes ?? 0}**`, inline: true },
   ];
 
   if (report.category) {
@@ -378,7 +389,9 @@ export async function buildReportEmbed(report: Report, origin: string) {
     color,
     fields,
     image: imageUrl ? { url: imageUrl } : undefined,
-    footer: { text: `AnymeX Tracker • ${isSuggestion ? 'Suggestion' : 'Report'} #${report.id}` },
+    footer: {
+      text: `AnymeX Tracker • ${isSuggestion ? 'Suggestion' : 'Report'} #${report.id} • 👍 ${report.votes ?? 0} ${(report.votes ?? 0) === 1 ? 'vote' : 'votes'}`,
+    },
     timestamp: new Date((report.createdAt || Math.floor(Date.now() / 1000)) * 1000).toISOString(),
   };
 }
@@ -431,7 +444,7 @@ export async function createForumThread(
     }
 
     const embed = await buildReportEmbed(report, origin);
-    const threadName = `[#${report.id}] ${report.title}`.slice(0, 100);
+    const threadName = formatForumThreadTitle(report.id, report.title, report.votes ?? 0);
 
     const payload = {
       name: threadName,
@@ -445,7 +458,7 @@ export async function createForumThread(
               {
                 type: 2, // Button
                 style: 5, // Link
-                label: 'View on AnymeX Desk',
+                label: (report.votes ?? 0) > 0 ? `View on AnymeX Desk (👍 ${report.votes})` : 'View on AnymeX Desk',
                 url: `${origin}/report/${report.id}`,
               },
             ],
@@ -504,7 +517,7 @@ export async function updateForumThread(
   if (!botToken || !report.discordThreadId) return false;
 
   try {
-    const threadName = `[#${report.id}] ${report.title}`.slice(0, 100);
+    const threadName = formatForumThreadTitle(report.id, report.title, report.votes ?? 0);
 
     // Resolve updated tags for category, platform, or source
     const channelId = getForumChannelId(report.kind, c);
@@ -579,7 +592,7 @@ export async function updateForumThread(
                   {
                     type: 2, // Button
                     style: 5, // Link
-                    label: 'View on AnymeX Desk',
+                    label: (report.votes ?? 0) > 0 ? `View on AnymeX Desk (👍 ${report.votes})` : 'View on AnymeX Desk',
                     url: `${origin}/report/${report.id}`,
                   },
                 ],
@@ -1513,5 +1526,116 @@ export async function syncReportStatusFromDiscord(
 
   return null;
 }
+
+// In-memory rename lock cache to prevent rapid concurrent hits per isolate
+const threadTitleLocks = new Map<string, number>();
+
+/**
+ * Sync vote count to Discord Forum thread.
+ * 1. Instantly updates the starter message embed & button in real-time.
+ * 2. Checks cooldown (10 minutes) before renaming the thread title to stay within Discord rate limits.
+ */
+export async function syncForumVote(
+  reportId: number,
+  origin: string,
+  kv?: KVNamespace,
+  cfg?: Config,
+): Promise<boolean> {
+  const c = cfg ?? (await readConfig());
+  if (c.discord_forum_sync_enabled !== '1') return false;
+
+  const botToken = c.discord_bot_token;
+  if (!botToken) return false;
+
+  const [report] = await db()
+    .select()
+    .from(reports)
+    .where(eq(reports.id, reportId));
+
+  if (!report || !report.discordThreadId) return false;
+
+  const starterMessageId = report.discordStarterMessageId || report.discordThreadId;
+  const voteCount = report.votes ?? 0;
+  const buttonLabel = voteCount > 0 ? `View on AnymeX Desk (👍 ${voteCount})` : 'View on AnymeX Desk';
+
+  try {
+    // 1. Instantly update starter message embed & button in real-time
+    const embed = await buildReportEmbed(report, origin);
+    const msgRes = await fetch(
+      `${DISCORD_API}/channels/${report.discordThreadId}/messages/${starterMessageId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bot ${botToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          embeds: [embed],
+          components: [
+            {
+              type: 1, // ActionRow
+              components: [
+                {
+                  type: 2, // Button
+                  style: 5, // Link
+                  label: buttonLabel,
+                  url: `${origin}/report/${report.id}`,
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    );
+
+    if (!msgRes.ok) {
+      console.warn(`[ForumSync] Failed to update vote on starter message for #${report.id}: ${msgRes.status}`);
+    }
+
+    // 2. Thread title rename with 10-minute cooldown protection
+    const lockKey = `dc_title_lock:${report.discordThreadId}`;
+    const now = Date.now();
+    const memExpiry = threadTitleLocks.get(report.discordThreadId) ?? 0;
+    let isLocked = memExpiry > now;
+
+    if (!isLocked && kv) {
+      try {
+        const kvLock = await kv.get(lockKey);
+        if (kvLock) isLocked = true;
+      } catch {
+        // ignore KV read error
+      }
+    }
+
+    if (!isLocked) {
+      const threadName = formatForumThreadTitle(report.id, report.title, voteCount);
+      const renameRes = await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bot ${botToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name: threadName }),
+      });
+
+      if (renameRes.ok) {
+        threadTitleLocks.set(report.discordThreadId, now + 10 * 60 * 1000);
+        if (kv) {
+          try {
+            await kv.put(lockKey, '1', { expirationTtl: 600 });
+          } catch {
+            // ignore KV write error
+          }
+        }
+      }
+    }
+
+    return true;
+  } catch (err) {
+    console.error(`[ForumSync] Error syncing vote for report #${report.id}:`, err);
+    return false;
+  }
+}
+
 
 

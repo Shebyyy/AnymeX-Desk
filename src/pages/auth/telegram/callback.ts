@@ -1,4 +1,5 @@
 import type { APIRoute } from 'astro';
+import { env } from 'cloudflare:workers';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../../../lib/db/client';
 import { users } from '../../../lib/db/schema';
@@ -7,6 +8,7 @@ import { readConfig, readSetting } from '../../../lib/settings';
 import { verifyTelegramAuth } from '../../../lib/telegram-auth';
 import { safeReturnTo } from '../../../lib/redirect';
 import { ensureVote } from '../../../lib/vote';
+import { syncForumVote } from '../../../lib/discord-forums';
 
 export const prerender = false;
 
@@ -157,6 +159,10 @@ export const GET: APIRoute = async (ctx) => {
     const pendingVote = await ctx.session?.get('pending_vote');
     if (pendingVote && (await canWriteNow(sessionUser))) {
       await ensureVote(Number(pendingVote), sessionUser.id);
+      const kv = env.SESSION as KVNamespace | undefined;
+      const syncVote = syncForumVote(Number(pendingVote), ctx.url.origin, kv);
+      if (ctx.locals.cfContext) ctx.locals.cfContext.waitUntil(syncVote);
+      else await syncVote;
     }
   } catch (err) {
     console.error('[auth:telegram] Login callback error:', err);

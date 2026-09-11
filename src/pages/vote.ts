@@ -1,10 +1,12 @@
 import type { APIRoute } from 'astro';
+import { env } from 'cloudflare:workers';
 import { canWriteNow, currentUser } from '../lib/auth';
 import { toggleVote } from '../lib/vote';
 import { announceDemand } from '../lib/webhook';
 import { safeReturnTo } from '../lib/redirect';
 import { isReportId, isVotableReport } from '../lib/writes';
 import { logAction } from '../lib/staff';
+import { syncForumVote } from '../lib/discord-forums';
 
 export const prerender = false;
 
@@ -25,6 +27,9 @@ export const POST: APIRoute = async (ctx) => {
 
   const result = await toggleVote(reportId, user.id);
   const cf = ctx.locals.cfContext;
+  const kv = env.SESSION as KVNamespace | undefined;
+  const syncVote = syncForumVote(reportId, ctx.url.origin, kv);
+
   const log = logAction(
     user,
     result === 'added' ? 'vote.add' : 'vote.remove',
@@ -34,11 +39,23 @@ export const POST: APIRoute = async (ctx) => {
   );
   if (result === 'added') {
     const announce = announceDemand(reportId, ctx.url.origin);
-    if (cf) { cf.waitUntil(log); cf.waitUntil(announce); }
-    else { await log; await announce; }
+    if (cf) {
+      cf.waitUntil(log);
+      cf.waitUntil(announce);
+      cf.waitUntil(syncVote);
+    } else {
+      await log;
+      await announce;
+      await syncVote;
+    }
   } else {
-    if (cf) cf.waitUntil(log);
-    else await log;
+    if (cf) {
+      cf.waitUntil(log);
+      cf.waitUntil(syncVote);
+    } else {
+      await log;
+      await syncVote;
+    }
   }
   return ctx.redirect(back, 303);
 };

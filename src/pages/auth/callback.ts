@@ -1,10 +1,12 @@
 import type { APIRoute } from 'astro';
+import { env } from 'cloudflare:workers';
 import { eq, sql } from 'drizzle-orm';
 import { buildSessionUser, canWriteNow, currentUser, exchangeCode, mergeUserAccounts } from '../../lib/auth';
 import { db } from '../../lib/db/client';
 import { users } from '../../lib/db/schema';
 import { safeReturnTo } from '../../lib/redirect';
 import { ensureVote } from '../../lib/vote';
+import { syncForumVote } from '../../lib/discord-forums';
 
 export const prerender = false;
 
@@ -146,6 +148,10 @@ export const GET: APIRoute = async (ctx) => {
     const pendingVote = await ctx.session?.get('pending_vote');
     if (pendingVote && (await canWriteNow(user))) {
       await ensureVote(Number(pendingVote), user.id);
+      const kv = env.SESSION as KVNamespace | undefined;
+      const syncVote = syncForumVote(Number(pendingVote), ctx.url.origin, kv);
+      if (ctx.locals.cfContext) ctx.locals.cfContext.waitUntil(syncVote);
+      else await syncVote;
     }
   } catch (err) {
     // `?auth=failed` is all the visitor needs, but swallowing the cause makes

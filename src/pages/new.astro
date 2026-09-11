@@ -24,7 +24,7 @@ import { canWriteNow, currentUser } from '../lib/auth';
 import { ensureVote } from '../lib/vote';
 import { FILING_COOLDOWN_MESSAGE, overFilingLimit, findDuplicate } from '../lib/writes';
 import { announceFiled } from '../lib/webhook';
-import { createForumThread } from '../lib/discord-forums';
+import { createForumThread, syncForumVote } from '../lib/discord-forums';
 import { logAction } from '../lib/staff';
 import { db } from '../lib/db/client';
 import { sql } from 'drizzle-orm';
@@ -221,6 +221,7 @@ if (Astro.request.method === 'POST') {
     if (dup) {
       if (!dup.locked) {
         await ensureVote(dup.id, user.id);
+        const syncVote = syncForumVote(dup.id, Astro.url.origin, kv);
         const log = logAction(
           user,
           'report.join_duplicate',
@@ -229,8 +230,13 @@ if (Astro.request.method === 'POST') {
           `${Astro.url.origin}/report/${dup.id}`,
         );
         const cf1 = Astro.locals.cfContext;
-        if (cf1) cf1.waitUntil(log);
-        else await log;
+        if (cf1) {
+          cf1.waitUntil(log);
+          cf1.waitUntil(syncVote);
+        } else {
+          await log;
+          await syncVote;
+        }
       }
       if (isAjax) return json({ id: dup.id, joined: !dup.locked, locked: dup.locked }, 200);
       return Astro.redirect(`/report/${dup.id}?joined=1${dup.locked ? '&locked=1' : ''}`, 303);
