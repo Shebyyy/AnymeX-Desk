@@ -20,7 +20,7 @@ import {
 } from '../lib/db/schema';
 import { parseExtensionEntries, type ExtensionEntry } from '../lib/extensions';
 import { or, isNull, eq, and } from 'drizzle-orm';
-import { canWriteNow, currentUser } from '../lib/auth';
+import { canWriteNow, currentUser, writeBlockReason } from '../lib/auth';
 import { ensureVote } from '../lib/vote';
 import { FILING_COOLDOWN_MESSAGE, overFilingLimit, findDuplicate } from '../lib/writes';
 import { announceFiled } from '../lib/webhook';
@@ -158,12 +158,21 @@ if (Astro.request.method === 'POST') {
   };
 
   if (!user) {
-    if (isAjax) return json({ error: 'sign-in' }, 401);
+    if (isAjax) return json({ error: 'Please sign in to submit a report.' }, 401);
     Astro.session?.set('pending_report', submitted);
     return Astro.redirect('/auth/login?next=/new', 302);
   }
-  if (!(await canWriteNow(user))) {
-    if (isAjax) return json({ error: 'banned' }, 403);
+  const blockReason = await writeBlockReason(user);
+  if (blockReason) {
+    if (isAjax) {
+      const errorMsg =
+        blockReason === 'banned'
+          ? 'Your account has been banned by a moderator.'
+          : blockReason === 'age'
+            ? 'Your account is too new to post reports or suggestions yet.'
+            : 'You cannot post right now.';
+      return json({ error: errorMsg }, 403);
+    }
     return Astro.redirect('/cant-post', 302);
   }
 

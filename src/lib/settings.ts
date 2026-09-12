@@ -39,7 +39,7 @@ export type SettingKey = (typeof SETTING_KEYS)[number];
 const DEFAULTS: Record<SettingKey, () => string> = {
   mod_role_ids: () => String(env.MAINTAINER_ROLE_IDS ?? ''),
   admin_role_ids: () => '',
-  min_account_age_days: () => String(env.MIN_ACCOUNT_AGE_DAYS ?? 30),
+  min_account_age_days: () => String(env.MIN_ACCOUNT_AGE_DAYS ?? 0),
   webhook_url: () => String(env.DISCORD_WEBHOOK_URL ?? ''),
   webhook_on_fixed: () => '1',
   webhook_on_new_report: () => '1',

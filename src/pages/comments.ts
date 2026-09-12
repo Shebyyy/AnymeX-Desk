@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import type { APIRoute } from 'astro';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
-import { canWriteNow, currentUser, avatarUrl } from '../lib/auth';
+import { canWriteNow, currentUser, avatarUrl, writeBlockReason } from '../lib/auth';
 import { db } from '../lib/db/client';
 import { comments, reports, users, notifications, attachments, IMAGE_MIMES, VIDEO_MIMES, MAX_IMAGE_SIZE, MAX_VIDEO_SIZE, MAX_FILE_SIZE } from '../lib/db/schema';
 import { atLeast } from '../lib/levels';
@@ -105,7 +105,16 @@ export const GET: APIRoute = async (ctx) => {
 export const POST: APIRoute = async (ctx) => {
   const user = await currentUser(ctx);
   if (!user) return json({ error: 'sign-in' }, 401);
-  if (!(await canWriteNow(user))) return json({ error: 'banned' }, 403);
+  const blockReason = await writeBlockReason(user);
+  if (blockReason) {
+    const error =
+      blockReason === 'banned'
+        ? 'Your account has been banned by a moderator.'
+        : blockReason === 'age'
+          ? 'Your account is too new to comment.'
+          : 'You cannot comment right now.';
+    return json({ error }, 403);
+  }
 
   const form = await ctx.request.formData();
   const reportId = Number(form.get('reportId'));

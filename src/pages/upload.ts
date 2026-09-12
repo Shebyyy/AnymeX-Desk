@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import type { APIRoute } from 'astro';
 import { and, count, eq, isNull, sql } from 'drizzle-orm';
-import { canWriteNow, currentUser } from '../lib/auth';
+import { canWriteNow, currentUser, writeBlockReason } from '../lib/auth';
 import { db } from '../lib/db/client';
 import {
   attachments,
@@ -64,7 +64,16 @@ export const POST: APIRoute = async (ctx) => {
   /* ── Auth gate ─────────────────────────────────────────────────────── */
   const user = await currentUser(ctx);
   if (!user) return json({ error: 'sign-in' }, 401);
-  if (!(await canWriteNow(user))) return json({ error: 'banned' }, 403);
+  const blockReason = await writeBlockReason(user);
+  if (blockReason) {
+    const error =
+      blockReason === 'banned'
+        ? 'Your account has been banned by a moderator.'
+        : blockReason === 'age'
+          ? 'Your account is too new to upload attachments.'
+          : 'You cannot upload attachments right now.';
+    return json({ error }, 403);
+  }
 
   /* ── Parse multipart form ──────────────────────────────────────────── */
   const form = await ctx.request.formData();

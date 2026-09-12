@@ -3,7 +3,7 @@
 
 -- Runtime settings defaults
 INSERT OR IGNORE INTO settings (key, value) VALUES
-  ('min_account_age_days', '3'),
+  ('min_account_age_days', '0'),
   ('webhook_url', ''),
   ('webhook_on_new_report', 'true'),
   ('webhook_vote_threshold', '10'),

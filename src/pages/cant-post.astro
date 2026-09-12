@@ -11,6 +11,9 @@ if (!user) {
 }
 
 const reason = await writeBlockReason(user);
+if (!reason) {
+  return Astro.redirect('/', 302);
+}
 
 const EXPLANATIONS: Record<NonNullable<WriteBlock>, { title: string; body: string }> = {
   banned: {

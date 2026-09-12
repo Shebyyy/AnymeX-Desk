@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { eq, sql } from 'drizzle-orm';
-import { buildSessionUser, canWriteNow, currentUser, exchangeCode, mergeUserAccounts } from '../../lib/auth';
+import { buildSessionUser, canWriteNow, currentUser, exchangeCode, mergeUserAccounts, snowflakeCreatedAt } from '../../lib/auth';
 import { db } from '../../lib/db/client';
 import { users } from '../../lib/db/schema';
 import { safeReturnTo } from '../../lib/redirect';
@@ -82,6 +82,7 @@ export const GET: APIRoute = async (ctx) => {
         return ctx.redirect('/me?discord=already_linked_to_other_account', 302);
       }
 
+      const discordAccountCreatedAt = Math.floor(snowflakeCreatedAt(me.id));
       await db()
         .update(users)
         .set({
@@ -89,12 +90,14 @@ export const GET: APIRoute = async (ctx) => {
           discordUserId: me.id,
           username: me.username || loggedInUser.username,
           avatarHash: me.avatar || loggedInUser.avatarHash,
+          accountCreatedAt: discordAccountCreatedAt,
           lastLogin: sql`(unixepoch())`,
           lastSeen: sql`(unixepoch())`,
         })
         .where(eq(users.discordId, loggedInUser.id));
 
       loggedInUser.discordLinked = true;
+      loggedInUser.accountCreatedAt = discordAccountCreatedAt;
       if (me.username) loggedInUser.username = me.username;
       await ctx.session?.set('user', loggedInUser);
 

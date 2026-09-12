@@ -109,7 +109,7 @@ export async function buildSessionUser(token: string): Promise<SessionUser> {
     avatar: string | null;
   };
 
-  const minAgeDays = Number(cfg.min_account_age_days || 30);
+  const minAgeDays = Number(cfg.min_account_age_days ?? 0);
   const accountCreatedAt = snowflakeCreatedAt(me.id);
   const ageDays = (Date.now() / 1000 - accountCreatedAt) / 86_400;
 
@@ -252,6 +252,7 @@ export async function buildTelegramSessionUser(tgUser: {
         username: displayName,
         avatarHash: avatar,
         accountCreatedAt: now,
+        discordLinked: false,
         telegramId,
         telegramUsername: tgUser.username || null,
         telegramPhotoUrl: avatar,
@@ -297,9 +298,9 @@ export const avatarUrl = (u: { id: string; avatarHash: string | null }, size = 3
 /**
  * Why this visitor may not write, or null if they may.
  *
- * `sign-in` — nobody is signed in.
+ * `sign-in` — nobody is signed in or account not found in database.
  * `banned`  — blocked by hand in the dashboard.
- * `age`     — account younger than the current threshold.
+ * `age`     — Discord account younger than the current threshold.
  *
  * Note: `guild` is no longer a block reason for AnymeX.
  */
@@ -315,12 +316,29 @@ export async function writeBlockReason(u: SessionUser | null): Promise<WriteBloc
   if (!u) return 'sign-in';
 
   const [row] = await db()
-    .select({ banned: users.banned })
+    .select({
+      banned: users.banned,
+      discordLinked: users.discordLinked,
+      discordUserId: users.discordUserId,
+    })
     .from(users)
     .where(eq(users.discordId, u.id));
-  if (!row || row.banned) return 'banned';
+  if (!row) return 'sign-in';
+  if (row.banned) return 'banned';
 
-  const minAgeDays = Number((await readSetting('min_account_age_days')) || 30);
+  // Discord account age gate only applies to Discord accounts.
+  // Telegram-only accounts (no Discord linked) do not have a Discord creation snowflake date.
+  const isDiscordAccount =
+    !u.id.startsWith('tg:') &&
+    u.discordLinked !== false &&
+    row.discordLinked !== false &&
+    Boolean(row.discordUserId || !u.telegramId);
+
+  if (!isDiscordAccount) {
+    return null;
+  }
+
+  const minAgeDays = Number((await readSetting('min_account_age_days')) ?? 0);
   const ageDays = (Date.now() / 1000 - u.accountCreatedAt) / 86_400;
   return ageDays < minAgeDays ? 'age' : null;
 }
