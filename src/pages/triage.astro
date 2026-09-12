@@ -5,7 +5,7 @@ import { db } from '../lib/db/client';
 import { reports, STATUSES, STATUS_LABELS } from '../lib/db/schema';
 import { requireStaff, isResponse, logAction } from '../lib/staff';
 import { notifyWatchers } from '../lib/notify';
-import { relativeAge, kindLabel, categoryLabel, platformLabel } from '../lib/format';
+import { relativeAge, kindLabel, categoryLabel, platformLabel, statusLabel } from '../lib/format';
 
 export const prerender = false;
 
@@ -66,6 +66,8 @@ if (Astro.request.method === 'POST') {
         .returning();
 
       if (updated) {
+        const statusText = statusLabel(status, updated.kind);
+        const detail = statusNote ? `${statusText}: ${statusNote}` : statusText;
         const cf = Astro.locals.cfContext;
         const tasks: Promise<unknown>[] = [
           logAction(user, 'report.status', String(reportId), detail, reportUrl),
@@ -73,7 +75,7 @@ if (Astro.request.method === 'POST') {
         ];
         if (cf) for (const t of tasks) cf.waitUntil(t);
         else await Promise.all(tasks);
-        done = `Report #${reportId} → ${STATUS_LABELS[status] ?? status}`;
+        done = `Report #${reportId} → ${statusText}`;
       } else {
         error = `Report #${reportId} not found.`;
       }

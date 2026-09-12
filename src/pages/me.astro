@@ -320,7 +320,7 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
                         {WHAT_HAPPENED[u.kind as keyof typeof WHAT_HAPPENED] ?? u.kind}
                       </span>
                       <span class={`status-badge status-${u.reportStatus}`}>
-                        {statusLabel(u.reportStatus)}
+                        {statusLabel(u.reportStatus, u.reportKind)}
                       </span>
                     </div>
 

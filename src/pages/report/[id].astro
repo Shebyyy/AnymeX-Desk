@@ -166,6 +166,8 @@ if (Astro.request.method === 'POST') {
       .returning();
     if (updated) {
       const reportUrl = `${Astro.url.origin}/report/${id}`;
+      const statusText = statusLabel(status, updated.kind);
+      const detail = statusNote ? `${statusText}: ${statusNote}` : statusText;
       await logAction(gate.user, 'report.status', String(id), detail, reportUrl);
 
       const after: Promise<unknown>[] = [
@@ -180,7 +182,7 @@ if (Astro.request.method === 'POST') {
             isClosing,
             updated.title,
             gate.user.username,
-            statusNote || `Marked as ${statusLabel(status, wanted)}`,
+            statusNote || `Marked as ${statusText}`,
             isClosing,
           ),
         );
@@ -190,7 +192,7 @@ if (Astro.request.method === 'POST') {
         after.push(
           sendDiscordDm(updated.reporterId, {
             author: gate.user.username,
-            title: `Report marked as ${statusLabel(status)}`,
+            title: `${kindLabel(updated.kind)} marked as ${statusText}`,
             description: statusNote || undefined,
             url: reportUrl,
             color: statusColor(status),

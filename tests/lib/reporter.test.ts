@@ -9,9 +9,12 @@ import { isRealAccount, reporterMeta, reporterName } from '../../src/lib/reporte
  * for the two synthetic ones without ever reading the database for the latter.
  */
 
-const USERS: Record<string, { username: string }> = { '297145': { username: 'mech' } };
+const USERS: Record<string, { username: string }> = {
+  '297145': { username: 'mech' },
+  'tg:12345678': { username: 'telegram_user' },
+};
 
-/** Stands in for dbUser, and records that it was not called for a fake id. */
+/** Stands in for dbUser, and records who was looked up. */
 function loader() {
   const asked: string[] = [];
   return {
@@ -24,40 +27,42 @@ function loader() {
 }
 
 describe('isRealAccount', () => {
-  test('the two synthetic reporters are not accounts', () => {
+  test('empty or zero are not accounts', () => {
+    expect(isRealAccount('')).toBe(false);
     expect(isRealAccount('0')).toBe(false);
-    expect(isRealAccount('github')).toBe(false);
   });
 
   test('a snowflake is', () => {
     expect(isRealAccount('297145')).toBe(true);
+    expect(isRealAccount('1483322438551994499')).toBe(true);
   });
 
-  test('an inherited property name is not a synthetic reporter', () => {
-    // `id in SYNTHETIC` would answer true for these, which would have shown
-    // "imported from GitHub" for an account whose id was `constructor`.
-    expect(isRealAccount('constructor')).toBe(true);
-    expect(isRealAccount('toString')).toBe(true);
+  test('a telegram id is', () => {
+    expect(isRealAccount('tg:12345678')).toBe(true);
   });
 });
 
 describe('reporterName', () => {
-  test('a real account reads the username', async () => {
+  test('a real Discord account reads the username', async () => {
     const { asked, load } = loader();
     expect(await reporterName('297145', load)).toBe('mech');
     expect(asked).toEqual(['297145']);
   });
 
-  test('the synthetic reporters cost no lookup', async () => {
+  test('a Telegram account reads the username', async () => {
     const { asked, load } = loader();
-    expect(await reporterName('0', load)).toBe('imported from GitHub');
-    expect(await reporterName('github', load)).toBe('opened on GitHub');
+    expect(await reporterName('tg:12345678', load)).toBe('telegram_user');
+    expect(asked).toEqual(['tg:12345678']);
+  });
+
+  test('an empty id costs no lookup and returns unknown', async () => {
+    const { asked, load } = loader();
+    expect(await reporterName('', load)).toBe('unknown');
+    expect(await reporterName('0', load)).toBe('unknown');
     expect(asked).toEqual([]);
   });
 
   test('a missing user row does not leak the id', async () => {
-    // The old code sent `<@id>`, so a deleted user showed as digits. Anything
-    // is better than a number nobody can read.
     const { load } = loader();
     expect(await reporterName('999999', load)).toBe('unknown');
   });
@@ -66,6 +71,7 @@ describe('reporterName', () => {
 describe('reporterMeta', () => {
   test('the page and the announcement get the same string', () => {
     expect(reporterMeta('297145', { username: 'mech' }).display).toBe('mech');
-    expect(reporterMeta('0').display).toBe('imported from GitHub');
+    expect(reporterMeta('tg:12345678', { username: 'telegram_user' }).display).toBe('telegram_user');
+    expect(reporterMeta('0').display).toBe('unknown');
   });
 });

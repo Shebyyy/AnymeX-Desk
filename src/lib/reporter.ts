@@ -9,7 +9,7 @@ import type { User } from './db/schema';
  */
 
 export const isRealAccount = (reporterId: string) =>
-  /^\d{17,20}$/.test(reporterId);
+  Boolean(reporterId && reporterId.trim() !== '' && reporterId !== '0');
 
 export interface ReporterMeta {
   /** What every surface shows. */
@@ -19,8 +19,7 @@ export interface ReporterMeta {
 /**
  * One branch, two surfaces.
  *
- * Called with a report row's `reporterId` and, when a real account is expected,
- * the `users` row for that id (from `dbUser`).
+ * Called with a report row's `reporterId` and the `users` row for that id (from `dbUser`).
  */
 export function reporterMeta(
   reporterId: string,
