@@ -159,7 +159,20 @@ function connect() {
         await sendToSite({
           event: 'THREAD_UPDATE',
           threadId: d.id,
+          applied_tags: d.applied_tags,
+          appliedTags: d.applied_tags,
           tagNames: d.applied_tags,
+          locked: d.thread_metadata?.locked,
+          archived: d.thread_metadata?.archived,
+          thread_metadata: d.thread_metadata,
+        });
+      }
+
+      // 5. Thread Deleted
+      if (t === 'THREAD_DELETE') {
+        await sendToSite({
+          event: 'THREAD_DELETE',
+          threadId: d.id,
         });
       }
     }
