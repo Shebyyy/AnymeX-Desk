@@ -166,7 +166,7 @@ export async function ensureForumTags(
   } else if (kind === 'extension') {
     desiredTags.push(...BUG_STATUS_TAGS_DEF, ...EXTENSION_SOURCE_TAGS_DEF);
   } else {
-    desiredTags.push(...BUG_STATUS_TAGS_DEF, ...PLATFORM_TAGS_DEF, ...BUG_CATEGORY_TAGS_DEF);
+    desiredTags.push(...BUG_STATUS_TAGS_DEF, ...PLATFORM_TAGS_DEF);
   }
 
   // Find tags that need to be created (limit 20 tags per channel per Discord rules)
@@ -413,8 +413,6 @@ export function bugCategoryToTagName(cat: string): string {
       return 'library';
     case 'tracking':
       return 'tracking';
-    case 'extension_bridge':
-      return 'extension / bridge';
     default:
       return cat.replace(/_/g, ' ').toLowerCase();
   }
