@@ -170,13 +170,12 @@ async function storeDiscordAttachment(
 async function pollThread(
   report: typeof reports.$inferSelect,
   botUserId: string | null,
+  botToken: string,
   kv: KVNamespace | undefined,
 ): Promise<void> {
   const threadId = report.discordThreadId!;
-  const msgs = await fetchThreadMessages(threadId, cachedBotUserId ? '' : '', report.discordLastMessageId);
+  const msgs = await fetchThreadMessages(threadId, botToken, report.discordLastMessageId);
 
-  // Re-fetch with real token (cachedBotUserId fetch already used it)
-  // Note: fetchThreadMessages uses the module-level token from cfg; see the caller
   if (msgs.length === 0) return;
 
   const d = db();
