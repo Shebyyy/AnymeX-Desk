@@ -1871,14 +1871,14 @@ Astro.response.headers.set(
 
           const replyToUsername = c.replyToUsername || (parentEl ? parentEl.querySelector('.comment-username')?.textContent?.trim() : null);
           const replyContextHtml = (isReply && replyToUsername)
-            ? `<p class="reply-context">↳ replying to <strong>${replyToUsername.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</strong></p>`
+            ? `<p class="reply-context">↳ replying to <strong>${replyToUsername.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</strong></p>`
             : '';
 
           let attsHtml = '';
           if (c.attachments && c.attachments.length > 0) {
             attsHtml = `<div class="comment-attachments">` + c.attachments.map((att: any) => {
               const srcUrl = att.filePath ? (att.filePath.startsWith('http') ? att.filePath : '/' + att.filePath.replace(/^\/+/, '')) : (att.url || '');
-              const fileNameEscaped = (att.fileName || 'Attachment').replace(/"/g, '&quot;');
+              const fileNameEscaped = (att.fileName || 'Attachment').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
               const sizeLabel = att.fileSize ? ` (${(att.fileSize / 1024).toFixed(0)} KB)` : '';
               let pinBtnHtml = '';
               if (viewerCanModerate && att.id) {
@@ -1982,17 +1982,22 @@ Astro.response.headers.set(
               <div class="comment-author">
                 <a href="/user/${c.userId}" class="comment-author-link" title="View ${c.username.replace(/"/g, '&quot;')}'s profile">
                   <img class="avatar" src="${c.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png'}" alt="" width="24" height="24" />
-                  <span class="comment-username">${c.username.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
+                  <span class="comment-username">${c.username.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
                 </a>
                 <span class="comment-time">just now</span>
               </div>
             </div>
             ${replyContextHtml}
-            ${c.body ? `<div class="comment-body" data-comment-body data-raw-body="${c.body.replace(/"/g, '&quot;')}">${c.bodyHtml || c.body.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+            ${c.body ? `<div class="comment-body" data-comment-body data-raw-body="${c.body.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}">${c.bodyHtml || c.body.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
             ${attsHtml}
             ${reactionsHtml}
             ${actionsHtml}
           `;
+
+          if (c.body) {
+            const bodyEl = el.querySelector('[data-comment-body]') as HTMLElement | null;
+            if (bodyEl) bodyEl.dataset.rawBody = c.body;
+          }
 
           // Insert at correct position in the comments tree
           if (isReply && parentEl) {
