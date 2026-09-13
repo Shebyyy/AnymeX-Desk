@@ -209,7 +209,7 @@ async function main() {
     process.exit(1);
   }
 
-  await setupChannel(bugsChannelId, 'bugs', [...STATUS_TAGS, ...PLATFORM_TAGS, ...BUG_CATEGORY_TAGS]);
+  await setupChannel(bugsChannelId, 'bugs', [...STATUS_TAGS, ...PLATFORM_TAGS]);
   await setupChannel(suggestionsChannelId, 'suggestions', [...SUGGESTION_STATUS_TAGS, ...SUGGESTION_CATEGORY_TAGS]);
   await setupChannel(extensionsChannelId, 'extension-issues', [...STATUS_TAGS, ...EXTENSION_TAGS]);
 
