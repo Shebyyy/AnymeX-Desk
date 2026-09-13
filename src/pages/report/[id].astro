@@ -1153,7 +1153,13 @@ Astro.response.headers.set(
     <section class="comments-section">
       <h2>Comments ({reportComments.length})</h2>
 
-      <div class="comments-list" id="comments-list">
+      <div
+        class="comments-list"
+        id="comments-list"
+        data-current-user-id={user?.id}
+        data-can-moderate={canModerate ? 'true' : 'false'}
+        data-is-locked={isLocked ? 'true' : 'false'}
+      >
         {reportComments.length === 0 && (
           <p class="no-comments">No comments yet.</p>
         )}
@@ -1172,9 +1178,12 @@ Astro.response.headers.set(
               class="comment"
               id={`comment-${c.id}`}
               data-comment-id={c.id}
-              data-is-reply={c.replyToId != null}
+              data-reply-to-id={c.replyToId != null ? String(c.replyToId) : undefined}
+              data-depth={depth}
+              data-is-reply={c.replyToId != null ? 'true' : 'false'}
               style={depth > 0 ? `margin-inline-start: calc(${depth} * var(--space-6));` : undefined}
-            >              <div class="comment-header">
+            >
+              <div class="comment-header">
                 <div class="comment-author">
                   <a href={`/user/${c.userId}`} class="comment-author-link" title={`View ${c.username}'s profile`}>
                     <div class:list={[{ 'avatar-presence-wrap': canModerate && commentPresence }]}>
@@ -1492,14 +1501,6 @@ Astro.response.headers.set(
     if (replyIndicator) replyIndicator.style.display = 'none';
   }
 
-  document.querySelectorAll('.reply-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const commentId = (btn as HTMLElement).dataset.commentId;
-      const username = (btn as HTMLElement).dataset.username;
-      if (commentId && username) startReply(commentId, username);
-    });
-  });
-
   cancelReplyBtn?.addEventListener('click', cancelReply);
 
   // ── Comment posting (with optional file) ──────────────────────────
@@ -1525,12 +1526,14 @@ Astro.response.headers.set(
         alert(err.error || 'Failed to post');
         return;
       }
+      const postedData = await res.json().catch(() => null);
       commentBody!.value = '';
       selectedFiles = [];
       cancelReply();
       if (fileChip) { fileChip.textContent = ''; fileChip.style.display = 'none'; }
       await pollLiveUpdates();
-      const newestEl = document.getElementById('comment-' + latestCommentId);
+      const targetId = postedData?.id || latestCommentId;
+      const newestEl = document.getElementById('comment-' + targetId);
       if (newestEl) newestEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       else window.location.reload();
     } catch {
@@ -1639,104 +1642,112 @@ Astro.response.headers.set(
   });
 
   // ── Edit a comment ───────────────────────────────────────────────────
-  document.querySelectorAll('.edit-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const commentId = (btn as HTMLElement).dataset.commentId;
-      const commentEl = document.querySelector(`.comment[data-comment-id="${commentId}"]`);
-      const bodyEl = commentEl?.querySelector('[data-comment-body]') as HTMLElement | null;
-      if (!commentId || !commentEl || !bodyEl || commentEl.querySelector('.edit-form')) return;
+  function handleEditComment(commentId: string) {
+    const commentEl = document.querySelector(`.comment[data-comment-id="${commentId}"]`);
+    const bodyEl = commentEl?.querySelector('[data-comment-body]') as HTMLElement | null;
+    if (!commentId || !commentEl || !bodyEl || commentEl.querySelector('.edit-form')) return;
 
-      // Prefer the raw, unrendered body — textContent alone would lose
-      // image-link URLs entirely, since they're rendered as an <img> with
-      // no visible text.
-      const original = bodyEl.dataset.rawBody ?? bodyEl.textContent ?? '';
-      bodyEl.style.display = 'none';
+    // Prefer the raw, unrendered body — textContent alone would lose
+    // image-link URLs entirely, since they're rendered as an <img> with
+    // no visible text.
+    const original = bodyEl.dataset.rawBody ?? bodyEl.textContent ?? '';
+    bodyEl.style.display = 'none';
 
-      const form = document.createElement('div');
-      form.className = 'edit-form';
-      form.innerHTML = `
-        <textarea class="textarea edit-textarea" maxlength="2000">${original.replace(/</g, '&lt;')}</textarea>
-        <div class="edit-form-actions">
-          <button type="button" class="btn edit-save-btn">Save</button>
-          <button type="button" class="btn btn-ghost edit-cancel-btn">Cancel</button>
-        </div>
-      `;
-      bodyEl.insertAdjacentElement('afterend', form);
-      const textarea = form.querySelector('.edit-textarea') as HTMLTextAreaElement;
-      textarea.focus();
-      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    const form = document.createElement('div');
+    form.className = 'edit-form';
+    form.innerHTML = `
+      <textarea class="textarea edit-textarea" maxlength="2000">${original.replace(/</g, '&lt;')}</textarea>
+      <div class="edit-form-actions">
+        <button type="button" class="btn edit-save-btn">Save</button>
+        <button type="button" class="btn btn-ghost edit-cancel-btn">Cancel</button>
+      </div>
+    `;
+    bodyEl.insertAdjacentElement('afterend', form);
+    const textarea = form.querySelector('.edit-textarea') as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
 
-      form.querySelector('.edit-cancel-btn')?.addEventListener('click', () => {
-        form.remove();
-        bodyEl.style.display = '';
-      });
-
-      form.querySelector('.edit-save-btn')?.addEventListener('click', async () => {
-        const newBody = textarea.value.trim();
-        if (!newBody) { alert('Comment cannot be empty'); return; }
-        const saveBtn = form.querySelector('.edit-save-btn') as HTMLButtonElement;
-        saveBtn.disabled = true;
-        saveBtn.textContent = 'Saving…';
-        try {
-          const fd = new FormData();
-          fd.append('commentId', commentId);
-          fd.append('body', newBody);
-          const res = await fetch('/comments', { method: 'PUT', body: fd });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({ error: 'Failed to save' }));
-            alert(err.error || 'Failed to save');
-            saveBtn.disabled = false;
-            saveBtn.textContent = 'Save';
-            return;
-          }
-          window.location.reload();
-        } catch {
-          alert('Network error');
-          saveBtn.disabled = false;
-          saveBtn.textContent = 'Save';
-        }
-      });
+    form.querySelector('.edit-cancel-btn')?.addEventListener('click', () => {
+      form.remove();
+      bodyEl.style.display = '';
     });
-  });
 
-  // ── Delete a comment ─────────────────────────────────────────────────
-  document.querySelectorAll('.delete-comment-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('Delete this comment? This cannot be undone.')) return;
-      const commentId = (btn as HTMLElement).dataset.commentId;
-      if (!commentId) return;
-      (btn as HTMLButtonElement).disabled = true;
+    form.querySelector('.edit-save-btn')?.addEventListener('click', async () => {
+      const newBody = textarea.value.trim();
+      if (!newBody) { alert('Comment cannot be empty'); return; }
+      const saveBtn = form.querySelector('.edit-save-btn') as HTMLButtonElement;
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
       try {
         const fd = new FormData();
         fd.append('commentId', commentId);
-        const res = await fetch('/comments', { method: 'DELETE', body: fd });
-        if (res.ok) { window.location.reload(); return; }
-        const err = await res.json().catch(() => ({ error: 'Failed to delete' }));
-        alert(err.error || 'Failed to delete');
-        (btn as HTMLButtonElement).disabled = false;
+        fd.append('body', newBody);
+        const res = await fetch('/comments', { method: 'PUT', body: fd });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: 'Failed to save' }));
+          alert(err.error || 'Failed to save');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save';
+          return;
+        }
+        window.location.reload();
       } catch {
         alert('Network error');
-        (btn as HTMLButtonElement).disabled = false;
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save';
       }
     });
-  });
+  }
+
+  // ── Delete a comment ─────────────────────────────────────────────────
+  async function handleDeleteComment(btn: HTMLButtonElement, commentId: string) {
+    if (!confirm('Delete this comment? This cannot be undone.')) return;
+    btn.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('commentId', commentId);
+      const res = await fetch('/comments', { method: 'DELETE', body: fd });
+      if (res.ok) { window.location.reload(); return; }
+      const err = await res.json().catch(() => ({ error: 'Failed to delete' }));
+      alert(err.error || 'Failed to delete');
+      btn.disabled = false;
+    } catch {
+      alert('Network error');
+      btn.disabled = false;
+    }
+  }
 
   // ── Pin attachment (mod only) ─────────────────────────────────────
-  document.querySelectorAll('.pin-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const attId = (btn as HTMLElement).dataset.attId;
-      const reportId = (btn as HTMLElement).dataset.reportId;
-      if (!attId || !reportId) return;
-      btn.textContent = 'Pinning…';
-      try {
-        const fd = new FormData();
-        fd.append('attachmentId', attId);
-        fd.append('reportId', reportId);
-        const res = await fetch('/comments/pin', { method: 'PUT', body: fd });
-        if (res.ok) window.location.reload();
-        else { alert('Failed to pin'); btn.textContent = 'Pin to report'; }
-      } catch { alert('Network error'); btn.textContent = 'Pin to report'; }
-    });
+  async function handlePinAttachment(btn: HTMLElement) {
+    const attId = btn.dataset.attId;
+    const reportId = btn.dataset.reportId;
+    if (!attId || !reportId) return;
+    btn.textContent = 'Pinning…';
+    try {
+      const fd = new FormData();
+      fd.append('attachmentId', attId);
+      fd.append('reportId', reportId);
+      const res = await fetch('/comments/pin', { method: 'PUT', body: fd });
+      if (res.ok) window.location.reload();
+      else { alert('Failed to pin'); btn.textContent = 'Pin to report'; }
+    } catch { alert('Network error'); btn.textContent = 'Pin to report'; }
+  }
+
+  // Delegated click handler for comment actions (both initial and live-injected)
+  document.addEventListener('click', (e) => {
+    const target = (e.target as Element).closest<HTMLElement>('.delete-comment-btn, .edit-btn, .reply-btn, .pin-btn');
+    if (!target) return;
+    const commentId = target.dataset.commentId;
+    if (target.classList.contains('delete-comment-btn')) {
+      if (commentId) handleDeleteComment(target as HTMLButtonElement, commentId);
+    } else if (target.classList.contains('edit-btn')) {
+      if (commentId) handleEditComment(commentId);
+    } else if (target.classList.contains('pin-btn')) {
+      handlePinAttachment(target);
+    } else if (target.classList.contains('reply-btn')) {
+      const username = target.dataset.username;
+      if (commentId && username) startReply(commentId, username);
+    }
   });
 
   // ── Delete report ─────────────────────────────────────────────────
@@ -1821,52 +1832,190 @@ Astro.response.headers.set(
         const commentsSection = document.querySelector('.comments-section');
         let commentsList = commentsSection?.querySelector('.comments-list');
 
+        const commentsListContainer = document.getElementById('comments-list');
+        const viewerUserId = commentsListContainer?.dataset.currentUserId || null;
+        const viewerCanModerate = commentsListContainer?.dataset.canModerate === 'true';
+
         if (!commentsList && commentsSection) {
           commentsList = document.createElement('div');
           commentsList.className = 'comments-list';
-          const emptyNotice = commentsSection.querySelector('.empty');
-          if (emptyNotice) emptyNotice.remove();
+          commentsList.id = 'comments-list';
+          if (viewerUserId) commentsList.dataset.currentUserId = viewerUserId;
+          commentsList.dataset.canModerate = viewerCanModerate ? 'true' : 'false';
           commentsSection.appendChild(commentsList);
         }
+        const emptyNotice = commentsSection?.querySelector('.no-comments, .empty');
+        if (emptyNotice) emptyNotice.remove();
 
         for (const c of data.newComments) {
           if (document.querySelector(`.comment[data-comment-id="${c.id}"]`)) continue;
           latestCommentId = Math.max(latestCommentId, c.id);
 
+          const isReply = c.replyToId != null;
+          const parentEl = isReply ? (document.getElementById(`comment-${c.replyToId}`) as HTMLElement | null) : null;
+          const parentDepth = parentEl ? (Number(parentEl.dataset.depth) || 0) : 0;
+          const depth = isReply && parentEl ? parentDepth + 1 : 0;
+
           const el = document.createElement('div');
           el.className = 'comment live-comment-enter';
           el.id = `comment-${c.id}`;
           el.dataset.commentId = String(c.id);
+          el.dataset.isReply = isReply ? 'true' : 'false';
+          el.dataset.depth = String(depth);
+          if (isReply) {
+            el.dataset.replyToId = String(c.replyToId);
+          }
+          if (depth > 0) {
+            el.style.marginInlineStart = `calc(${depth} * var(--space-6))`;
+          }
+
+          const replyToUsername = c.replyToUsername || (parentEl ? parentEl.querySelector('.comment-username')?.textContent?.trim() : null);
+          const replyContextHtml = (isReply && replyToUsername)
+            ? `<p class="reply-context">↳ replying to <strong>${replyToUsername.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</strong></p>`
+            : '';
 
           let attsHtml = '';
           if (c.attachments && c.attachments.length > 0) {
             attsHtml = `<div class="comment-attachments">` + c.attachments.map((att: any) => {
               const srcUrl = att.filePath ? (att.filePath.startsWith('http') ? att.filePath : '/' + att.filePath.replace(/^\/+/, '')) : (att.url || '');
+              const fileNameEscaped = (att.fileName || 'Attachment').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+              const sizeLabel = att.fileSize ? ` (${(att.fileSize / 1024).toFixed(0)} KB)` : '';
+              let pinBtnHtml = '';
+              if (viewerCanModerate && att.id) {
+                pinBtnHtml = `<button type="button" class="pin-btn" data-att-id="${att.id}" data-report-id="${reportIdMeta}" title="Pin to report attachments">Pin to report</button>`;
+              }
+
               if (att.fileType === 'image') {
-                return `<div class="comment-att" data-type="image"><a href="${srcUrl}" target="_blank" rel="noopener"><img src="${srcUrl}" alt="${att.fileName}" class="comment-att-img" loading="lazy" /></a></div>`;
+                return `
+                  <div class="comment-att" data-type="image">
+                    <button
+                      type="button"
+                      class="comment-att-btn"
+                      data-lightbox-src="${srcUrl}"
+                      data-lightbox-type="image"
+                      data-lightbox-name="${fileNameEscaped}"
+                      aria-label="View ${fileNameEscaped}"
+                    >
+                      <img src="${srcUrl}" alt="${fileNameEscaped}" class="comment-att-img" loading="lazy" />
+                    </button>
+                    ${pinBtnHtml}
+                  </div>`;
               } else if (att.fileType === 'video') {
-                return `<div class="comment-att" data-type="video"><video controls preload="metadata" class="comment-att-video"><source src="${srcUrl}" type="${att.mimeType || 'video/mp4'}" /></video></div>`;
+                return `
+                  <div class="comment-att" data-type="video">
+                    <div class="comment-video-wrap">
+                      <video controls preload="metadata" class="comment-att-video">
+                        <source src="${srcUrl}" type="${att.mimeType || 'video/mp4'}" />
+                      </video>
+                      <button
+                        type="button"
+                        class="gallery-expand-btn"
+                        data-lightbox-src="${srcUrl}"
+                        data-lightbox-type="video"
+                        data-lightbox-name="${fileNameEscaped}"
+                        title="Fullscreen in-app lightbox"
+                        aria-label="Open ${fileNameEscaped} in full screen lightbox"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                      </button>
+                    </div>
+                    ${pinBtnHtml}
+                  </div>`;
               } else {
-                return `<div class="comment-att" data-type="file"><a href="${srcUrl}" class="comment-att-file" download="${att.fileName}"><span>${att.fileName}</span></a></div>`;
+                return `
+                  <div class="comment-att" data-type="file">
+                    <a href="${srcUrl}" class="comment-att-file" download="${fileNameEscaped}">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                      </svg>
+                      <span>${fileNameEscaped}${sizeLabel}</span>
+                    </a>
+                    ${pinBtnHtml}
+                  </div>`;
               }
             }).join('') + `</div>`;
+          }
+
+          let reactionsHtml = '';
+          if (viewerUserId) {
+            reactionsHtml = `
+              <div class="comment-reactions" data-comment-id="${c.id}">
+                <details class="reaction-picker">
+                  <summary class="reaction-picker-btn" title="Add reaction">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+                    <span>+</span>
+                  </summary>
+                  <div class="reaction-picker-menu">
+                    ${['👍', '✅', '🤔', '❌', '🎉'].map((emoji) => `
+                      <button type="button" class="reaction-emoji-btn" data-reaction-btn data-comment-id="${c.id}" data-emoji="${emoji}">
+                        ${emoji}
+                      </button>
+                    `).join('')}
+                  </div>
+                </details>
+              </div>
+            `;
+          }
+
+          let actionsHtml = '';
+          if (viewerUserId) {
+            let btns = '';
+            const isCurrentlyLocked = typeof data.locked === 'boolean'
+              ? data.locked
+              : (commentsListContainer?.dataset.isLocked === 'true');
+            if (!isCurrentlyLocked) {
+              btns += `<button type="button" class="reply-btn" data-comment-id="${c.id}" data-username="${c.username.replace(/"/g, '&quot;')}">Reply</button>`;
+            }
+            if (viewerUserId === c.userId && c.body) {
+              btns += `<button type="button" class="reply-btn edit-btn" data-comment-id="${c.id}">Edit</button>`;
+            }
+            if (viewerUserId === c.userId || viewerCanModerate) {
+              btns += `<button type="button" class="reply-btn delete-comment-btn" data-comment-id="${c.id}">Delete</button>`;
+            }
+            if (btns) {
+              actionsHtml = `<div class="comment-actions">${btns}</div>`;
+            }
           }
 
           el.innerHTML = `
             <div class="comment-header">
               <div class="comment-author">
-                <a href="/user/${c.userId}" class="comment-author-link" title="View ${c.username}'s profile">
+                <a href="/user/${c.userId}" class="comment-author-link" title="View ${c.username.replace(/"/g, '&quot;')}'s profile">
                   <img class="avatar" src="${c.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png'}" alt="" width="24" height="24" />
-                  <span class="comment-username">${c.username}</span>
+                  <span class="comment-username">${c.username.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
                 </a>
                 <span class="comment-time">just now</span>
               </div>
             </div>
-            ${c.body ? `<div class="comment-body" data-comment-body data-raw-body="${c.body.replace(/"/g, '&quot;')}">${c.bodyHtml || c.body.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+            ${replyContextHtml}
+            ${c.body ? `<div class="comment-body" data-comment-body data-raw-body="${c.body.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}">${c.bodyHtml || c.body.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
             ${attsHtml}
+            ${reactionsHtml}
+            ${actionsHtml}
           `;
 
-          commentsList?.appendChild(el);
+          if (c.body) {
+            const bodyEl = el.querySelector('[data-comment-body]') as HTMLElement | null;
+            if (bodyEl) bodyEl.dataset.rawBody = c.body;
+          }
+
+          // Insert at correct position in the comments tree
+          if (isReply && parentEl) {
+            let insertAfterEl: HTMLElement = parentEl;
+            let next = parentEl.nextElementSibling as HTMLElement | null;
+            while (next && next.classList.contains('comment')) {
+              const nextDepth = Number(next.dataset.depth || 0);
+              if (nextDepth > parentDepth) {
+                insertAfterEl = next;
+                next = next.nextElementSibling as HTMLElement | null;
+              } else {
+                break;
+              }
+            }
+            insertAfterEl.insertAdjacentElement('afterend', el);
+          } else {
+            commentsList?.appendChild(el);
+          }
         }
 
         const countHeading = commentsSection?.querySelector('h2');

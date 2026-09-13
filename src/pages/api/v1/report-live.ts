@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { and, asc, eq, gt } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray } from 'drizzle-orm';
 import { db } from '../../../lib/db/client';
 import { reports, comments, users, attachments } from '../../../lib/db/schema';
 import { statusLabel } from '../../../lib/format';
@@ -58,6 +58,30 @@ export const GET: APIRoute = async (ctx) => {
     .where(and(eq(comments.reportId, reportId), gt(comments.id, after)))
     .orderBy(asc(comments.createdAt));
 
+  // If there are new comments that reply to another comment, fetch the parent author's username
+  const replyParentIds = Array.from(
+    new Set(
+      newComments
+        .map((c) => c.replyToId)
+        .filter((id): id is number => id != null)
+    )
+  );
+
+  const replyUserMap = new Map<number, string>();
+  if (replyParentIds.length > 0) {
+    const parentRows = await d
+      .select({
+        commentId: comments.id,
+        username: users.username,
+      })
+      .from(comments)
+      .innerJoin(users, eq(users.discordId, comments.userId))
+      .where(inArray(comments.id, replyParentIds));
+    for (const p of parentRows) {
+      replyUserMap.set(p.commentId, p.username);
+    }
+  }
+
   // If there are new comments, fetch attachments for this report
   let attList: any[] = [];
   if (newComments.length > 0) {
@@ -101,6 +125,7 @@ export const GET: APIRoute = async (ctx) => {
       username: c.username,
       avatarUrl: resolveDiscordAvatarUrl({ discordId: c.userId, avatarHash: c.avatarHash }, 64),
       replyToId: c.replyToId,
+      replyToUsername: c.replyToId != null ? replyUserMap.get(c.replyToId) ?? null : null,
       attachments: cAtts,
     };
   });
