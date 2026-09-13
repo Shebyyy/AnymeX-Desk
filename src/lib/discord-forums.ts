@@ -43,6 +43,8 @@ interface DiscordChannel {
 /** Standard status tags to populate on Bug channels */
 export const BUG_STATUS_TAGS_DEF: DiscordTag[] = [
   { name: 'Open', moderated: false, emoji_name: '🟢' },
+  { name: 'Under Review', moderated: false, emoji_name: '🔍' },
+  { name: 'Confirmed', moderated: true, emoji_name: '💡' },
   { name: 'In Progress', moderated: true, emoji_name: '🟡' },
   { name: 'Fixed', moderated: true, emoji_name: '✅' },
   { name: 'Duplicate', moderated: true, emoji_name: '🔄' },
@@ -62,6 +64,20 @@ export const SUGGESTION_STATUS_TAGS_DEF: DiscordTag[] = [
 
 /** Backward-compat alias */
 export const STATUS_TAGS_DEF = BUG_STATUS_TAGS_DEF;
+
+/** Standard category tags for Bug forum */
+export const BUG_CATEGORY_TAGS_DEF: DiscordTag[] = [
+  { name: 'Video Player', moderated: false },
+  { name: 'UI / UX', moderated: false },
+  { name: 'Login / Auth', moderated: false },
+  { name: 'Manga Reader', moderated: false },
+  { name: 'Crash', moderated: false },
+  { name: 'Performance', moderated: false },
+  { name: 'Novel Reader', moderated: false },
+  { name: 'Library', moderated: false },
+  { name: 'Tracking', moderated: false },
+  { name: 'Other', moderated: false },
+];
 
 /** Standard platform tags for Bug forum */
 export const PLATFORM_TAGS_DEF: DiscordTag[] = [
@@ -119,9 +135,10 @@ export async function ensureForumTags(
   channelId: string,
   botToken: string,
   kind: Report['kind'],
+  forceRefresh = false,
 ): Promise<Map<string, string>> {
   const cached = tagCache.get(channelId);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+  if (!forceRefresh && cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     return cached.tags;
   }
 
@@ -149,7 +166,7 @@ export async function ensureForumTags(
   } else if (kind === 'extension') {
     desiredTags.push(...BUG_STATUS_TAGS_DEF, ...EXTENSION_SOURCE_TAGS_DEF);
   } else {
-    desiredTags.push(...BUG_STATUS_TAGS_DEF, ...PLATFORM_TAGS_DEF);
+    desiredTags.push(...BUG_STATUS_TAGS_DEF, ...PLATFORM_TAGS_DEF, ...BUG_CATEGORY_TAGS_DEF);
   }
 
   // Find tags that need to be created (limit 20 tags per channel per Discord rules)
@@ -217,8 +234,11 @@ export function statusToTagName(status: Status, kind: Report['kind'] = 'bug'): s
   }
   switch (status) {
     case 'open':
-    case 'confirmed':
       return 'open';
+    case 'under_review':
+      return 'under review';
+    case 'confirmed':
+      return 'confirmed';
     case 'in_progress':
       return 'in progress';
     case 'fixed':
@@ -233,13 +253,223 @@ export function statusToTagName(status: Status, kind: Report['kind'] = 'bug'): s
 }
 
 /**
+ * Maps a tag name (with fuzzy matching and aliases) to a canonical report status.
+ */
+export function tagNameToStatus(rawName: string): Status | null {
+  if (!rawName) return null;
+  const name = rawName
+    .toLowerCase()
+    .replace(/[_-]/g, ' ')
+    .replace(/['’]/g, '')
+    .trim();
+
+  // Closed / Fixed / Done / Resolved / Completed
+  if (
+    name === 'fixed' ||
+    name === 'completed' ||
+    name === 'done' ||
+    name === 'resolved' ||
+    name === 'closed' ||
+    name === 'shipped'
+  ) {
+    return 'fixed';
+  }
+
+  // Won't Fix / Declined / Rejected / Not Planned
+  if (
+    name === 'wont fix' ||
+    name === 'declined' ||
+    name === 'rejected' ||
+    name === 'not planned' ||
+    name === 'cancelled'
+  ) {
+    return 'wont_fix';
+  }
+
+  // In Progress / Working on it / WIP
+  if (
+    name === 'in progress' ||
+    name === 'wip' ||
+    name === 'working on it'
+  ) {
+    return 'in_progress';
+  }
+
+  // Planned / Confirmed / Accepted
+  if (
+    name === 'planned' ||
+    name === 'confirmed' ||
+    name === 'accepted'
+  ) {
+    return 'confirmed';
+  }
+
+  // Under Review / Reviewing / Investigating / Needs Review
+  if (
+    name === 'under review' ||
+    name === 'investigating' ||
+    name === 'reviewing' ||
+    name === 'needs review'
+  ) {
+    return 'under_review';
+  }
+
+  // Duplicate
+  if (name === 'duplicate' || name === 'dup') {
+    return 'duplicate';
+  }
+
+  // Open / New / Needs Triage
+  if (
+    name === 'open' ||
+    name === 'new' ||
+    name === 'needs triage' ||
+    name === 'triage'
+  ) {
+    return 'open';
+  }
+
+  return null;
+}
+
+/**
+ * Returns priority of a status when resolving multiple tags on a thread.
+ * Higher priority status wins.
+ */
+export function getStatusPriority(s: Status): number {
+  switch (s) {
+    case 'fixed':
+    case 'wont_fix':
+    case 'duplicate':
+      return 4; // Terminal statuses take highest precedence
+    case 'in_progress':
+      return 3;
+    case 'confirmed':
+    case 'under_review':
+      return 2;
+    case 'open':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Resolves the Discord tag ID for a given report status, kind, and tags map.
+ * Checks aliases in order so that variations (e.g. 'Completed' vs 'Done' vs 'Fixed')
+ * resolve correctly.
+ */
+export function resolveStatusTagId(
+  status: Status,
+  kind: Report['kind'],
+  tagsMap: Map<string, string>,
+): string | undefined {
+  const isSuggestion = kind === 'suggestion';
+
+  const candidatesByStatus: Record<Status, string[]> = {
+    open: ['open', 'new', 'needs triage', 'triage'],
+    under_review: ['under review', 'under-review', 'investigating', 'reviewing', 'open'],
+    confirmed: isSuggestion
+      ? ['planned', 'confirmed', 'accepted', 'open']
+      : ['confirmed', 'planned', 'accepted', 'open'],
+    in_progress: ['in progress', 'in-progress', 'wip', 'working on it'],
+    fixed: isSuggestion
+      ? ['completed', 'done', 'fixed', 'resolved', 'closed', 'shipped']
+      : ['fixed', 'resolved', 'completed', 'done', 'closed', 'shipped'],
+    duplicate: ['duplicate', 'dup'],
+    wont_fix: isSuggestion
+      ? ['declined', "won't fix", 'wont fix', 'rejected', 'not planned']
+      : ["won't fix", 'wont fix', 'declined', 'rejected', 'not planned'],
+  };
+
+  const list = candidatesByStatus[status] || [statusToTagName(status, kind)];
+  for (const name of list) {
+    const id = tagsMap.get(name.toLowerCase());
+    if (id) return id;
+  }
+  return undefined;
+}
+
+/**
+ * Maps bug category to tag name
+ */
+export function bugCategoryToTagName(cat: string): string {
+  switch (cat) {
+    case 'video_player':
+      return 'video player';
+    case 'ui_ux':
+      return 'ui / ux';
+    case 'login_auth':
+      return 'login / auth';
+    case 'manga_reader':
+      return 'manga reader';
+    case 'crash':
+      return 'crash';
+    case 'performance':
+      return 'performance';
+    case 'novel_reader':
+      return 'novel reader';
+    case 'library':
+      return 'library';
+    case 'tracking':
+      return 'tracking';
+    case 'extension_bridge':
+      return 'extension / bridge';
+    default:
+      return cat.replace(/_/g, ' ').toLowerCase();
+  }
+}
+
+/**
+ * Resolves bug category tag ID with candidate formatting variations
+ */
+export function resolveBugCategoryTagId(category: string, tagsMap: Map<string, string>): string | undefined {
+  if (!category) return undefined;
+  const primary = bugCategoryToTagName(category);
+  const candidates = [
+    primary,
+    primary.replace(/\s*\/\s*/g, '/'),
+    primary.replace(/\s*\/\s*/g, ' / '),
+    category.replace(/_/g, ' '),
+    category.replace(/_/g, '-'),
+    category,
+  ];
+  for (const c of candidates) {
+    const id = tagsMap.get(c.toLowerCase());
+    if (id) return id;
+  }
+  return undefined;
+}
+
+/**
  * Maps suggestion category to tag name
  */
 export function suggestionCategoryToTagName(cat: string): string {
   if (cat === 'ui_ux') return 'ui / ux';
   if (cat === 'manga_reader') return 'manga reader';
   if (cat === 'novel_reader') return 'novel reader';
-  return cat.toLowerCase();
+  return cat.replace(/_/g, ' ').toLowerCase();
+}
+
+/**
+ * Resolves suggestion category tag ID with candidate formatting variations
+ */
+export function resolveSuggestionCategoryTagId(category: string, tagsMap: Map<string, string>): string | undefined {
+  if (!category) return undefined;
+  const primary = suggestionCategoryToTagName(category);
+  const candidates = [
+    primary,
+    primary.replace(/\s*\/\s*/g, '/'),
+    primary.replace(/\s*\/\s*/g, ' / '),
+    category.replace(/_/g, ' '),
+    category.replace(/_/g, '-'),
+    category,
+  ];
+  for (const c of candidates) {
+    const id = tagsMap.get(c.toLowerCase());
+    if (id) return id;
+  }
+  return undefined;
 }
 
 /**
@@ -250,6 +480,25 @@ export function platformToTagName(platform: string): string {
   if (platform === 'ios') return 'ios';
   if (platform === 'macos') return 'macos';
   return platform.toLowerCase();
+}
+
+/**
+ * Resolves platform tag ID with candidate formatting variations
+ */
+export function resolvePlatformTagId(platform: string, tagsMap: Map<string, string>): string | undefined {
+  if (!platform) return undefined;
+  const primary = platformToTagName(platform);
+  const candidates = [
+    primary,
+    platform === 'all' ? 'all' : primary,
+    platform === 'all' ? 'all platforms' : primary,
+    platform,
+  ];
+  for (const c of candidates) {
+    const id = tagsMap.get(c.toLowerCase());
+    if (id) return id;
+  }
+  return undefined;
 }
 
 /**
@@ -272,6 +521,26 @@ export function extensionSourceToTagName(source: string): string {
     default:
       return 'other source';
   }
+}
+
+/**
+ * Resolves extension source tag ID with candidate formatting variations
+ */
+export function resolveExtensionSourceTagId(source: string, tagsMap: Map<string, string>): string | undefined {
+  if (!source) return undefined;
+  const primary = extensionSourceToTagName(source);
+  const candidates = [
+    primary,
+    primary.replace(/\s*\/\s*/g, '/'),
+    primary.replace(/\s*\/\s*/g, ' / '),
+    source.replace(/_/g, ' '),
+    source,
+  ];
+  for (const c of candidates) {
+    const id = tagsMap.get(c.toLowerCase());
+    if (id) return id;
+  }
+  return undefined;
 }
 
 /**
@@ -424,23 +693,25 @@ export async function createForumThread(
     const appliedTags: string[] = [];
 
     // Status tag
-    const statusTagName = statusToTagName(report.status, report.kind);
-    const statusTagId = tagsMap.get(statusTagName);
+    const statusTagId = resolveStatusTagId(report.status, report.kind, tagsMap);
     if (statusTagId) appliedTags.push(statusTagId);
 
     // Platform, Category, or Source tag
     if (report.kind === 'extension') {
-      const sourceTagName = extensionSourceToTagName(report.category);
-      const sourceTagId = tagsMap.get(sourceTagName);
+      const sourceTagId = resolveExtensionSourceTagId(report.category, tagsMap);
       if (sourceTagId) appliedTags.push(sourceTagId);
     } else if (report.kind === 'suggestion') {
-      const catTagName = suggestionCategoryToTagName(report.category);
-      const catTagId = tagsMap.get(catTagName);
+      const catTagId = resolveSuggestionCategoryTagId(report.category, tagsMap);
       if (catTagId) appliedTags.push(catTagId);
-    } else if (report.platform) {
-      const platformTagName = platformToTagName(report.platform);
-      const platformTagId = tagsMap.get(platformTagName);
-      if (platformTagId) appliedTags.push(platformTagId);
+    } else {
+      if (report.category) {
+        const catTagId = resolveBugCategoryTagId(report.category, tagsMap);
+        if (catTagId) appliedTags.push(catTagId);
+      }
+      if (report.platform) {
+        const platformTagId = resolvePlatformTagId(report.platform, tagsMap);
+        if (platformTagId) appliedTags.push(platformTagId);
+      }
     }
 
     const embed = await buildReportEmbed(report, origin);
@@ -528,24 +799,23 @@ export async function updateForumThread(
         const applied: string[] = [];
 
         // Status tag
-        const statusTagName = statusToTagName(report.status, report.kind);
-        const statusTagId = tagsMap.get(statusTagName);
+        const statusTagId = resolveStatusTagId(report.status, report.kind, tagsMap);
         if (statusTagId) applied.push(statusTagId);
 
         // Category / platform / source tags
         if (report.kind === 'extension') {
-          const sourceTagId = tagsMap.get(extensionSourceToTagName(report.category));
+          const sourceTagId = resolveExtensionSourceTagId(report.category, tagsMap);
           if (sourceTagId) applied.push(sourceTagId);
         } else if (report.kind === 'suggestion') {
-          const catTagId = tagsMap.get(suggestionCategoryToTagName(report.category));
+          const catTagId = resolveSuggestionCategoryTagId(report.category, tagsMap);
           if (catTagId) applied.push(catTagId);
         } else {
           if (report.category) {
-            const catTagId = tagsMap.get(bugCategoryToTagName(report.category));
+            const catTagId = resolveBugCategoryTagId(report.category, tagsMap);
             if (catTagId) applied.push(catTagId);
           }
           if (report.platform) {
-            const platformTagId = tagsMap.get(platformToTagName(report.platform));
+            const platformTagId = resolvePlatformTagId(report.platform, tagsMap);
             if (platformTagId) applied.push(platformTagId);
           }
         }
@@ -648,16 +918,23 @@ export async function updateForumStatus(
       currentTags = threadData.applied_tags || [];
     }
 
-    // Filter out any existing status tags
-    const statusDefList = report.kind === 'suggestion' ? SUGGESTION_STATUS_TAGS_DEF : BUG_STATUS_TAGS_DEF;
-    const allStatusTagIds = new Set(
-      statusDefList.map((t) => tagsMap.get(t.name.toLowerCase())).filter(Boolean) as string[],
-    );
+    // Filter out ANY existing status tags (checking all definitions and aliases)
+    const allStatusTagIds = new Set<string>();
+    for (const [name, id] of tagsMap.entries()) {
+      if (tagNameToStatus(name) !== null) {
+        allStatusTagIds.add(id);
+      }
+    }
+    const allDefs = [...BUG_STATUS_TAGS_DEF, ...SUGGESTION_STATUS_TAGS_DEF];
+    for (const def of allDefs) {
+      const id = tagsMap.get(def.name.toLowerCase());
+      if (id) allStatusTagIds.add(id);
+    }
+
     const nonStatusTags = currentTags.filter((id) => !allStatusTagIds.has(id));
 
     // Add new status tag
-    const newStatusTagName = statusToTagName(newStatus, report.kind);
-    const newStatusTagId = tagsMap.get(newStatusTagName);
+    const newStatusTagId = resolveStatusTagId(newStatus, report.kind, tagsMap);
     if (newStatusTagId) nonStatusTags.push(newStatusTagId);
 
     const isClosed = newStatus === 'fixed' || newStatus === 'wont_fix' || newStatus === 'duplicate';
@@ -1205,7 +1482,33 @@ export async function editCommentInDiscord(
   if (!botToken || !threadId || !discordMessageId) return false;
 
   try {
-    // Try to patch the message content directly (works if it was sent by our bot)
+    const formattedContent = `${newBody} *(edited by ${authorUsername})*`.slice(0, 2000);
+
+    // If message was posted via webhook, it must be edited via webhook endpoint
+    try {
+      const threadRes = await fetch(`${DISCORD_API}/channels/${threadId}`, {
+        headers: { Authorization: `Bot ${botToken}` },
+      });
+      if (threadRes.ok) {
+        const threadData = (await threadRes.json()) as { parent_id?: string };
+        if (threadData.parent_id) {
+          const hook = await getOrCreateChannelWebhook(threadData.parent_id, botToken);
+          if (hook) {
+            const hookRes = await fetch(
+              `${DISCORD_API}/webhooks/${hook.id}/${hook.token}/messages/${discordMessageId}?thread_id=${threadId}`,
+              {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: formattedContent }),
+              },
+            );
+            if (hookRes.ok) return true;
+          }
+        }
+      }
+    } catch {}
+
+    // Fallback: try direct bot patch (if message was sent by bot directly)
     const res = await fetch(`${DISCORD_API}/channels/${threadId}/messages/${discordMessageId}`, {
       method: 'PATCH',
       headers: {
@@ -1213,7 +1516,7 @@ export async function editCommentInDiscord(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        content: `${newBody} *(edited by ${authorUsername})*`,
+        content: formattedContent,
       }),
     });
     return res.ok;
@@ -1236,11 +1539,36 @@ export async function deleteCommentFromDiscord(
   if (!botToken || !threadId || !discordMessageId) return false;
 
   try {
+    // 1. Try bot delete
     const res = await fetch(`${DISCORD_API}/channels/${threadId}/messages/${discordMessageId}`, {
       method: 'DELETE',
       headers: { Authorization: `Bot ${botToken}` },
     });
-    return res.ok;
+    if (res.ok) return true;
+
+    // 2. If bot delete failed, try webhook delete
+    try {
+      const threadRes = await fetch(`${DISCORD_API}/channels/${threadId}`, {
+        headers: { Authorization: `Bot ${botToken}` },
+      });
+      if (threadRes.ok) {
+        const threadData = (await threadRes.json()) as { parent_id?: string };
+        if (threadData.parent_id) {
+          const hook = await getOrCreateChannelWebhook(threadData.parent_id, botToken);
+          if (hook) {
+            const hookRes = await fetch(
+              `${DISCORD_API}/webhooks/${hook.id}/${hook.token}/messages/${discordMessageId}?thread_id=${threadId}`,
+              {
+                method: 'DELETE',
+              },
+            );
+            if (hookRes.ok) return true;
+          }
+        }
+      }
+    } catch {}
+
+    return false;
   } catch (err) {
     console.error('[ForumSync] Exception in deleteCommentFromDiscord:', err);
     return false;
@@ -1485,26 +1813,33 @@ export async function syncReportStatusFromDiscord(
     const appliedTags = threadData.applied_tags || [];
     if (appliedTags.length === 0) return null;
 
-    const tagsMap = await ensureForumTags(channelId, botToken, report.kind);
+    let tagsMap = await ensureForumTags(channelId, botToken, report.kind);
     // Invert tagsMap: tagId -> tagName
-    const idToName = new Map<string, string>();
+    let idToName = new Map<string, string>();
     for (const [name, id] of tagsMap.entries()) {
       idToName.set(id, name);
+    }
+
+    // If any applied tag is not recognized in cache, refresh tagsMap once
+    const hasUnknownTag = appliedTags.some((id) => !idToName.has(id));
+    if (hasUnknownTag) {
+      tagsMap = await ensureForumTags(channelId, botToken, report.kind, true);
+      idToName.clear();
+      for (const [name, id] of tagsMap.entries()) {
+        idToName.set(id, name);
+      }
     }
 
     let targetStatus: Status | null = null;
     for (const tagId of appliedTags) {
       const name = idToName.get(tagId);
       if (!name) continue;
-
-      if (name === 'fixed' || name === 'completed') targetStatus = 'fixed';
-      else if (name === 'in progress') targetStatus = 'in_progress';
-      else if (name === 'planned') targetStatus = 'confirmed';
-      else if (name === 'under review') targetStatus = 'under_review';
-      else if (name === 'open') targetStatus = 'open';
-      else if (name === 'confirmed') targetStatus = 'confirmed';
-      else if (name === "won't fix" || name === 'declined') targetStatus = 'wont_fix';
-      else if (name === 'duplicate') targetStatus = 'duplicate';
+      const parsedStatus = tagNameToStatus(name);
+      if (parsedStatus) {
+        if (!targetStatus || getStatusPriority(parsedStatus) > getStatusPriority(targetStatus)) {
+          targetStatus = parsedStatus;
+        }
+      }
     }
 
     if (targetStatus && targetStatus !== report.status) {
@@ -1636,6 +1971,3 @@ export async function syncForumVote(
     return false;
   }
 }
-
-
-
