@@ -45,6 +45,8 @@ interface DiscordTag {
 
 const STATUS_TAGS: DiscordTag[] = [
   { name: 'Open', moderated: false, emoji_name: '🟢' },
+  { name: 'Under Review', moderated: false, emoji_name: '🔍' },
+  { name: 'Confirmed', moderated: true, emoji_name: '💡' },
   { name: 'In Progress', moderated: true, emoji_name: '🟡' },
   { name: 'Fixed', moderated: true, emoji_name: '✅' },
   { name: 'Duplicate', moderated: true, emoji_name: '🔄' },
@@ -52,6 +54,7 @@ const STATUS_TAGS: DiscordTag[] = [
 ];
 
 const SUGGESTION_STATUS_TAGS: DiscordTag[] = [
+  { name: 'Open', moderated: false, emoji_name: '💡' },
   { name: 'Under Review', moderated: false, emoji_name: '🔍' },
   { name: 'Planned', moderated: true, emoji_name: '💡' },
   { name: 'In Progress', moderated: true, emoji_name: '🟡' },
@@ -67,6 +70,19 @@ const PLATFORM_TAGS: DiscordTag[] = [
   { name: 'macOS', moderated: false },
   { name: 'Linux', moderated: false },
   { name: 'All Platforms', moderated: false },
+];
+
+const BUG_CATEGORY_TAGS: DiscordTag[] = [
+  { name: 'Video Player', moderated: false },
+  { name: 'UI / UX', moderated: false },
+  { name: 'Login / Auth', moderated: false },
+  { name: 'Manga Reader', moderated: false },
+  { name: 'Crash', moderated: false },
+  { name: 'Performance', moderated: false },
+  { name: 'Novel Reader', moderated: false },
+  { name: 'Library', moderated: false },
+  { name: 'Tracking', moderated: false },
+  { name: 'Other', moderated: false },
 ];
 
 const SUGGESTION_CATEGORY_TAGS: DiscordTag[] = [
@@ -193,7 +209,7 @@ async function main() {
     process.exit(1);
   }
 
-  await setupChannel(bugsChannelId, 'bugs', [...STATUS_TAGS, ...PLATFORM_TAGS]);
+  await setupChannel(bugsChannelId, 'bugs', [...STATUS_TAGS, ...PLATFORM_TAGS, ...BUG_CATEGORY_TAGS]);
   await setupChannel(suggestionsChannelId, 'suggestions', [...SUGGESTION_STATUS_TAGS, ...SUGGESTION_CATEGORY_TAGS]);
   await setupChannel(extensionsChannelId, 'extension-issues', [...STATUS_TAGS, ...EXTENSION_TAGS]);
 
