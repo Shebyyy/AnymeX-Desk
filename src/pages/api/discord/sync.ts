@@ -7,7 +7,13 @@ import { readConfig } from '../../../lib/settings';
 import { notifyWatchers, sendDiscordDm, truncateQuote } from '../../../lib/notify';
 import { BLURPLE } from '../../../lib/webhook';
 import { logAction } from '../../../lib/staff';
-import { syncReportStatusFromDiscord } from '../../../lib/discord-forums';
+import {
+  syncReportStatusFromDiscord,
+  tagNameToStatus,
+  getStatusPriority,
+  ensureForumTags,
+  getForumChannelId,
+} from '../../../lib/discord-forums';
 
 export const prerender = false;
 
@@ -283,19 +289,59 @@ export const POST: APIRoute = async (ctx) => {
     const isRecentSiteUpdate = report.updatedAt ? (now - Number(report.updatedAt) < 15) : false;
     let newStatus: Status | null = null;
 
-    // Fast-path: map tagNames sent directly by the bot, only if tags actually changed and not in site cooldown
+    // Collect tags from all possible payload shapes (Snowflake IDs or tag names)
+    const incomingTags: unknown[] = Array.isArray(body.applied_tags)
+      ? body.applied_tags
+      : Array.isArray(body.appliedTags)
+        ? body.appliedTags
+        : Array.isArray(tagNames)
+          ? tagNames
+          : Array.isArray(body.tags)
+            ? body.tags
+            : [];
+
     const tagsChanged = (body as any).tagsChanged !== false;
-    if (tagsChanged && !isRecentSiteUpdate && Array.isArray(tagNames) && tagNames.length > 0) {
-      for (const rawName of tagNames) {
-        const name = String(rawName).toLowerCase().trim();
-        if (name === 'fixed' || name === 'completed' || name === 'resolved') newStatus = 'fixed';
-        else if (name === 'in progress' || name === 'in-progress') newStatus = 'in_progress';
-        else if (name === 'planned') newStatus = 'confirmed';
-        else if (name === 'under review' || name === 'under-review') newStatus = 'under_review';
-        else if (name === 'open') newStatus = 'open';
-        else if (name === 'confirmed') newStatus = 'confirmed';
-        else if (name === "won't fix" || name === 'wont fix' || name === 'declined') newStatus = 'wont_fix';
-        else if (name === 'duplicate') newStatus = 'duplicate';
+    if (tagsChanged && !isRecentSiteUpdate && incomingTags.length > 0) {
+      // 1. Check if any tag directly matches a status name
+      for (const raw of incomingTags) {
+        const parsed = tagNameToStatus(String(raw));
+        if (parsed) {
+          if (!newStatus || getStatusPriority(parsed) > getStatusPriority(newStatus)) {
+            newStatus = parsed;
+          }
+        }
+      }
+
+      // 2. If not matched, tags are likely Snowflake IDs (from Discord Gateway / Webhook)
+      if (!newStatus) {
+        const channelId = getForumChannelId(report.kind, cfg);
+        if (channelId && cfg.discord_bot_token) {
+          let tagsMap = await ensureForumTags(channelId, cfg.discord_bot_token, report.kind);
+          let idToName = new Map<string, string>();
+          for (const [name, id] of tagsMap.entries()) {
+            idToName.set(id, name);
+          }
+
+          if (incomingTags.some((id) => !idToName.has(String(id)))) {
+            tagsMap = await ensureForumTags(channelId, cfg.discord_bot_token, report.kind, true);
+            idToName.clear();
+            for (const [name, id] of tagsMap.entries()) {
+              idToName.set(id, name);
+            }
+          }
+
+          for (const raw of incomingTags) {
+            const tagName = idToName.get(String(raw));
+            if (tagName) {
+              const parsed = tagNameToStatus(tagName);
+              if (parsed) {
+                if (!newStatus || getStatusPriority(parsed) > getStatusPriority(newStatus)) {
+                  newStatus = parsed;
+                }
+              }
+            }
+          }
+        }
       }
 
       if (newStatus && newStatus !== report.status) {
@@ -308,32 +354,38 @@ export const POST: APIRoute = async (ctx) => {
           })
           .where(eq(reports.id, report.id));
       }
+    } else if (!isRecentSiteUpdate && incomingTags.length === 0) {
+      // Fallback: query Discord REST API directly to get fresh applied tags
+      newStatus = await syncReportStatusFromDiscord(report, cfg);
     }
 
     // Handle thread locked state changes from Discord.
-    // Use Boolean(...) normalization so SQLite integer 1/0 equals JS true/false.
-    // Also ignore if the report was just updated on the site within the last 15s.
+    const incomingLocked = typeof body.locked === 'boolean'
+      ? body.locked
+      : typeof body.thread_metadata?.locked === 'boolean'
+        ? body.thread_metadata.locked
+        : undefined;
+
     let lockChanged = false;
     if (
-      typeof body.locked === 'boolean' &&
-      Boolean(body.locked) !== Boolean(report.locked) &&
+      typeof incomingLocked === 'boolean' &&
+      Boolean(incomingLocked) !== Boolean(report.locked) &&
       !isRecentSiteUpdate
     ) {
       lockChanged = true;
-      const isNowLocked = body.locked;
       await d
         .update(reports)
         .set({
-          locked: isNowLocked,
+          locked: incomingLocked,
           updatedAt: sql`(unixepoch())`,
         })
         .where(eq(reports.id, report.id));
 
       const log = logAction(
         { id: author?.id || 'discord', username: author?.username || 'Discord Mod' } as any,
-        isNowLocked ? 'report.lock' : 'report.unlock',
+        incomingLocked ? 'report.lock' : 'report.unlock',
         `report #${report.id}`,
-        isNowLocked ? 'locked (via Discord)' : 'unlocked (via Discord)',
+        incomingLocked ? 'locked (via Discord)' : 'unlocked (via Discord)',
         `${ctx.url.origin}/report/${report.id}`,
       );
       if (cf) cf.waitUntil(log);
@@ -350,10 +402,10 @@ export const POST: APIRoute = async (ctx) => {
       if (cf) cf.waitUntil(notifTask);
       else await notifTask;
 
-      return json({ ok: true, newStatus, locked: lockChanged ? body.locked : report.locked });
+      return json({ ok: true, newStatus, locked: lockChanged ? incomingLocked : report.locked });
     }
     if (lockChanged) {
-      return json({ ok: true, locked: body.locked });
+      return json({ ok: true, locked: incomingLocked });
     }
     return json({ ok: true, status: 'no_change' });
   }
