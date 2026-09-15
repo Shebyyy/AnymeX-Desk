@@ -112,18 +112,27 @@ export function getForumChannelId(kind: Report['kind'], cfg: Config): string | n
   return null;
 }
 
+export interface EnsureForumTagsResult {
+  tagMap: Map<string, string>;
+  addedNames: string[];
+  totalTags: number;
+  error?: string;
+}
+
 /**
- * Fetch or auto-create required tags on a Discord forum channel.
- * Returns a map of lowercased tag name -> tag ID snowflake.
+ * Fetch or auto-create required tags on a Discord forum channel with detailed feedback.
  */
-export async function ensureForumTags(
+export async function ensureForumTagsDetailed(
   channelId: string,
   botToken: string,
   kind: Report['kind'],
-): Promise<Map<string, string>> {
-  const cached = tagCache.get(channelId);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return cached.tags;
+  forceRefresh = false,
+): Promise<EnsureForumTagsResult> {
+  if (!forceRefresh) {
+    const cached = tagCache.get(channelId);
+    if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+      return { tagMap: cached.tags, addedNames: [], totalTags: cached.tags.size };
+    }
   }
 
   const res = await fetch(`${DISCORD_API}/channels/${channelId}`, {
@@ -131,8 +140,9 @@ export async function ensureForumTags(
   });
 
   if (!res.ok) {
-    console.error(`[ForumSync] Failed to fetch channel ${channelId}:`, res.status, await res.text());
-    return new Map();
+    const errText = await res.text();
+    console.error(`[ForumSync] Failed to fetch channel ${channelId}:`, res.status, errText);
+    return { tagMap: new Map(), addedNames: [], totalTags: 0, error: `Channel fetch failed (${res.status}): ${errText}` };
   }
 
   const channel = (await res.json()) as DiscordChannel;
@@ -158,9 +168,8 @@ export async function ensureForumTags(
     desiredTags.push(...BUG_STATUS_TAGS_DEF, ...PLATFORM_TAGS_DEF);
   }
 
-  // Find tags that need to be created (limit 20 tags per channel per Discord rules)
+  const addedNames: string[] = [];
   const tagsToKeep = [...existingTags];
-  let changed = false;
 
   for (const desired of desiredTags) {
     const desiredLower = desired.name.toLowerCase();
@@ -171,19 +180,40 @@ export async function ensureForumTags(
     if (!alreadyExists) {
       if (tagsToKeep.length < 20) {
         tagsToKeep.push(desired);
-        changed = true;
+        addedNames.push(desired.name);
+      } else {
+        console.warn(`[ForumSync] 20 tags limit reached on channel ${channelId}, cannot add "${desired.name}"`);
       }
     }
   }
 
-  if (changed) {
+  if (addedNames.length > 0) {
+    const sanitizedTags = tagsToKeep.map((t) => {
+      const obj: Record<string, unknown> = {
+        name: t.name,
+        moderated: Boolean(t.moderated),
+      };
+      if (t.id) obj.id = t.id;
+      if (t.emoji_id) {
+        obj.emoji_id = t.emoji_id;
+        obj.emoji_name = null;
+      } else if (t.emoji_name) {
+        obj.emoji_name = t.emoji_name;
+        obj.emoji_id = null;
+      } else {
+        obj.emoji_id = null;
+        obj.emoji_name = null;
+      }
+      return obj;
+    });
+
     const patchRes = await fetch(`${DISCORD_API}/channels/${channelId}`, {
       method: 'PATCH',
       headers: {
         Authorization: `Bot ${botToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ available_tags: tagsToKeep }),
+      body: JSON.stringify({ available_tags: sanitizedTags }),
     });
 
     if (patchRes.ok) {
@@ -197,14 +227,31 @@ export async function ensureForumTags(
           if (lower === 'done') tagMap.set('completed', t.id);
         }
       }
-      console.log(`[ForumSync] Auto-created tags on forum ${channelId}`);
+      tagCache.set(channelId, { fetchedAt: Date.now(), tags: tagMap });
+      return { tagMap, addedNames, totalTags: updatedChannel.available_tags?.length || tagsToKeep.length };
     } else {
-      console.warn(`[ForumSync] Could not update tags on forum ${channelId}:`, await patchRes.text());
+      const errText = await patchRes.text();
+      console.warn(`[ForumSync] Could not update tags on forum ${channelId}:`, patchRes.status, errText);
+      return { tagMap, addedNames: [], totalTags: existingTags.length, error: `Discord rejected tag update (${patchRes.status}): ${errText}` };
     }
   }
 
   tagCache.set(channelId, { fetchedAt: Date.now(), tags: tagMap });
-  return tagMap;
+  return { tagMap, addedNames: [], totalTags: existingTags.length };
+}
+
+/**
+ * Fetch or auto-create required tags on a Discord forum channel.
+ * Returns a map of lowercased tag name -> tag ID snowflake.
+ */
+export async function ensureForumTags(
+  channelId: string,
+  botToken: string,
+  kind: Report['kind'],
+  forceRefresh = false,
+): Promise<Map<string, string>> {
+  const res = await ensureForumTagsDetailed(channelId, botToken, kind, forceRefresh);
+  return res.tagMap;
 }
 
 /**

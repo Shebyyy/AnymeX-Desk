@@ -9,7 +9,7 @@ import { LEVEL_LABELS, combine, atLeast, RANK } from '../lib/levels';
 import { idList, readConfig, writeSettings } from '../lib/settings';
 import { isOwner, isResponse, levelOf, logAction, requireStaff, setManualLevel } from '../lib/staff';
 import { testWebhook } from '../lib/webhook';
-import { ensureForumTags, syncExistingReports } from '../lib/discord-forums';
+import { ensureForumTags, ensureForumTagsDetailed, syncExistingReports } from '../lib/discord-forums';
 import { relativeAge } from '../lib/format';
 import { getPresence, type PresenceInfo } from '../lib/presence';
 
@@ -219,26 +219,49 @@ if (Astro.request.method === 'POST') {
       if (!cfg.discord_bot_token) {
         error = 'Please enter and save your Bot Token in the Settings & Secrets tab first.';
       } else {
-        let count = 0;
+        const addedReports: string[] = [];
+        const errors: string[] = [];
+        let channelsChecked = 0;
+
         if (cfg.discord_forum_bugs_id) {
-          await ensureForumTags(cfg.discord_forum_bugs_id, cfg.discord_bot_token, 'bug');
-          count++;
+          channelsChecked++;
+          const res = await ensureForumTagsDetailed(cfg.discord_forum_bugs_id, cfg.discord_bot_token, 'bug', true);
+          if (res.error) errors.push(`Bugs: ${res.error}`);
+          else if (res.addedNames.length > 0) addedReports.push(`Bugs (+${res.addedNames.join(', ')})`);
         }
         if (cfg.discord_forum_suggestions_id) {
-          await ensureForumTags(cfg.discord_forum_suggestions_id, cfg.discord_bot_token, 'suggestion');
-          count++;
+          channelsChecked++;
+          const res = await ensureForumTagsDetailed(cfg.discord_forum_suggestions_id, cfg.discord_bot_token, 'suggestion', true);
+          if (res.error) errors.push(`Suggestions: ${res.error}`);
+          else if (res.addedNames.length > 0) addedReports.push(`Suggestions (+${res.addedNames.join(', ')})`);
         }
         if (cfg.discord_forum_extensions_id) {
-          await ensureForumTags(cfg.discord_forum_extensions_id, cfg.discord_bot_token, 'extension');
-          count++;
+          channelsChecked++;
+          const res = await ensureForumTagsDetailed(cfg.discord_forum_extensions_id, cfg.discord_bot_token, 'extension', true);
+          if (res.error) errors.push(`Extensions: ${res.error}`);
+          else if (res.addedNames.length > 0) addedReports.push(`Extensions (+${res.addedNames.join(', ')})`);
         }
-        done = `Successfully verified and auto-created forum tags across ${count} channel(s)!`;
+
+        if (errors.length > 0) {
+          error = `Tag sync error: ${errors.join(' | ')}`;
+        } else if (channelsChecked === 0) {
+          error = 'No Discord forum channel IDs are configured in Settings & Secrets.';
+        } else {
+          const detail = addedReports.length > 0 ? `Created new tags: ${addedReports.join(', ')}` : 'All desired tags already exist on Discord!';
+          done = `Successfully verified forum tags across ${channelsChecked} channel(s). ${detail}`;
+        }
       }
     }
   } else if (intent === 'sync-existing-reports') {
     if (!isOwnerUser) {
       error = 'Only the owner can run forum synchronization.';
     } else {
+      const cfg = await readConfig();
+      if (cfg.discord_bot_token) {
+        if (cfg.discord_forum_bugs_id) await ensureForumTags(cfg.discord_forum_bugs_id, cfg.discord_bot_token, 'bug', true);
+        if (cfg.discord_forum_suggestions_id) await ensureForumTags(cfg.discord_forum_suggestions_id, cfg.discord_bot_token, 'suggestion', true);
+        if (cfg.discord_forum_extensions_id) await ensureForumTags(cfg.discord_forum_extensions_id, cfg.discord_bot_token, 'extension', true);
+      }
       const res = await syncExistingReports(origin, 50);
       done = `Sync completed: ${res.success} new report thread(s) created, ${res.commentsSynced} comment(s) posted to Discord!`;
     }

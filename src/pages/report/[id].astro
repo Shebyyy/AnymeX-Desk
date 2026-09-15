@@ -1686,6 +1686,16 @@ Astro.response.headers.set(
       if (bodyEl) bodyEl.dataset.rawBody = c.body;
     }
 
+    // Stamp Astro scoped CID on dynamic comment and children so all scoped styles apply
+    const sampleEl = document.querySelector('.comments-section') || document.querySelector('.comment') || commentsList;
+    if (sampleEl) {
+      const cidAttr = Array.from(sampleEl.attributes).find((a) => a.name.startsWith('data-astro-cid-'))?.name;
+      if (cidAttr) {
+        el.setAttribute(cidAttr, '');
+        el.querySelectorAll('*').forEach((child) => child.setAttribute(cidAttr, ''));
+      }
+    }
+
     // Insert at correct position in the comments tree
     if (isReply && parentEl) {
       let insertAfterEl: HTMLElement = parentEl;
@@ -2898,19 +2908,19 @@ Astro.response.headers.set(
     color: var(--text-muted);
     font-size: var(--text-sm);
   }
-  .comment { padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-inset); scroll-margin-top: var(--space-6); }
-  .comment-author-link {
+  :global(.comment) { padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-inset); scroll-margin-top: var(--space-6); }
+  :global(.comment-author-link) {
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
     text-decoration: none;
     color: inherit;
   }
-  .comment-author-link:hover .comment-username {
+  :global(.comment-author-link:hover .comment-username) {
     text-decoration: underline;
     color: var(--signal-ink);
   }
-  .comment:target {
+  :global(.comment:target) {
     border-color: var(--accent, #f5c542);
     animation: comment-highlight 2s ease-out;
   }
@@ -2918,16 +2928,16 @@ Astro.response.headers.set(
     from { background: color-mix(in srgb, var(--accent, #f5c542) 18%, var(--surface-inset)); }
     to { background: var(--surface-inset); }
   }
-  .comment[data-is-reply="true"] {
+  :global(.comment[data-is-reply="true"]) {
     margin-inline-start: var(--space-6);
     border-inline-start: 2px solid var(--border-default);
   }
-  .reply-context {
+  :global(.reply-context) {
     font-size: var(--text-xs);
     color: var(--text-muted);
     margin: 0 0 var(--space-1);
   }
-  .reply-btn {
+  :global(.reply-btn) {
     margin-block-start: var(--space-2);
     font-size: var(--text-xs);
     color: var(--text-muted);
@@ -2936,12 +2946,12 @@ Astro.response.headers.set(
     cursor: pointer;
     padding: 0;
   }
-  .reply-btn:hover { color: var(--text-primary); text-decoration: underline; }
-  .comment-actions { display: flex; gap: var(--space-3); margin-block-start: var(--space-2); }
-  .comment-edited { color: var(--text-muted); font-size: var(--text-xs); font-style: italic; }
-  .edit-form { margin-block-start: var(--space-2); }
-  .edit-textarea { width: 100%; min-block-size: 4rem; }
-  .edit-form-actions { display: flex; gap: var(--space-2); margin-block-start: var(--space-2); }
+  :global(.reply-btn:hover) { color: var(--text-primary); text-decoration: underline; }
+  :global(.comment-actions) { display: flex; gap: var(--space-3); margin-block-start: var(--space-2); }
+  :global(.comment-edited) { color: var(--text-muted); font-size: var(--text-xs); font-style: italic; }
+  :global(.edit-form) { margin-block-start: var(--space-2); }
+  :global(.edit-textarea) { width: 100%; min-block-size: 4rem; }
+  :global(.edit-form-actions) { display: flex; gap: var(--space-2); margin-block-start: var(--space-2); }
   .mention-wrap { position: relative; }
   .mention-dropdown {
     position: absolute;
@@ -2993,18 +3003,18 @@ Astro.response.headers.set(
     margin-inline-start: auto;
   }
   .cancel-reply-btn:hover { color: var(--text-primary); }
-  .comment-header { margin-block-end: var(--space-2); }
-  .comment-author {
+  :global(.comment-header) { margin-block-end: var(--space-2); }
+  :global(.comment-author) {
     display: flex;
     align-items: center;
     gap: var(--space-2);
   }
-  .comment-author .avatar, .comment-author .avatar-blank { inline-size: 24px; block-size: 24px; }
-  .comment-username { font-weight: var(--weight-medium); font-size: var(--text-sm); }
-  .comment-time { color: var(--text-muted); font-size: var(--text-xs); }
-  .comment-body { color: var(--text-secondary); font-size: var(--text-sm); white-space: pre-wrap; margin: 0; }
-  .comment-link { color: var(--accent, #6ea8fe); word-break: break-all; }
-  .comment-inline-media {
+  :global(.comment-author .avatar), :global(.comment-author .avatar-blank) { inline-size: 24px; block-size: 24px; }
+  :global(.comment-username) { font-weight: var(--weight-medium); font-size: var(--text-sm); }
+  :global(.comment-time) { color: var(--text-muted); font-size: var(--text-xs); }
+  :global(.comment-body) { color: var(--text-secondary); font-size: var(--text-sm); white-space: pre-wrap; margin: 0; }
+  :global(.comment-link) { color: var(--accent, #6ea8fe); word-break: break-all; }
+  :global(.comment-inline-media) {
     display: block;
     max-width: 100%;
     max-height: 320px;
@@ -3044,14 +3054,14 @@ Astro.response.headers.set(
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
 
   /* ── Comment attachments ── */
-  .comment-attachments { display: flex; flex-direction: column; gap: var(--space-2); margin-block-start: var(--space-2); }
-  .comment-att { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; background: var(--surface-inset); position: relative; }
-  .comment-att-img { max-width: 300px; max-height: 200px; object-fit: contain; display: block; }
-  .comment-att-video { max-width: 100%; max-height: 250px; display: block; }
-  .comment-att-file { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); color: var(--text-secondary); font-size: var(--text-sm); text-decoration: none; }
-  .comment-att-file:hover { color: var(--text-primary); background: var(--surface-hover); }
-  .pin-btn { font-size: var(--text-xs); color: var(--text-muted); background: var(--surface-active); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); cursor: pointer; margin: var(--space-2); }
-  .pin-btn:hover { color: var(--text-primary); border-color: var(--border-default); }
+  :global(.comment-attachments) { display: flex; flex-direction: column; gap: var(--space-2); margin-block-start: var(--space-2); }
+  :global(.comment-att) { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; background: var(--surface-inset); position: relative; }
+  :global(.comment-att-img) { max-width: 300px; max-height: 200px; object-fit: contain; display: block; }
+  :global(.comment-att-video) { max-width: 100%; max-height: 250px; display: block; }
+  :global(.comment-att-file) { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); color: var(--text-secondary); font-size: var(--text-sm); text-decoration: none; }
+  :global(.comment-att-file:hover) { color: var(--text-primary); background: var(--surface-hover); }
+  :global(.pin-btn) { font-size: var(--text-xs); color: var(--text-muted); background: var(--surface-active); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); cursor: pointer; margin: var(--space-2); }
+  :global(.pin-btn:hover) { color: var(--text-primary); border-color: var(--border-default); }
 
   /* ── Moderator controls ── */
   .mod {
@@ -3254,14 +3264,14 @@ Astro.response.headers.set(
   }
 
   /* ── Comment Reactions ── */
-  .comment-reactions {
+  :global(.comment-reactions) {
     display: flex;
     align-items: center;
     gap: var(--space-1);
     flex-wrap: wrap;
     margin-block-start: var(--space-2);
   }
-  .reaction-chip {
+  :global(.reaction-chip) {
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -3274,22 +3284,22 @@ Astro.response.headers.set(
     color: var(--text-secondary);
     transition: all var(--dur-fast) var(--ease-standard);
   }
-  .reaction-chip:hover {
+  :global(.reaction-chip:hover) {
     border-color: var(--border-strong);
     background: var(--surface-hover);
   }
-  .reaction-active {
+  :global(.reaction-active) {
     border-color: var(--signal);
     background: var(--signal-fill);
     color: var(--signal-ink);
   }
-  .rx-count { font-family: var(--font-data); font-size: 0.9em; }
+  :global(.rx-count) { font-family: var(--font-data); font-size: 0.9em; }
 
-  .reaction-picker {
+  :global(.reaction-picker) {
     position: relative;
     display: inline-block;
   }
-  .reaction-picker-btn {
+  :global(.reaction-picker-btn) {
     display: inline-flex;
     align-items: center;
     gap: 2px;
@@ -3303,12 +3313,12 @@ Astro.response.headers.set(
     list-style: none;
     user-select: none;
   }
-  .reaction-picker-btn::-webkit-details-marker { display: none; }
-  .reaction-picker-btn:hover {
+  :global(.reaction-picker-btn::-webkit-details-marker) { display: none; }
+  :global(.reaction-picker-btn:hover) {
     color: var(--text-primary);
     border-color: var(--border-default);
   }
-  .reaction-picker-menu {
+  :global(.reaction-picker-menu) {
     position: absolute;
     bottom: 100%;
     left: 0;
@@ -3322,7 +3332,7 @@ Astro.response.headers.set(
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     z-index: var(--z-dropdown);
   }
-  .reaction-emoji-btn {
+  :global(.reaction-emoji-btn) {
     background: none;
     border: none;
     cursor: pointer;
@@ -3331,7 +3341,7 @@ Astro.response.headers.set(
     border-radius: var(--radius-sm);
     transition: transform var(--dur-fast) var(--ease-standard);
   }
-  .reaction-emoji-btn:hover {
+  :global(.reaction-emoji-btn:hover) {
     transform: scale(1.25);
     background: var(--surface-hover);
   }
@@ -3339,7 +3349,7 @@ Astro.response.headers.set(
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
   }
-  .live-comment-enter {
+  :global(.live-comment-enter) {
     animation: liveCommentFade 0.4s ease-out forwards;
   }
   @keyframes statusFlash {
@@ -3347,12 +3357,12 @@ Astro.response.headers.set(
     50% { transform: scale(1.12); filter: brightness(1.4); }
     100% { transform: scale(1); filter: brightness(1); }
   }
-  .status-updated-flash {
+  :global(.status-updated-flash) {
     animation: statusFlash 0.8s ease-in-out;
   }
 
   /* Presence Cutout Dots */
-  .avatar-presence-wrap {
+  :global(.avatar-presence-wrap) {
     position: relative;
     display: inline-flex;
     align-items: center;
