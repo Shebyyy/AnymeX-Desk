@@ -24,6 +24,7 @@ export const BLURPLE = 0x5865f2;
 /** Same red/yellow/green scheme the announcement embeds use, so a status DM matches what the report page shows. */
 export function statusColor(status: string): number {
   if (status === 'fixed') return GREEN;
+  if (status === 'already_available') return 0xa855f7;
   if (status === 'wont_fix' || status === 'duplicate') return RED;
   return YELLOW; // open, confirmed, in_progress
 }

@@ -145,7 +145,7 @@ if (Astro.request.method === 'POST') {
     const rawNote = String(form.get('note') ?? '').trim().slice(0, 500);
     const statusNote = rawNote || null;
     const detail = statusNote ? `${status}: ${statusNote}` : status;
-    const isClosing = ['fixed', 'wont_fix', 'duplicate'].includes(status);
+    const isClosing = ['fixed', 'already_available', 'wont_fix', 'duplicate'].includes(status);
 
     const updateSet: Record<string, unknown> = {
       status,
@@ -174,19 +174,6 @@ if (Astro.request.method === 'POST') {
         notifyWatchers(id, 'status_changed', detail, gate.user.id),
         updateForumStatus(updated, status, statusNote, gate.user.username),
       ];
-
-      if (updated.discordThreadId) {
-        after.push(
-          syncForumThreadLock(
-            updated.discordThreadId,
-            isClosing,
-            updated.title,
-            gate.user.username,
-            statusNote || `Marked as ${statusText}`,
-            isClosing,
-          ),
-        );
-      }
 
       if (updated.reporterId && updated.reporterId !== gate.user.id) {
         after.push(
@@ -1503,6 +1490,222 @@ Astro.response.headers.set(
 
   cancelReplyBtn?.addEventListener('click', cancelReply);
 
+  // ── Comment posting & live rendering helpers ──────────────────────────
+  function escapeHtml(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  const reportIdMeta = Number((document.getElementById('comment-form')?.querySelector('[name=reportId]') as HTMLInputElement)?.value || 0);
+  let currentReportStatus = document.querySelector('dd.status')?.getAttribute('data-status') || '';
+  let latestCommentId = 0;
+  document.querySelectorAll<HTMLElement>('.comment[data-comment-id]').forEach((el) => {
+    const cid = Number(el.dataset.commentId) || 0;
+    if (cid > latestCommentId) latestCommentId = cid;
+  });
+
+  function insertCommentToDom(c: any, isCurrentlyLocked?: boolean): HTMLElement | null {
+    if (!c || !c.id) return null;
+    if (document.querySelector(`.comment[data-comment-id="${c.id}"]`)) return null;
+    latestCommentId = Math.max(latestCommentId, Number(c.id) || 0);
+
+    const commentsSection = document.querySelector('.comments-section');
+    let commentsList = commentsSection?.querySelector('.comments-list');
+    const commentsListContainer = document.getElementById('comments-list');
+    const viewerUserId = commentsListContainer?.dataset.currentUserId || null;
+    const viewerCanModerate = commentsListContainer?.dataset.canModerate === 'true';
+    const lockedState = typeof isCurrentlyLocked === 'boolean'
+      ? isCurrentlyLocked
+      : (commentsListContainer?.dataset.isLocked === 'true');
+
+    if (!commentsList && commentsSection) {
+      commentsList = document.createElement('div');
+      commentsList.className = 'comments-list';
+      commentsList.id = 'comments-list';
+      if (viewerUserId) commentsList.dataset.currentUserId = viewerUserId;
+      commentsList.dataset.canModerate = viewerCanModerate ? 'true' : 'false';
+      commentsSection.appendChild(commentsList);
+    }
+    const emptyNotice = commentsSection?.querySelector('.no-comments, .empty');
+    if (emptyNotice) emptyNotice.remove();
+
+    const isReply = c.replyToId != null && Number(c.replyToId) > 0;
+    const parentEl = isReply ? (document.getElementById(`comment-${c.replyToId}`) as HTMLElement | null) : null;
+    const parentDepth = parentEl ? (Number(parentEl.dataset.depth) || 0) : 0;
+    const depth = isReply && parentEl ? parentDepth + 1 : (isReply ? 1 : 0);
+
+    const el = document.createElement('div');
+    el.className = 'comment live-comment-enter';
+    el.id = `comment-${c.id}`;
+    el.dataset.commentId = String(c.id);
+    el.dataset.isReply = isReply ? 'true' : 'false';
+    el.dataset.depth = String(depth);
+    if (isReply) {
+      el.dataset.replyToId = String(c.replyToId);
+    }
+    if (depth > 0) {
+      el.style.marginInlineStart = `calc(${depth} * var(--space-6))`;
+    }
+
+    const parentUsernameFromEl = parentEl?.querySelector('.comment-username')?.textContent?.trim() || null;
+    const replyToUsername = c.replyToUsername || parentUsernameFromEl;
+    const replyContextHtml = (isReply && replyToUsername)
+      ? `<p class="reply-context">↳ replying to <strong>${escapeHtml(replyToUsername)}</strong></p>`
+      : '';
+
+    let attsHtml = '';
+    const cAttachments = c.attachments || (c.attachment ? [c.attachment] : []);
+    if (cAttachments.length > 0) {
+      attsHtml = `<div class="comment-attachments">` + cAttachments.map((att: any) => {
+        const srcUrl = att.filePath ? (att.filePath.startsWith('http') ? att.filePath : '/' + att.filePath.replace(/^\/+/, '')) : (att.url || '');
+        const fileNameEscaped = escapeHtml(att.fileName || 'Attachment');
+        const sizeLabel = att.fileSize ? ` (${(att.fileSize / 1024).toFixed(0)} KB)` : '';
+        let pinBtnHtml = '';
+        if (viewerCanModerate && att.id) {
+          pinBtnHtml = `<button type="button" class="pin-btn" data-att-id="${att.id}" data-report-id="${reportIdMeta}" title="Pin to report attachments">Pin to report</button>`;
+        }
+
+        if (att.fileType === 'image') {
+          return `
+            <div class="comment-att" data-type="image">
+              <button
+                type="button"
+                class="comment-att-btn"
+                data-lightbox-src="${srcUrl}"
+                data-lightbox-type="image"
+                data-lightbox-name="${fileNameEscaped}"
+                aria-label="View ${fileNameEscaped}"
+              >
+                <img src="${srcUrl}" alt="${fileNameEscaped}" class="comment-att-img" loading="lazy" />
+              </button>
+              ${pinBtnHtml}
+            </div>`;
+        } else if (att.fileType === 'video') {
+          return `
+            <div class="comment-att" data-type="video">
+              <div class="comment-video-wrap">
+                <video controls preload="metadata" class="comment-att-video">
+                  <source src="${srcUrl}" type="${att.mimeType || 'video/mp4'}" />
+                </video>
+                <button
+                  type="button"
+                  class="gallery-expand-btn"
+                  data-lightbox-src="${srcUrl}"
+                  data-lightbox-type="video"
+                  data-lightbox-name="${fileNameEscaped}"
+                  title="Fullscreen in-app lightbox"
+                  aria-label="Open ${fileNameEscaped} in full screen lightbox"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                </button>
+              </div>
+              ${pinBtnHtml}
+            </div>`;
+        } else {
+          return `
+            <div class="comment-att" data-type="file">
+              <a href="${srcUrl}" class="comment-att-file" download="${fileNameEscaped}">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                <span>${fileNameEscaped}${sizeLabel}</span>
+              </a>
+              ${pinBtnHtml}
+            </div>`;
+        }
+      }).join('') + `</div>`;
+    }
+
+    let reactionsHtml = '';
+    if (viewerUserId) {
+      reactionsHtml = `
+        <div class="comment-reactions" data-comment-id="${c.id}">
+          <details class="reaction-picker">
+            <summary class="reaction-picker-btn" title="Add reaction">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+              <span>+</span>
+            </summary>
+            <div class="reaction-picker-menu">
+              ${['👍', '✅', '🤔', '❌', '🎉'].map((emoji) => `
+                <button type="button" class="reaction-emoji-btn" data-reaction-btn data-comment-id="${c.id}" data-emoji="${emoji}">
+                  ${emoji}
+                </button>
+              `).join('')}
+            </div>
+          </details>
+        </div>
+      `;
+    }
+
+    let actionsHtml = '';
+    if (viewerUserId) {
+      let btns = '';
+      if (!lockedState) {
+        btns += `<button type="button" class="reply-btn" data-comment-id="${c.id}" data-username="${escapeHtml(c.username)}">Reply</button>`;
+      }
+      if (viewerUserId === c.userId && c.body) {
+        btns += `<button type="button" class="reply-btn edit-btn" data-comment-id="${c.id}">Edit</button>`;
+      }
+      if (viewerUserId === c.userId || viewerCanModerate) {
+        btns += `<button type="button" class="reply-btn delete-comment-btn" data-comment-id="${c.id}">Delete</button>`;
+      }
+      if (btns) {
+        actionsHtml = `<div class="comment-actions">${btns}</div>`;
+      }
+    }
+
+    const formattedBody = c.bodyHtml || (c.body ? escapeHtml(c.body) : '');
+    const usernameEscaped = escapeHtml(c.username || 'User');
+    const avatarSrc = c.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png';
+
+    el.innerHTML = `
+      <div class="comment-header">
+        <div class="comment-author">
+          <a href="/user/${c.userId}" class="comment-author-link" title="View ${usernameEscaped}'s profile">
+            <div class="avatar-presence-wrap">
+              <img class="avatar" src="${avatarSrc}" alt="" width="24" height="24" />
+            </div>
+            <span class="comment-username">${usernameEscaped}</span>
+          </a>
+          <span class="comment-time">just now</span>
+        </div>
+      </div>
+      ${replyContextHtml}
+      ${c.body ? `<p class="comment-body" data-comment-body data-raw-body="${escapeHtml(c.body)}">${formattedBody}</p>` : ''}
+      ${attsHtml}
+      ${reactionsHtml}
+      ${actionsHtml}
+    `;
+
+    if (c.body) {
+      const bodyEl = el.querySelector('[data-comment-body]') as HTMLElement | null;
+      if (bodyEl) bodyEl.dataset.rawBody = c.body;
+    }
+
+    // Insert at correct position in the comments tree
+    if (isReply && parentEl) {
+      let insertAfterEl: HTMLElement = parentEl;
+      let next = parentEl.nextElementSibling as HTMLElement | null;
+      while (next && next.classList.contains('comment')) {
+        const nextDepth = Number(next.dataset.depth || 0);
+        if (nextDepth > parentDepth) {
+          insertAfterEl = next;
+          next = next.nextElementSibling as HTMLElement | null;
+        } else {
+          break;
+        }
+      }
+      insertAfterEl.insertAdjacentElement('afterend', el);
+    } else {
+      commentsList?.appendChild(el);
+    }
+    return el;
+  }
+
   // ── Comment posting (with optional file) ──────────────────────────
   const commentForm = document.getElementById('comment-form') as HTMLFormElement | null;
   const commentBody = document.getElementById('comment-body') as HTMLTextAreaElement | null;
@@ -1531,11 +1734,13 @@ Astro.response.headers.set(
       selectedFiles = [];
       cancelReply();
       if (fileChip) { fileChip.textContent = ''; fileChip.style.display = 'none'; }
-      await pollLiveUpdates();
-      const targetId = postedData?.id || latestCommentId;
-      const newestEl = document.getElementById('comment-' + targetId);
-      if (newestEl) newestEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      else window.location.reload();
+
+      if (postedData && postedData.id) {
+        insertCommentToDom(postedData);
+        const newestEl = document.getElementById('comment-' + postedData.id);
+        if (newestEl) newestEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      pollLiveUpdates();
     } catch {
       alert('Network error');
     } finally {
@@ -1800,14 +2005,6 @@ Astro.response.headers.set(
   });
 
   // ── Live real-time polling (zero refresh needed) ──────────────────────────
-  const reportIdMeta = Number((document.getElementById('comment-form')?.querySelector('[name=reportId]') as HTMLInputElement)?.value || 0);
-  let currentReportStatus = document.querySelector('dd.status')?.getAttribute('data-status') || '';
-  let latestCommentId = 0;
-  document.querySelectorAll<HTMLElement>('.comment[data-comment-id]').forEach((el) => {
-    const cid = Number(el.dataset.commentId) || 0;
-    if (cid > latestCommentId) latestCommentId = cid;
-  });
-
   async function pollLiveUpdates() {
     if (!reportIdMeta) return;
     try {
@@ -1829,196 +2026,11 @@ Astro.response.headers.set(
 
       // 2. Live new comments injection
       if (Array.isArray(data.newComments) && data.newComments.length > 0) {
-        const commentsSection = document.querySelector('.comments-section');
-        let commentsList = commentsSection?.querySelector('.comments-list');
-
-        const commentsListContainer = document.getElementById('comments-list');
-        const viewerUserId = commentsListContainer?.dataset.currentUserId || null;
-        const viewerCanModerate = commentsListContainer?.dataset.canModerate === 'true';
-
-        if (!commentsList && commentsSection) {
-          commentsList = document.createElement('div');
-          commentsList.className = 'comments-list';
-          commentsList.id = 'comments-list';
-          if (viewerUserId) commentsList.dataset.currentUserId = viewerUserId;
-          commentsList.dataset.canModerate = viewerCanModerate ? 'true' : 'false';
-          commentsSection.appendChild(commentsList);
-        }
-        const emptyNotice = commentsSection?.querySelector('.no-comments, .empty');
-        if (emptyNotice) emptyNotice.remove();
-
         for (const c of data.newComments) {
-          if (document.querySelector(`.comment[data-comment-id="${c.id}"]`)) continue;
-          latestCommentId = Math.max(latestCommentId, c.id);
-
-          const isReply = c.replyToId != null;
-          const parentEl = isReply ? (document.getElementById(`comment-${c.replyToId}`) as HTMLElement | null) : null;
-          const parentDepth = parentEl ? (Number(parentEl.dataset.depth) || 0) : 0;
-          const depth = isReply && parentEl ? parentDepth + 1 : 0;
-
-          const el = document.createElement('div');
-          el.className = 'comment live-comment-enter';
-          el.id = `comment-${c.id}`;
-          el.dataset.commentId = String(c.id);
-          el.dataset.isReply = isReply ? 'true' : 'false';
-          el.dataset.depth = String(depth);
-          if (isReply) {
-            el.dataset.replyToId = String(c.replyToId);
-          }
-          if (depth > 0) {
-            el.style.marginInlineStart = `calc(${depth} * var(--space-6))`;
-          }
-
-          const replyToUsername = c.replyToUsername || (parentEl ? parentEl.querySelector('.comment-username')?.textContent?.trim() : null);
-          const replyContextHtml = (isReply && replyToUsername)
-            ? `<p class="reply-context">↳ replying to <strong>${replyToUsername.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</strong></p>`
-            : '';
-
-          let attsHtml = '';
-          if (c.attachments && c.attachments.length > 0) {
-            attsHtml = `<div class="comment-attachments">` + c.attachments.map((att: any) => {
-              const srcUrl = att.filePath ? (att.filePath.startsWith('http') ? att.filePath : '/' + att.filePath.replace(/^\/+/, '')) : (att.url || '');
-              const fileNameEscaped = (att.fileName || 'Attachment').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-              const sizeLabel = att.fileSize ? ` (${(att.fileSize / 1024).toFixed(0)} KB)` : '';
-              let pinBtnHtml = '';
-              if (viewerCanModerate && att.id) {
-                pinBtnHtml = `<button type="button" class="pin-btn" data-att-id="${att.id}" data-report-id="${reportIdMeta}" title="Pin to report attachments">Pin to report</button>`;
-              }
-
-              if (att.fileType === 'image') {
-                return `
-                  <div class="comment-att" data-type="image">
-                    <button
-                      type="button"
-                      class="comment-att-btn"
-                      data-lightbox-src="${srcUrl}"
-                      data-lightbox-type="image"
-                      data-lightbox-name="${fileNameEscaped}"
-                      aria-label="View ${fileNameEscaped}"
-                    >
-                      <img src="${srcUrl}" alt="${fileNameEscaped}" class="comment-att-img" loading="lazy" />
-                    </button>
-                    ${pinBtnHtml}
-                  </div>`;
-              } else if (att.fileType === 'video') {
-                return `
-                  <div class="comment-att" data-type="video">
-                    <div class="comment-video-wrap">
-                      <video controls preload="metadata" class="comment-att-video">
-                        <source src="${srcUrl}" type="${att.mimeType || 'video/mp4'}" />
-                      </video>
-                      <button
-                        type="button"
-                        class="gallery-expand-btn"
-                        data-lightbox-src="${srcUrl}"
-                        data-lightbox-type="video"
-                        data-lightbox-name="${fileNameEscaped}"
-                        title="Fullscreen in-app lightbox"
-                        aria-label="Open ${fileNameEscaped} in full screen lightbox"
-                      >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-                      </button>
-                    </div>
-                    ${pinBtnHtml}
-                  </div>`;
-              } else {
-                return `
-                  <div class="comment-att" data-type="file">
-                    <a href="${srcUrl}" class="comment-att-file" download="${fileNameEscaped}">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
-                      </svg>
-                      <span>${fileNameEscaped}${sizeLabel}</span>
-                    </a>
-                    ${pinBtnHtml}
-                  </div>`;
-              }
-            }).join('') + `</div>`;
-          }
-
-          let reactionsHtml = '';
-          if (viewerUserId) {
-            reactionsHtml = `
-              <div class="comment-reactions" data-comment-id="${c.id}">
-                <details class="reaction-picker">
-                  <summary class="reaction-picker-btn" title="Add reaction">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
-                    <span>+</span>
-                  </summary>
-                  <div class="reaction-picker-menu">
-                    ${['👍', '✅', '🤔', '❌', '🎉'].map((emoji) => `
-                      <button type="button" class="reaction-emoji-btn" data-reaction-btn data-comment-id="${c.id}" data-emoji="${emoji}">
-                        ${emoji}
-                      </button>
-                    `).join('')}
-                  </div>
-                </details>
-              </div>
-            `;
-          }
-
-          let actionsHtml = '';
-          if (viewerUserId) {
-            let btns = '';
-            const isCurrentlyLocked = typeof data.locked === 'boolean'
-              ? data.locked
-              : (commentsListContainer?.dataset.isLocked === 'true');
-            if (!isCurrentlyLocked) {
-              btns += `<button type="button" class="reply-btn" data-comment-id="${c.id}" data-username="${c.username.replace(/"/g, '&quot;')}">Reply</button>`;
-            }
-            if (viewerUserId === c.userId && c.body) {
-              btns += `<button type="button" class="reply-btn edit-btn" data-comment-id="${c.id}">Edit</button>`;
-            }
-            if (viewerUserId === c.userId || viewerCanModerate) {
-              btns += `<button type="button" class="reply-btn delete-comment-btn" data-comment-id="${c.id}">Delete</button>`;
-            }
-            if (btns) {
-              actionsHtml = `<div class="comment-actions">${btns}</div>`;
-            }
-          }
-
-          el.innerHTML = `
-            <div class="comment-header">
-              <div class="comment-author">
-                <a href="/user/${c.userId}" class="comment-author-link" title="View ${c.username.replace(/"/g, '&quot;')}'s profile">
-                  <img class="avatar" src="${c.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png'}" alt="" width="24" height="24" />
-                  <span class="comment-username">${c.username.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
-                </a>
-                <span class="comment-time">just now</span>
-              </div>
-            </div>
-            ${replyContextHtml}
-            ${c.body ? `<div class="comment-body" data-comment-body data-raw-body="${c.body.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}">${c.bodyHtml || c.body.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
-            ${attsHtml}
-            ${reactionsHtml}
-            ${actionsHtml}
-          `;
-
-          if (c.body) {
-            const bodyEl = el.querySelector('[data-comment-body]') as HTMLElement | null;
-            if (bodyEl) bodyEl.dataset.rawBody = c.body;
-          }
-
-          // Insert at correct position in the comments tree
-          if (isReply && parentEl) {
-            let insertAfterEl: HTMLElement = parentEl;
-            let next = parentEl.nextElementSibling as HTMLElement | null;
-            while (next && next.classList.contains('comment')) {
-              const nextDepth = Number(next.dataset.depth || 0);
-              if (nextDepth > parentDepth) {
-                insertAfterEl = next;
-                next = next.nextElementSibling as HTMLElement | null;
-              } else {
-                break;
-              }
-            }
-            insertAfterEl.insertAdjacentElement('afterend', el);
-          } else {
-            commentsList?.appendChild(el);
-          }
+          insertCommentToDom(c, data.locked);
         }
 
-        const countHeading = commentsSection?.querySelector('h2');
+        const countHeading = document.querySelector('.comments-section h2');
         if (countHeading && data.commentCount != null) {
           countHeading.textContent = 'Comments (' + data.commentCount + ')';
         }
@@ -2500,9 +2512,11 @@ Astro.response.headers.set(
     flex-shrink: 0;
   }
   .status-indicator-dot[data-status="open"] { background: var(--signal-ink); }
+  .status-indicator-dot[data-status="under_review"] { background: var(--signal-ink); }
   .status-indicator-dot[data-status="confirmed"] { background: #818cf8; }
   .status-indicator-dot[data-status="in_progress"] { background: #38bdf8; }
   .status-indicator-dot[data-status="fixed"] { background: var(--live); }
+  .status-indicator-dot[data-status="already_available"] { background: #a855f7; }
   .status-indicator-dot[data-status="wont_fix"] { background: var(--dead); }
   .status-indicator-dot[data-status="duplicate"] { background: var(--text-muted); }
   .active-badge {

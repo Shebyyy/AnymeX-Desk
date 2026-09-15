@@ -5,6 +5,7 @@ import { db } from '../lib/db/client';
 import { reports, STATUSES, STATUS_LABELS } from '../lib/db/schema';
 import { requireStaff, isResponse, logAction } from '../lib/staff';
 import { notifyWatchers } from '../lib/notify';
+import { updateForumStatus } from '../lib/discord-forums';
 import { relativeAge, kindLabel, categoryLabel, platformLabel, statusLabel } from '../lib/format';
 
 export const prerender = false;
@@ -37,9 +38,10 @@ if (Astro.request.method === 'POST') {
       error = 'Invalid status.';
     } else {
       const status = wanted as (typeof STATUSES)[number];
+      const isClosing = ['fixed', 'already_available', 'wont_fix', 'duplicate'].includes(status);
       await db()
         .update(reports)
-        .set({ status, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
+        .set({ status, locked: isClosing, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
         .where(inArray(reports.id, rawIds));
       await logAction(user, 'triage.bulk_status', `${rawIds.length} reports`, `status=${status}`);
       done = `Updated ${rawIds.length} reports to ${STATUS_LABELS[status] ?? status}.`;
@@ -56,12 +58,13 @@ if (Astro.request.method === 'POST') {
       error = 'Invalid status.';
     } else {
       const status = wanted as (typeof STATUSES)[number];
+      const isClosing = ['fixed', 'already_available', 'wont_fix', 'duplicate'].includes(status);
       const detail = statusNote ? `${status}: ${statusNote}` : status;
       const reportUrl = `${Astro.url.origin}/report/${reportId}`;
 
       const [updated] = await db()
         .update(reports)
-        .set({ status, statusNote, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
+        .set({ status, statusNote, locked: isClosing, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
         .where(eq(reports.id, reportId))
         .returning();
 
@@ -72,6 +75,7 @@ if (Astro.request.method === 'POST') {
         const tasks: Promise<unknown>[] = [
           logAction(user, 'report.status', String(reportId), detail, reportUrl),
           notifyWatchers(reportId, 'status_changed', detail, user.id),
+          updateForumStatus(updated, status, statusNote, user.username),
         ];
         if (cf) for (const t of tasks) cf.waitUntil(t);
         else await Promise.all(tasks);
@@ -161,6 +165,7 @@ const queue = await db().all(sql`
                 ['under_review', 'Review', 'btn-review'],
                 ['confirmed', 'Confirm', 'btn-confirm'],
                 ['in_progress', 'In Progress', 'btn-wip'],
+                ['already_available', 'Already Avail.', 'btn-avail'],
                 ['wont_fix', "Won't Fix", 'btn-dead'],
                 ['duplicate', 'Duplicate', 'btn-dup'],
               ] as const).map(([val, label, cls]) => (
@@ -293,6 +298,8 @@ const queue = await db().all(sql`
   .btn-confirm:hover { background: var(--live); color: #fff; }
   .btn-wip { background: var(--signal-fill); border-color: var(--signal); color: var(--signal-ink); }
   .btn-wip:hover { background: var(--signal); color: var(--on-signal); }
+  .btn-avail { background: rgba(168, 85, 247, 0.15); border-color: #a855f7; color: #c084fc; }
+  .btn-avail:hover { background: #a855f7; color: #fff; }
   .btn-dead { background: var(--dead-fill); border-color: var(--dead); color: var(--dead); }
   .btn-dead:hover { background: var(--dead); color: #fff; }
   .btn-dup { border-color: var(--border-strong); color: var(--text-secondary); }

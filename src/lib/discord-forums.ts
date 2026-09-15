@@ -55,7 +55,8 @@ export const SUGGESTION_STATUS_TAGS_DEF: DiscordTag[] = [
   { name: 'Under Review', moderated: true, emoji_name: '🔍' },
   { name: 'Planned', moderated: true, emoji_name: '💡' },
   { name: 'In Progress', moderated: true, emoji_name: '🟡' },
-  { name: 'Completed', moderated: true, emoji_name: '✅' },
+  { name: 'Done', moderated: true, emoji_name: '✅' },
+  { name: 'Already Available', moderated: true, emoji_name: '⚡' },
   { name: 'Declined', moderated: true, emoji_name: '❌' },
   { name: 'Duplicate', moderated: true, emoji_name: '🔄' },
 ];
@@ -139,7 +140,12 @@ export async function ensureForumTags(
   const tagMap = new Map<string, string>();
 
   for (const t of existingTags) {
-    if (t.id) tagMap.set(t.name.toLowerCase(), t.id);
+    if (t.id) {
+      const lower = t.name.toLowerCase();
+      tagMap.set(lower, t.id);
+      if (lower === 'completed') tagMap.set('done', t.id);
+      if (lower === 'done') tagMap.set('completed', t.id);
+    }
   }
 
   // Determine what tags should exist
@@ -157,7 +163,12 @@ export async function ensureForumTags(
   let changed = false;
 
   for (const desired of desiredTags) {
-    if (!tagMap.has(desired.name.toLowerCase())) {
+    const desiredLower = desired.name.toLowerCase();
+    const alreadyExists = tagMap.has(desiredLower) ||
+      (desiredLower === 'done' && tagMap.has('completed')) ||
+      (desiredLower === 'completed' && tagMap.has('done'));
+
+    if (!alreadyExists) {
       if (tagsToKeep.length < 20) {
         tagsToKeep.push(desired);
         changed = true;
@@ -179,7 +190,12 @@ export async function ensureForumTags(
       const updatedChannel = (await patchRes.json()) as DiscordChannel;
       tagMap.clear();
       for (const t of updatedChannel.available_tags || []) {
-        if (t.id) tagMap.set(t.name.toLowerCase(), t.id);
+        if (t.id) {
+          const lower = t.name.toLowerCase();
+          tagMap.set(lower, t.id);
+          if (lower === 'completed') tagMap.set('done', t.id);
+          if (lower === 'done') tagMap.set('completed', t.id);
+        }
       }
       console.log(`[ForumSync] Auto-created tags on forum ${channelId}`);
     } else {
@@ -206,7 +222,9 @@ export function statusToTagName(status: Status, kind: Report['kind'] = 'bug'): s
       case 'in_progress':
         return 'in progress';
       case 'fixed':
-        return 'completed';
+        return 'done';
+      case 'already_available':
+        return 'already available';
       case 'duplicate':
         return 'duplicate';
       case 'wont_fix':
@@ -223,6 +241,8 @@ export function statusToTagName(status: Status, kind: Report['kind'] = 'bug'): s
       return 'in progress';
     case 'fixed':
       return 'fixed';
+    case 'already_available':
+      return 'already available';
     case 'duplicate':
       return 'duplicate';
     case 'wont_fix':
@@ -230,6 +250,24 @@ export function statusToTagName(status: Status, kind: Report['kind'] = 'bug'): s
     default:
       return 'open';
   }
+}
+
+/**
+ * Normalizes any Discord tag name to our internal report Status.
+ * Handles both "Done" and "Completed", "Already Available", "Declined" / "Won't Fix", etc.
+ */
+export function mapTagNameToStatus(rawName: string): Status | null {
+  const name = rawName.toLowerCase().trim();
+  if (name === 'fixed' || name === 'completed' || name === 'done' || name === 'resolved') return 'fixed';
+  if (name === 'already available' || name === 'already-available' || name === 'already in app') return 'already_available';
+  if (name === 'in progress' || name === 'in-progress') return 'in_progress';
+  if (name === 'planned') return 'confirmed';
+  if (name === 'under review' || name === 'under-review') return 'under_review';
+  if (name === 'open') return 'open';
+  if (name === 'confirmed') return 'confirmed';
+  if (name === "won't fix" || name === 'wont fix' || name === 'declined') return 'wont_fix';
+  if (name === 'duplicate') return 'duplicate';
+  return null;
 }
 
 /**
@@ -660,33 +698,10 @@ export async function updateForumStatus(
     const newStatusTagId = tagsMap.get(newStatusTagName);
     if (newStatusTagId) nonStatusTags.push(newStatusTagId);
 
-    const isClosed = newStatus === 'fixed' || newStatus === 'wont_fix' || newStatus === 'duplicate';
+    const isClosed = newStatus === 'fixed' || newStatus === 'already_available' || newStatus === 'wont_fix' || newStatus === 'duplicate';
+    const displayStatus = statusLabel(newStatus, report.kind);
 
-    // Update thread tags (and optionally archive if closed)
-    await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bot ${botToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        applied_tags: nonStatusTags,
-        archived: isClosed ? true : false,
-      }),
-    });
-
-    const displayStatus = report.kind === 'suggestion'
-      ? newStatus === 'fixed'
-        ? 'Completed'
-        : newStatus === 'open' ? 'Open' : newStatus === 'under_review' ? 'Under Review'
-          : newStatus === 'confirmed'
-            ? 'Planned'
-            : newStatus === 'wont_fix'
-              ? 'Declined'
-              : statusLabel(newStatus)
-      : statusLabel(newStatus);
-
-    // Send status update message inside thread
+    // 1. Send status update message inside thread FIRST (before archiving, so Discord does not unarchive it!)
     const noteLine = statusNote ? `\n> ${statusNote}` : '';
     const byLine = actorName ? ` by **${actorName}**` : '';
     await fetch(`${DISCORD_API}/channels/${report.discordThreadId}/messages`, {
@@ -704,6 +719,26 @@ export async function updateForumStatus(
           },
         ],
       }),
+    });
+
+    // 2. Update thread tags and lock/archive if closed
+    const patchBody: Record<string, unknown> = {
+      applied_tags: nonStatusTags,
+    };
+    if (isClosed) {
+      patchBody.locked = true;
+      patchBody.archived = true;
+    } else {
+      patchBody.archived = false;
+    }
+
+    await fetch(`${DISCORD_API}/channels/${report.discordThreadId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bot ${botToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(patchBody),
     });
 
     return true;
@@ -1496,15 +1531,8 @@ export async function syncReportStatusFromDiscord(
     for (const tagId of appliedTags) {
       const name = idToName.get(tagId);
       if (!name) continue;
-
-      if (name === 'fixed' || name === 'completed') targetStatus = 'fixed';
-      else if (name === 'in progress') targetStatus = 'in_progress';
-      else if (name === 'planned') targetStatus = 'confirmed';
-      else if (name === 'under review') targetStatus = 'under_review';
-      else if (name === 'open') targetStatus = 'open';
-      else if (name === 'confirmed') targetStatus = 'confirmed';
-      else if (name === "won't fix" || name === 'declined') targetStatus = 'wont_fix';
-      else if (name === 'duplicate') targetStatus = 'duplicate';
+      const st = mapTagNameToStatus(name);
+      if (st) targetStatus = st;
     }
 
     if (targetStatus && targetStatus !== report.status) {

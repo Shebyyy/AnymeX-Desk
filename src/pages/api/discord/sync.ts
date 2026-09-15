@@ -7,7 +7,12 @@ import { readConfig } from '../../../lib/settings';
 import { notifyWatchers, sendDiscordDm, truncateQuote } from '../../../lib/notify';
 import { BLURPLE } from '../../../lib/webhook';
 import { logAction } from '../../../lib/staff';
-import { syncReportStatusFromDiscord } from '../../../lib/discord-forums';
+import {
+  syncReportStatusFromDiscord,
+  ensureForumTags,
+  getForumChannelId,
+  mapTagNameToStatus,
+} from '../../../lib/discord-forums';
 
 export const prerender = false;
 
@@ -283,26 +288,47 @@ export const POST: APIRoute = async (ctx) => {
     const isRecentSiteUpdate = report.updatedAt ? (now - Number(report.updatedAt) < 15) : false;
     let newStatus: Status | null = null;
 
-    // Fast-path: map tagNames sent directly by the bot, only if tags actually changed and not in site cooldown
+    // Resolve tags (handles both tag names and Discord snowflake IDs)
+    const rawTags = body.appliedTags || tagNames;
     const tagsChanged = (body as any).tagsChanged !== false;
-    if (tagsChanged && !isRecentSiteUpdate && Array.isArray(tagNames) && tagNames.length > 0) {
-      for (const rawName of tagNames) {
-        const name = String(rawName).toLowerCase().trim();
-        if (name === 'fixed' || name === 'completed' || name === 'resolved') newStatus = 'fixed';
-        else if (name === 'in progress' || name === 'in-progress') newStatus = 'in_progress';
-        else if (name === 'planned') newStatus = 'confirmed';
-        else if (name === 'under review' || name === 'under-review') newStatus = 'under_review';
-        else if (name === 'open') newStatus = 'open';
-        else if (name === 'confirmed') newStatus = 'confirmed';
-        else if (name === "won't fix" || name === 'wont fix' || name === 'declined') newStatus = 'wont_fix';
-        else if (name === 'duplicate') newStatus = 'duplicate';
+    if (tagsChanged && !isRecentSiteUpdate && Array.isArray(rawTags) && rawTags.length > 0) {
+      let resolvedNames: string[] = [];
+      const firstTag = String(rawTags[0]).trim();
+      const isSnowflake = /^\d{15,22}$/.test(firstTag);
+
+      if (isSnowflake && cfg.discord_bot_token) {
+        const channelId = getForumChannelId(report.kind, cfg);
+        if (channelId) {
+          try {
+            const tagsMap = await ensureForumTags(channelId, cfg.discord_bot_token, report.kind);
+            const idToName = new Map<string, string>();
+            for (const [name, id] of tagsMap.entries()) {
+              idToName.set(id, name);
+            }
+            for (const tagId of rawTags) {
+              const name = idToName.get(String(tagId));
+              if (name) resolvedNames.push(name);
+            }
+          } catch (err) {
+            console.warn('[Sync] Failed to resolve tag IDs:', err);
+          }
+        }
+      } else {
+        resolvedNames = rawTags.map((t) => String(t));
+      }
+
+      for (const rawName of resolvedNames) {
+        const st = mapTagNameToStatus(rawName);
+        if (st) newStatus = st;
       }
 
       if (newStatus && newStatus !== report.status) {
+        const isClosing = newStatus === 'fixed' || newStatus === 'already_available' || newStatus === 'wont_fix' || newStatus === 'duplicate';
         await d
           .update(reports)
           .set({
             status: newStatus,
+            locked: isClosing ? true : report.locked,
             statusChangedAt: sql`(unixepoch())`,
             updatedAt: sql`(unixepoch())`,
           })
@@ -314,13 +340,13 @@ export const POST: APIRoute = async (ctx) => {
     // Use Boolean(...) normalization so SQLite integer 1/0 equals JS true/false.
     // Also ignore if the report was just updated on the site within the last 15s.
     let lockChanged = false;
+    const isNowLocked = typeof body.locked === 'boolean' ? body.locked : (body.archived === true ? true : undefined);
     if (
-      typeof body.locked === 'boolean' &&
-      Boolean(body.locked) !== Boolean(report.locked) &&
+      typeof isNowLocked === 'boolean' &&
+      Boolean(isNowLocked) !== Boolean(report.locked) &&
       !isRecentSiteUpdate
     ) {
       lockChanged = true;
-      const isNowLocked = body.locked;
       await d
         .update(reports)
         .set({
@@ -350,10 +376,10 @@ export const POST: APIRoute = async (ctx) => {
       if (cf) cf.waitUntil(notifTask);
       else await notifTask;
 
-      return json({ ok: true, newStatus, locked: lockChanged ? body.locked : report.locked });
+      return json({ ok: true, newStatus, locked: lockChanged ? isNowLocked : report.locked });
     }
     if (lockChanged) {
-      return json({ ok: true, locked: body.locked });
+      return json({ ok: true, locked: isNowLocked });
     }
     return json({ ok: true, status: 'no_change' });
   }

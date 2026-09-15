@@ -366,6 +366,9 @@ export async function onScheduled(event: ScheduledEvent, cfEnv: Env): Promise<vo
         a.id < b.id ? -1 : 1,
       );
 
+      // Always sync status from Discord thread tags/lock even if there are no new messages
+      await syncReportStatusFromDiscord(report, cfg);
+
       if (msgs.length === 0) {
         // Update polled timestamp even if no new messages
         await db()

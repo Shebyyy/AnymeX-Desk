@@ -55,7 +55,8 @@ const SUGGESTION_STATUS_TAGS: DiscordTag[] = [
   { name: 'Under Review', moderated: false, emoji_name: '🔍' },
   { name: 'Planned', moderated: true, emoji_name: '💡' },
   { name: 'In Progress', moderated: true, emoji_name: '🟡' },
-  { name: 'Completed', moderated: true, emoji_name: '✅' },
+  { name: 'Done', moderated: true, emoji_name: '✅' },
+  { name: 'Already Available', moderated: true, emoji_name: '⚡' },
   { name: 'Declined', moderated: true, emoji_name: '❌' },
   { name: 'Duplicate', moderated: true, emoji_name: '🔄' },
 ];

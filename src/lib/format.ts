@@ -67,6 +67,7 @@ export function statusLabel(status: string, kind?: string): string {
     if (status === 'confirmed') return 'Planned';
     if (status === 'in_progress') return 'In Progress';
     if (status === 'fixed') return 'Done';
+    if (status === 'already_available') return 'Already Available';
     if (status === 'wont_fix') return 'Declined';
     if (status === 'duplicate') return 'Duplicate';
   }

@@ -154,12 +154,15 @@ function connect() {
         });
       }
 
-      // 4. Thread Status Changed (tags changed)
+      // 4. Thread Status Changed (tags changed, locked, or archived)
       if (t === 'THREAD_UPDATE') {
         await sendToSite({
           event: 'THREAD_UPDATE',
           threadId: d.id,
+          appliedTags: d.applied_tags,
           tagNames: d.applied_tags,
+          locked: d.thread_metadata?.locked,
+          archived: d.thread_metadata?.archived,
         });
       }
     }

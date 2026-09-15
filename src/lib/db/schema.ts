@@ -91,13 +91,14 @@ export const STATUSES = [
   'fixed',
   'wont_fix',
   'duplicate',
+  'already_available',
 ] as const;
 
 /** Statuses that still count as live demand — the dedupe window. */
 export const OPEN_STATUSES = ['open', 'under_review', 'confirmed', 'in_progress'] as const;
 
 /** Closed without a fix. */
-export const OTHER_STATUSES = ['wont_fix', 'duplicate'] as const;
+export const OTHER_STATUSES = ['wont_fix', 'duplicate', 'already_available'] as const;
 
 // ─── Staff tiers ────────────────────────────────────────────────────────────
 
@@ -146,6 +147,7 @@ export const STATUS_LABELS: Record<string, string> = {
   fixed: 'Fixed',
   wont_fix: "Won't Fix",
   duplicate: 'Duplicate',
+  already_available: 'Already Available',
 };
 
 export const KIND_LABELS: Record<string, string> = {

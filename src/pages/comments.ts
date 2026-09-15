@@ -15,6 +15,7 @@ import {
   editCommentInDiscord,
   deleteCommentFromDiscord,
 } from '../lib/discord-forums';
+import { prepareCommentBody } from '../lib/richtext';
 
 export const prerender = false;
 
@@ -383,6 +384,7 @@ export const POST: APIRoute = async (ctx) => {
   return json({
     id: comment.id,
     body: comment.body,
+    bodyHtml: comment.body ? prepareCommentBody(comment.body).html : '',
     userId: comment.userId,
     username: user.username,
     avatarUrl: avatarUrl(user),

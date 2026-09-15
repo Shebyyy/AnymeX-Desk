@@ -280,6 +280,7 @@
   .status[data-status='dead']        { color: var(--dead); }
   .status[data-status='wont_fix']    { color: var(--text-muted); }
   .status[data-status='duplicate']   { color: var(--text-muted); }
+  .status[data-status='already_available'] { color: #a855f7; }
 
   /* --- empty + loading -------------------------------------------------- */
   .empty {
