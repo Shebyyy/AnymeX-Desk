@@ -38,6 +38,7 @@ const primaryTabs = [
 ];
 
 const secondaryTabs = [
+  { href: '/support', label: 'Support Lounge', desc: 'Live chat & community discussion' },
   { href: '/roadmap', label: 'Roadmap', desc: 'Planned & upcoming features' },
   { href: '/changelog', label: 'Changelog', desc: 'Recent app releases & updates' },
   { href: '/stats', label: 'Stats', desc: 'Community activity & metrics' },
@@ -640,7 +641,7 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
   }
   .mobile-pills {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 4px;
     background: var(--surface-inset, rgba(0, 0, 0, 0.25));
     padding: 3px;

@@ -46,8 +46,10 @@ export async function subscribeToPush(): Promise<{ success: boolean; error?: str
 
     // 1. Fetch public VAPID key
     const res = await fetch('/api/push/vapid-key');
-    if (!res.ok) throw new Error('Failed to retrieve VAPID key');
-    const { publicKey } = await res.json();
+    if (!res.ok) throw new Error('Failed to retrieve VAPID key from server');
+    const data = await res.json();
+    const publicKey = data.publicKey || data.key;
+    if (!publicKey) throw new Error('VAPID public key not found');
 
     const applicationServerKey = urlBase64ToUint8Array(publicKey);
 
@@ -74,7 +76,7 @@ export async function subscribeToPush(): Promise<{ success: boolean; error?: str
     });
 
     if (!saveRes.ok) {
-      throw new Error('Failed to register subscription on server');
+      throw new Error('Failed to save push subscription on server');
     }
 
     return { success: true };

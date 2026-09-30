@@ -2,7 +2,7 @@
 import { db } from '../../../lib/db/client';
 import { chatMessages, chatChannels, users, reports } from '../../../lib/db/schema';
 import { currentUser } from '../../../lib/auth';
-import { levelOf, atLeast } from '../../../lib/staff';
+import { levelOf, atLeast, isOwner } from '../../../lib/staff';
 import { sendPushToUser } from '../../../lib/webpush';
 import { inIds } from '../../../lib/db/sql';
 import { eq, desc, and, lt } from 'drizzle-orm';
@@ -58,7 +58,8 @@ export const GET: APIRoute = async (ctx) => {
         updatedAt: chatMessages.updatedAt,
         authorName: users.username,
         authorAvatar: users.avatarHash,
-        authorRole: users.role,
+        discordLevel: users.discordLevel,
+        manualLevel: users.manualLevel,
       })
       .from(chatMessages)
       .innerJoin(users, eq(users.discordId, chatMessages.userId))
@@ -132,8 +133,23 @@ export const GET: APIRoute = async (ctx) => {
         } catch {}
       }
 
+      const role = isOwner(m.userId)
+        ? 'owner'
+        : m.manualLevel || m.discordLevel || 'member';
+
       return {
-        ...m,
+        id: m.id,
+        channelId: m.channelId,
+        userId: m.userId,
+        body: m.body,
+        replyToId: m.replyToId,
+        attachmentCount: m.attachmentCount,
+        isPinned: m.isPinned,
+        createdAt: m.createdAt,
+        updatedAt: m.updatedAt,
+        authorName: m.authorName,
+        authorAvatar: m.authorAvatar,
+        authorRole: role,
         replyTo: m.replyToId ? replyMap.get(m.replyToId) || null : null,
         taggedReports,
       };
@@ -143,9 +159,9 @@ export const GET: APIRoute = async (ctx) => {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
-  } catch (err) {
-    console.error('[chat:messages:get] Error fetching chat messages:', err);
-    return new Response(JSON.stringify({ ok: false, error: 'Internal Server Error' }), {
+  } catch (err: any) {
+    console.error('[chat:messages:get] Error fetching chat messages:', err?.message || err);
+    return new Response(JSON.stringify({ ok: false, error: err?.message || 'Internal Server Error' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -273,9 +289,9 @@ export const POST: APIRoute = async (ctx) => {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
-  } catch (err) {
-    console.error('[chat:messages:post] Error creating chat message:', err);
-    return new Response(JSON.stringify({ ok: false, error: 'Internal Server Error' }), {
+  } catch (err: any) {
+    console.error('[chat:messages:post] Error creating chat message:', err?.message || err);
+    return new Response(JSON.stringify({ ok: false, error: err?.message || 'Internal Server Error' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

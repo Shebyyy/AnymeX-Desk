@@ -60,6 +60,7 @@
   let pushSupported = $state<boolean>(false);
   let messagesEndRef = $state<HTMLDivElement | null>(null);
   let highlightedMessageId = $state<number | null>(null);
+  let mobileSidebarOpen = $state<boolean>(false);
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -197,6 +198,7 @@
 
   function selectChannel(id: string) {
     activeChannelId = id;
+    mobileSidebarOpen = false;
     isLoading = true;
     messages = [];
     replyingTo = null;
@@ -217,10 +219,32 @@
 </script>
 
 <div class="chat-wrapper">
+  <!-- Mobile Backdrop -->
+  {#if mobileSidebarOpen}
+    <div
+      class="mobile-backdrop"
+      onclick={() => (mobileSidebarOpen = false)}
+      role="button"
+      tabindex="0"
+      onkeydown={(e) => e.key === 'Escape' && (mobileSidebarOpen = false)}
+      aria-label="Close sidebar"
+    ></div>
+  {/if}
+
   <!-- Sidebar Channels -->
-  <aside class="chat-sidebar">
+  <aside class="chat-sidebar" class:mobile-open={mobileSidebarOpen}>
     <div class="sidebar-header">
-      <span class="hub-title">AnymeX Lounge</span>
+      <div class="sidebar-title-row">
+        <span class="hub-title">AnymeX Lounge</span>
+        <button
+          type="button"
+          class="mobile-close-sidebar-btn"
+          onclick={() => (mobileSidebarOpen = false)}
+          aria-label="Close channels"
+        >
+          ✕
+        </button>
+      </div>
       <span class="hub-tag">Support & Chat</span>
     </div>
 
@@ -254,7 +278,7 @@
           class:active={pushActive}
           onclick={togglePush}
         >
-          {pushActive ? '🔔 Push On' : '🔕 Enable Push'}
+          {pushActive ? '🔔 Push Active' : '🔕 Enable Push'}
         </button>
       </div>
     {/if}
@@ -264,13 +288,36 @@
   <main class="chat-main">
     <header class="chat-header">
       <div class="header-left">
-        <span class="header-hash">#</span>
-        <h2 class="header-name">{channels.find((c) => c.id === activeChannelId)?.name || activeChannelId}</h2>
+        <!-- Mobile Channels Hamburger Button -->
+        <button
+          type="button"
+          class="mobile-channels-toggle-btn"
+          onclick={() => (mobileSidebarOpen = !mobileSidebarOpen)}
+          aria-label="Open channels"
+        >
+          <span class="btn-bars">☰</span>
+          <span class="btn-chan-name">#{channels.find((c) => c.id === activeChannelId)?.name || 'channels'}</span>
+        </button>
+
+        <span class="header-hash desktop-only">#</span>
+        <h2 class="header-name desktop-only">{channels.find((c) => c.id === activeChannelId)?.name || activeChannelId}</h2>
         {#if channels.find((c) => c.id === activeChannelId)?.description}
-          <span class="header-desc">{channels.find((c) => c.id === activeChannelId)?.description}</span>
+          <span class="header-desc desktop-only">{channels.find((c) => c.id === activeChannelId)?.description}</span>
         {/if}
       </div>
+
       <div class="header-right">
+        {#if pushSupported}
+          <button
+            type="button"
+            class="header-push-icon-btn mobile-only"
+            class:active={pushActive}
+            onclick={togglePush}
+            title={pushActive ? 'Push Notifications Enabled' : 'Enable Push Notifications'}
+          >
+            {pushActive ? '🔔' : '🔕'}
+          </button>
+        {/if}
         <span class="live-dot" title="Live sync active"></span>
         <span class="live-label">LIVE</span>
       </div>
@@ -283,7 +330,7 @@
       {:else if messages.length === 0}
         <div class="chat-empty">
           <p class="empty-title">Welcome to #{channels.find((c) => c.id === activeChannelId)?.name}!</p>
-          <p class="empty-sub">This is the start of this channel. Be the first to start the conversation!</p>
+          <p class="empty-sub">This is the start of this channel. Say hi or ask a question!</p>
         </div>
       {:else}
         {#each messages as msg (msg.id)}
@@ -384,7 +431,7 @@
           <div class="reply-bar-left">
             <span class="reply-icon">↩</span>
             <span>Replying to <strong>@{replyingTo.authorName}</strong>:</span>
-            <span class="reply-preview-snip">"{replyingTo.body.slice(0, 60)}{replyingTo.body.length > 60 ? '...' : ''}"</span>
+            <span class="reply-preview-snip">"{replyingTo.body.slice(0, 50)}{replyingTo.body.length > 50 ? '...' : ''}"</span>
           </div>
           <button type="button" class="cancel-reply-btn" onclick={() => (replyingTo = null)}>✕</button>
         </div>
@@ -395,7 +442,7 @@
           <textarea
             id="chat-composer-input"
             class="composer-textarea"
-            placeholder="Message #{channels.find((c) => c.id === activeChannelId)?.name || 'channel'}... (use @user or #reportId)"
+            placeholder="Message #{channels.find((c) => c.id === activeChannelId)?.name || 'channel'}..."
             bind:value={inputText}
             onkeydown={handleKeydown}
             rows="1"
@@ -427,6 +474,7 @@
     border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
     border-radius: 12px;
     overflow: hidden;
+    position: relative;
   }
 
   /* Sidebar */
@@ -438,11 +486,28 @@
     flex-direction: column;
     padding: 1rem;
     gap: 1rem;
+    z-index: 20;
+    transition: transform 0.25s ease;
   }
 
   .sidebar-header {
     display: flex;
     flex-direction: column;
+  }
+
+  .sidebar-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .mobile-close-sidebar-btn {
+    display: none;
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 1.1rem;
+    cursor: pointer;
   }
 
   .hub-title {
@@ -532,7 +597,7 @@
     color: #fff;
     border: none;
     border-radius: 6px;
-    padding: 0.4rem;
+    padding: 0.45rem;
     font-size: 0.8rem;
     font-weight: 600;
     cursor: pointer;
@@ -551,6 +616,7 @@
     flex-direction: column;
     background: var(--surface-1, #13141c);
     position: relative;
+    min-width: 0;
   }
 
   .chat-header {
@@ -559,13 +625,28 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 1.25rem;
+    padding: 0 1rem;
   }
 
   .header-left {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    min-width: 0;
+  }
+
+  .mobile-channels-toggle-btn {
+    display: none;
+    align-items: center;
+    gap: 0.4rem;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    padding: 0.35rem 0.65rem;
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .header-hash {
@@ -586,12 +667,29 @@
     margin-left: 0.5rem;
     padding-left: 0.75rem;
     border-left: 1px solid rgba(255, 255, 255, 0.1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .header-right {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.5rem;
+  }
+
+  .header-push-icon-btn {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .header-push-icon-btn.active {
+    background: rgba(16, 185, 129, 0.2);
+    border-color: #10b981;
   }
 
   .live-dot {
@@ -612,7 +710,7 @@
   .messages-container {
     flex: 1;
     overflow-y: auto;
-    padding: 1rem;
+    padding: 0.75rem;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -622,10 +720,11 @@
     margin: auto;
     text-align: center;
     color: #94a3b8;
+    padding: 1rem;
   }
 
   .empty-title {
-    font-size: 1.2rem;
+    font-size: 1.15rem;
     font-weight: 700;
     color: #fff;
     margin-bottom: 0.25rem;
@@ -638,7 +737,7 @@
   /* Row */
   .chat-message-row {
     position: relative;
-    padding: 0.4rem 0.6rem;
+    padding: 0.4rem 0.5rem;
     border-radius: 8px;
     transition: background 0.1s ease;
   }
@@ -657,9 +756,9 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    margin-left: 32px;
+    margin-left: 28px;
     margin-bottom: 3px;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     color: #94a3b8;
     cursor: pointer;
   }
@@ -670,17 +769,17 @@
   }
 
   .reply-spine-curve {
-    width: 20px;
-    height: 10px;
+    width: 18px;
+    height: 9px;
     border-left: 2px solid #4b5563;
     border-top: 2px solid #4b5563;
-    border-top-left-radius: 6px;
+    border-top-left-radius: 5px;
     margin-right: 2px;
   }
 
   .reply-avatar {
-    width: 16px;
-    height: 16px;
+    width: 15px;
+    height: 15px;
     border-radius: 50%;
   }
 
@@ -694,17 +793,17 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 320px;
+    max-width: 240px;
   }
 
   .message-content-wrapper {
     display: flex;
-    gap: 0.85rem;
+    gap: 0.75rem;
   }
 
   .msg-avatar {
-    width: 38px;
-    height: 38px;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
     flex-shrink: 0;
   }
@@ -717,15 +816,15 @@
   .msg-header {
     display: flex;
     align-items: baseline;
-    gap: 0.5rem;
-    margin-bottom: 0.2rem;
+    gap: 0.4rem;
+    margin-bottom: 0.15rem;
   }
 
   .author-name {
     font-weight: 600;
     color: #fff;
     cursor: pointer;
-    font-size: 0.95rem;
+    font-size: 0.92rem;
   }
 
   .author-name:hover {
@@ -733,7 +832,7 @@
   }
 
   .author-badge {
-    font-size: 0.65rem;
+    font-size: 0.62rem;
     padding: 1px 5px;
     background: #5865f2;
     color: #fff;
@@ -742,23 +841,23 @@
   }
 
   .msg-time {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     color: #64748b;
   }
 
   .msg-text {
     color: #e2e8f0;
-    font-size: 0.92rem;
-    line-height: 1.45;
+    font-size: 0.9rem;
+    line-height: 1.4;
     word-break: break-word;
   }
 
   /* Tagged Reports Grid */
   .report-embeds-grid {
-    margin-top: 0.5rem;
+    margin-top: 0.4rem;
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
+    flex-direction: column;
+    gap: 0.4rem;
   }
 
   .report-card-embed {
@@ -766,24 +865,23 @@
     border: 1px solid rgba(88, 101, 242, 0.3);
     border-left: 3px solid #5865f2;
     border-radius: 6px;
-    padding: 0.5rem 0.75rem;
+    padding: 0.45rem 0.65rem;
     text-decoration: none;
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    max-width: 380px;
+    gap: 0.2rem;
+    max-width: 100%;
     transition: transform 0.15s, border-color 0.15s;
   }
 
   .report-card-embed:hover {
-    transform: translateY(-1px);
     border-color: #5865f2;
   }
 
   .report-embed-top {
     display: flex;
     gap: 0.4rem;
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     align-items: center;
   }
 
@@ -795,7 +893,7 @@
 
   .report-status-tag {
     background: rgba(255, 255, 255, 0.1);
-    padding: 1px 6px;
+    padding: 1px 5px;
     border-radius: 4px;
     color: #cbd5e1;
     font-weight: 600;
@@ -808,7 +906,7 @@
   }
 
   .report-embed-title {
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     font-weight: 600;
     color: #fff;
   }
@@ -817,8 +915,8 @@
   .msg-actions {
     display: none;
     position: absolute;
-    right: 1rem;
-    top: -12px;
+    right: 0.5rem;
+    top: -10px;
     background: var(--surface-2, #181a24);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 6px;
@@ -834,8 +932,8 @@
     background: transparent;
     border: none;
     color: #94a3b8;
-    padding: 0.3rem 0.6rem;
-    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.72rem;
     font-weight: 600;
     cursor: pointer;
   }
@@ -847,35 +945,36 @@
 
   /* Composer Box */
   .chat-composer-box {
-    padding: 0.75rem 1.25rem 1rem;
+    padding: 0.65rem 0.85rem;
     background: var(--surface-2, #181a24);
     border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.35rem;
   }
 
   .active-reply-bar {
     background: rgba(88, 101, 242, 0.15);
     border-left: 3px solid #5865f2;
-    padding: 0.4rem 0.6rem;
+    padding: 0.35rem 0.5rem;
     border-radius: 4px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     color: #cbd5e1;
   }
 
   .reply-bar-left {
     display: flex;
-    gap: 0.4rem;
+    gap: 0.35rem;
     align-items: center;
+    overflow: hidden;
   }
 
   .reply-preview-snip {
     color: #94a3b8;
-    max-width: 320px;
+    max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -887,11 +986,12 @@
     color: #94a3b8;
     cursor: pointer;
     font-weight: 700;
+    padding: 0 4px;
   }
 
   .composer-input-row {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.4rem;
     align-items: flex-end;
   }
 
@@ -900,13 +1000,14 @@
     background: rgba(0, 0, 0, 0.25);
     border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
     border-radius: 8px;
-    padding: 0.65rem 0.9rem;
+    padding: 0.55rem 0.75rem;
     color: #fff;
-    font-size: 0.92rem;
+    font-size: 0.9rem;
     font-family: inherit;
     resize: none;
     outline: none;
     transition: border-color 0.15s;
+    min-height: 38px;
   }
 
   .composer-textarea:focus {
@@ -918,10 +1019,12 @@
     color: #fff;
     border: none;
     border-radius: 8px;
-    padding: 0.65rem 1.25rem;
+    padding: 0.55rem 1rem;
     font-weight: 600;
+    font-size: 0.85rem;
     cursor: pointer;
     transition: background 0.15s;
+    height: 38px;
   }
 
   .send-btn:hover:not(:disabled) {
@@ -934,9 +1037,9 @@
   }
 
   .composer-login-prompt {
-    padding: 0.75rem;
+    padding: 0.5rem;
     text-align: center;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     color: #94a3b8;
   }
 
@@ -944,5 +1047,70 @@
     color: #5865f2;
     font-weight: 600;
     text-decoration: underline;
+  }
+
+  .desktop-only {
+    display: inline-flex;
+  }
+
+  .mobile-only {
+    display: none;
+  }
+
+  /* Responsive Breakpoint for Mobile Screens (< 768px) */
+  @media (max-width: 768px) {
+    .chat-wrapper {
+      height: calc(100vh - 100px);
+      min-height: 440px;
+      border-radius: 0;
+      border-left: none;
+      border-right: none;
+    }
+
+    .desktop-only {
+      display: none !important;
+    }
+
+    .mobile-only {
+      display: inline-flex !important;
+    }
+
+    .mobile-channels-toggle-btn {
+      display: inline-flex;
+    }
+
+    .mobile-close-sidebar-btn {
+      display: inline-block;
+    }
+
+    .chat-sidebar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 260px;
+      transform: translateX(-100%);
+      box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+    }
+
+    .chat-sidebar.mobile-open {
+      transform: translateX(0);
+    }
+
+    .mobile-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(2px);
+      z-index: 15;
+    }
+
+    .chat-message-row:hover .msg-actions,
+    .chat-message-row .msg-actions {
+      display: flex;
+      top: auto;
+      bottom: -6px;
+      right: 0.5rem;
+    }
   }
 </style>
