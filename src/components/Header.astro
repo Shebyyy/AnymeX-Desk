@@ -115,6 +115,19 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
 
     <!-- Action Controls -->
     <div class="header-actions">
+      <!-- Visible Outside Header Support Link for Mobile/Small Screens (Never hidden under 3-line menu) -->
+      <a
+        href="/support"
+        class:list={['header-support-btn', { active: path.startsWith('/support') }]}
+        aria-label="Support & Community Lounge"
+        title="Support Lounge"
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span class="support-label">Support</span>
+      </a>
+
       <!-- Mobile Search Icon Trigger -->
       <a href="/search" class="btn btn-ghost btn-icon mobile-search-btn" aria-label="Search" title="Search">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
@@ -239,7 +252,9 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
   </div>
 
   <!-- Mobile Board Switcher (Row 2 on small screens, shown when navigating sub-pages) -->
-  {path !== '/' && (
+  {
+  // Mobile pills always visible on small screens for instant board/support switching
+  true && (
     <div class="mobile-subnav">
       <div class="shell mobile-subnav-inner">
         <div class="mobile-pills">
@@ -567,6 +582,38 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     height: 6px;
     border-radius: 50%;
     background: var(--border-strong, #666);
+  }
+
+  /* Visible Support Header Pill (Mobile) */
+  .header-support-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    font-size: var(--text-xs, 12px);
+    font-weight: 600;
+    color: var(--text-secondary, #b5b7ba);
+    background: var(--surface-raised, rgba(255, 255, 255, 0.06));
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+    border-radius: var(--radius-full, 9999px);
+    text-decoration: none;
+    transition: all 0.15s ease;
+  }
+  .header-support-btn:hover {
+    color: #fff;
+    background: var(--surface-hover, rgba(255, 255, 255, 0.12));
+    border-color: rgba(255, 255, 255, 0.22);
+  }
+  .header-support-btn.active {
+    color: #fff;
+    background: #5865F2;
+    border-color: #5865F2;
+    box-shadow: 0 0 14px rgba(88, 101, 242, 0.4);
+  }
+  @media (min-width: 820px) {
+    .header-support-btn {
+      display: none;
+    }
   }
 
   /* Mobile Menu Dropdown (Floating Card) */

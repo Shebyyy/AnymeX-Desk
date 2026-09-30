@@ -4,7 +4,7 @@ import { db } from '../../../lib/db/client';
 import { chatMessages, chatChannels, users, reports, chatMessageReactions } from '../../../lib/db/schema';
 import { currentUser } from '../../../lib/auth';
 import { levelOf, atLeast, isOwner } from '../../../lib/staff';
-import { sendPushToUser } from '../../../lib/webpush';
+import { sendPushToUser, sendPushToAll, sendPushToStaff } from '../../../lib/webpush';
 import { inIds } from '../../../lib/db/sql';
 import { eq, desc, and, lt, sql } from 'drizzle-orm';
 
@@ -333,11 +333,52 @@ export const POST: APIRoute = async (ctx) => {
     const mentionMatches = Array.from(trimmedBody.matchAll(/@([a-zA-Z0-9_.-]+)/g));
     if (mentionMatches.length > 0) {
       const mentionedNames = Array.from(new Set(mentionMatches.map((m) => m[1].toLowerCase())));
-      for (const name of mentionedNames) {
+
+      const hasEveryone = mentionedNames.includes('everyone') || mentionedNames.includes('here');
+      const hasStaff = mentionedNames.includes('staff');
+      const hasAdmin = mentionedNames.includes('admin');
+      const hasMod = mentionedNames.includes('mod');
+
+      if (hasEveryone) {
+        const task = sendPushToAll(
+          {
+            title: `#${channel.name}: ${user.username} mentioned @everyone`,
+            body: trimmedBody.slice(0, 120),
+            url: `/support?channel=${channelId}`,
+            tag: `mention-everyone-${inserted.id}`,
+          },
+          user.id,
+          runtimeEnv,
+        );
+        if (cf?.waitUntil) cf.waitUntil(task);
+        else task.catch(() => {});
+      }
+
+      if (hasStaff || hasAdmin || hasMod) {
+        const roleLabel = hasAdmin ? '@admin' : hasMod ? '@mod' : '@staff';
+        const task = sendPushToStaff(
+          {
+            title: `#${channel.name}: ${user.username} mentioned ${roleLabel}`,
+            body: trimmedBody.slice(0, 120),
+            url: `/support?channel=${channelId}`,
+            tag: `mention-role-${inserted.id}`,
+          },
+          user.id,
+          runtimeEnv,
+        );
+        if (cf?.waitUntil) cf.waitUntil(task);
+        else task.catch(() => {});
+      }
+
+      // Filter out role and broadcast keywords for direct user mentions
+      const specialKeywords = new Set(['everyone', 'here', 'staff', 'admin', 'mod']);
+      const directUsers = mentionedNames.filter((n) => !specialKeywords.has(n));
+
+      for (const name of directUsers) {
         const [targetUser] = await db()
           .select({ discordId: users.discordId })
           .from(users)
-          .where(eq(users.username, name))
+          .where(sql`lower(${users.username}) = lower(${name})`)
           .limit(1);
 
         if (targetUser && targetUser.discordId !== user.id) {

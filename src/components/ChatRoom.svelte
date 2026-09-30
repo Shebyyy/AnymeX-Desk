@@ -61,7 +61,9 @@
   interface MentionUser {
     id: string;
     username: string;
-    avatarUrl: string;
+    avatarUrl?: string;
+    role?: string;
+    subtitle?: string;
   }
 
   interface ProfileData {
@@ -190,9 +192,8 @@
   let modDuration = $state<string>('1h');
   let isExecutingMod = $state<boolean>(false);
 
-  async function openUserProfile(userId: string) {
+  async function openUserProfile(target: string | { id?: string; username?: string }) {
     closeContextMenu();
-    profileTargetUserId = userId;
     profileModalOpen = true;
     isLoadingProfile = true;
     profileData = null;
@@ -200,11 +201,28 @@
     modActionType = null;
     modReason = '';
 
+    let url = '';
+    if (typeof target === 'string') {
+      profileTargetUserId = target;
+      url = `/api/chat/user-profile?id=${encodeURIComponent(target)}`;
+    } else if (target && typeof target === 'object') {
+      if (target.id) {
+        profileTargetUserId = target.id;
+        url = `/api/chat/user-profile?id=${encodeURIComponent(target.id)}`;
+      } else if (target.username) {
+        profileTargetUserId = null;
+        url = `/api/chat/user-profile?username=${encodeURIComponent(target.username)}`;
+      }
+    }
+
+    if (!url) return;
+
     try {
-      const res = await fetch(`/api/chat/user-profile?id=${encodeURIComponent(userId)}`);
+      const res = await fetch(url);
       const data = await res.json();
       if (data.ok && data.user) {
         profileData = data.user;
+        profileTargetUserId = data.user.id;
         profileModLogs = data.logs || [];
       } else {
         showToast(data.error || 'Failed to load user profile', 'error');
@@ -929,19 +947,23 @@
 }} />
 
 <div class="chat-wrapper">
-  <!-- Mobile Header Drawer Toggle -->
+  <!-- Mobile Header Bar: Visible outside channel pills (never hidden under 3 lines) -->
   <div class="chat-mobile-bar">
-    <button
-      class="mobile-toggle-btn"
-      onclick={() => (mobileSidebarOpen = !mobileSidebarOpen)}
-      aria-label="Toggle Channels"
-    >
-      <svg class="ui-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-      </svg>
-      <span class="curr-channel-name">#{channels.find((c) => c.id === activeChannelId)?.name || 'channels'}</span>
-      <span class="arrow">{mobileSidebarOpen ? '▲' : '▼'}</span>
-    </button>
+    <div class="mobile-channels-strip">
+      {#each channels as ch (ch.id)}
+        <button
+          type="button"
+          class="mobile-channel-pill"
+          class:active={ch.id === activeChannelId}
+          onclick={() => selectChannel(ch.id)}
+        >
+          <span class="hash">#</span>{ch.name}
+          {#if unreadCounts[ch.id]}
+            <span class="unread-dot"></span>
+          {/if}
+        </button>
+      {/each}
+    </div>
     <div class="chat-mobile-actions">
       {#if pushSupported}
         <button
@@ -1122,7 +1144,7 @@
                   <!-- Header: Author Name, Role, Timestamp -->
                   <div class="message-meta">
                     <button
-                      class="author-name-btn"
+                      class="author-name-btn role-{msg.authorRole || 'member'}"
                       onclick={() => openUserProfile(msg.userId)}
                       title="View @{msg.authorName}'s Profile"
                     >
@@ -1141,12 +1163,33 @@
                   <div class="message-text">
                     {#each msg.body.split(/(@[a-zA-Z0-9_.-]+|#\d+)/g) as part}
                       {#if part.startsWith('@')}
-                        <span
-                          class="mention-chip"
-                          class:mention-me={currentUser && part.toLowerCase() === `@${currentUser.username.toLowerCase()}`}
-                        >
-                          {part}
-                        </span>
+                        {@const cleanMention = part.slice(1).toLowerCase()}
+                        {#if cleanMention === 'everyone' || cleanMention === 'here'}
+                          <span class="mention-chip mention-broadcast" title="Broadcast notification to everyone in this channel">
+                            <svg class="chip-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                            </svg>
+                            {part}
+                          </span>
+                        {:else if cleanMention === 'staff' || cleanMention === 'admin' || cleanMention === 'mod'}
+                          <span class="mention-chip mention-role-chip role-{cleanMention}" title="Role notification for {cleanMention}">
+                            <svg class="chip-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                            </svg>
+                            {part}
+                          </span>
+                        {:else}
+                          <button
+                            type="button"
+                            class="mention-chip mention-user-chip"
+                            class:mention-me={currentUser && cleanMention === currentUser.username.toLowerCase()}
+                            onclick={() => openUserProfile({ username: part.slice(1) })}
+                            title="Click to view @{part.slice(1)}'s profile"
+                          >
+                            {part}
+                          </button>
+                        {/if}
                       {:else if part.startsWith('#') && /#\d+$/.test(part)}
                         <a href="/report/{part.slice(1)}" class="report-link-chip" target="_blank">
                           {part}
@@ -1275,8 +1318,36 @@
                   class:selected={idx === selectedUserIndex}
                   onclick={() => selectUser(u)}
                 >
-                  <img src={u.avatarUrl} alt={u.username} class="user-avatar-mini" />
-                  <span class="user-suggestion-name">@{u.username}</span>
+                  {#if u.role === 'everyone' || u.role === 'here'}
+                    <div class="mention-avatar-icon role-everyone">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                      </svg>
+                    </div>
+                    <div class="user-suggestion-info">
+                      <div class="user-suggestion-name role-everyone">@{u.username}</div>
+                      <div class="user-suggestion-desc">{u.subtitle || 'Notify channel members'}</div>
+                    </div>
+                  {:else if u.role === 'staff' || u.role === 'admin' || u.role === 'mod'}
+                    <div class="mention-avatar-icon role-{u.role}">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                      </svg>
+                    </div>
+                    <div class="user-suggestion-info">
+                      <div class="user-suggestion-name role-{u.role}">@{u.username}</div>
+                      <div class="user-suggestion-desc">{u.subtitle || `Notify ${u.role}`}</div>
+                    </div>
+                  {:else}
+                    <img src={u.avatarUrl || '/favicon.gif'} alt={u.username} class="user-avatar-mini" />
+                    <div class="user-suggestion-info">
+                      <div class="user-suggestion-name role-{u.role || 'member'}">@{u.username}</div>
+                      {#if u.role && u.role !== 'member'}
+                        <span class="role-tag role-{u.role}">{u.role}</span>
+                      {/if}
+                    </div>
+                  {/if}
                 </div>
               {/each}
             </div>
@@ -3576,4 +3647,203 @@
       display: none;
     }
   }
+
+  /* ========================================================================= */
+  /* DISCORD ROLE & NAME COLOR SYSTEM                                           */
+  /* ========================================================================= */
+  .role-owner,
+  .author-name-btn.role-owner,
+  .user-suggestion-name.role-owner,
+  .profile-username.role-owner {
+    color: #facc15 !important; /* Gold */
+    font-weight: 700;
+  }
+  .role-admin,
+  .author-name-btn.role-admin,
+  .user-suggestion-name.role-admin,
+  .profile-username.role-admin {
+    color: #f87171 !important; /* Red */
+    font-weight: 700;
+  }
+  .role-mod,
+  .author-name-btn.role-mod,
+  .user-suggestion-name.role-mod,
+  .profile-username.role-mod {
+    color: #60a5fa !important; /* Blue */
+    font-weight: 700;
+  }
+  .role-staff,
+  .user-suggestion-name.role-staff {
+    color: #c084fc !important; /* Purple */
+    font-weight: 700;
+  }
+  .role-everyone,
+  .user-suggestion-name.role-everyone {
+    color: #fde047 !important; /* Yellow Alert */
+    font-weight: 700;
+  }
+  .role-member,
+  .author-name-btn.role-member,
+  .user-suggestion-name.role-member,
+  .profile-username.role-member {
+    color: #f4f4f5 !important; /* Discord White */
+    font-weight: 600;
+  }
+
+  /* Mention Chips */
+  .mention-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 13.5px;
+    font-weight: 600;
+    text-decoration: none;
+    line-height: 1.35;
+    vertical-align: baseline;
+    transition: background 0.15s ease, filter 0.15s ease;
+  }
+  .mention-chip .chip-icon {
+    flex-shrink: 0;
+  }
+
+  /* User Mention: Clickable button opening user profile */
+  .mention-user-chip {
+    background: rgba(88, 101, 242, 0.2);
+    color: #c9cdfb;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .mention-user-chip:hover {
+    background: rgba(88, 101, 242, 0.35);
+    color: #ffffff;
+    text-decoration: underline;
+  }
+  .mention-user-chip.mention-me {
+    background: rgba(245, 158, 11, 0.25);
+    color: #fde68a;
+  }
+
+  /* Broadcast Mention: @everyone / @here */
+  .mention-broadcast {
+    background: rgba(234, 179, 8, 0.2);
+    color: #fef08a;
+    border: 1px solid rgba(234, 179, 8, 0.35);
+    font-weight: 700;
+  }
+
+  /* Role Mentions: @staff, @admin, @mod */
+  .mention-role-chip.role-staff {
+    background: rgba(192, 132, 252, 0.2);
+    color: #e9d5ff;
+    border: 1px solid rgba(192, 132, 252, 0.35);
+  }
+  .mention-role-chip.role-admin {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+  }
+  .mention-role-chip.role-mod {
+    background: rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+  }
+
+  /* Autocomplete Popover Items */
+  .mention-avatar-icon {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .mention-avatar-icon.role-everyone {
+    background: rgba(234, 179, 8, 0.2);
+    color: #facc15;
+    border: 1px solid rgba(234, 179, 8, 0.4);
+  }
+  .mention-avatar-icon.role-staff {
+    background: rgba(192, 132, 252, 0.2);
+    color: #c084fc;
+    border: 1px solid rgba(192, 132, 252, 0.4);
+  }
+  .mention-avatar-icon.role-admin {
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+  }
+  .mention-avatar-icon.role-mod {
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+  }
+
+  .user-suggestion-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+  .user-suggestion-desc {
+    font-size: 11px;
+    color: var(--text-tertiary, #888);
+  }
+
+  /* Mobile Channels Horizontal Strip (Never under 3-line menu) */
+  .mobile-channels-strip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    flex: 1;
+    padding-inline-end: 8px;
+  }
+  .mobile-channels-strip::-webkit-scrollbar {
+    display: none;
+  }
+  .mobile-channel-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: var(--radius-full, 9999px);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary, #aaa);
+    background: var(--surface-raised, rgba(255, 255, 255, 0.05));
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+  }
+  .mobile-channel-pill .hash {
+    color: var(--text-tertiary, #666);
+    font-weight: 700;
+  }
+  .mobile-channel-pill:hover {
+    color: var(--text-primary, #fff);
+    background: var(--surface-hover, rgba(255, 255, 255, 0.1));
+  }
+  .mobile-channel-pill.active {
+    color: #fff;
+    background: var(--surface-active, rgba(88, 101, 242, 0.35));
+    border-color: #5865F2;
+    box-shadow: 0 0 10px rgba(88, 101, 242, 0.25);
+  }
+  .mobile-channel-pill.active .hash {
+    color: #c9cdfb;
+  }
+  .mobile-channel-pill .unread-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--signal, #f59e0b);
+  }
+
 </style>

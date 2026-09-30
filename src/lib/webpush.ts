@@ -1,6 +1,6 @@
 ﻿import crypto from 'crypto';
 import { db } from './db/client';
-import { pushSubscriptions } from './db/schema';
+import { pushSubscriptions, users } from './db/schema';
 import { eq, sql } from 'drizzle-orm';
 
 export interface PushPayload {
@@ -286,5 +286,64 @@ export async function sendPushToReportWatchers(
     }
   } catch (err) {
     console.error('Failed sendPushToReportWatchers', err);
+  }
+}
+
+
+/**
+ * Broadcast push notification to ALL subscribers (e.g. for @everyone / @here)
+ */
+export async function sendPushToAll(
+  payload: PushPayload,
+  skipUserId?: string | null,
+  env?: { VAPID_PUBLIC_KEY?: string; VAPID_PRIVATE_KEY?: string; VAPID_SUBJECT?: string },
+): Promise<void> {
+  try {
+    const skip = skipUserId ?? '\0';
+    const subs = await db()
+      .select()
+      .from(pushSubscriptions)
+      .where(sql`${pushSubscriptions.userId} <> ${skip}`);
+
+    for (const sub of subs) {
+      const res = await sendWebPush(sub, payload, env);
+      if (res.expired) {
+        await db().delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, sub.endpoint)).catch(() => {});
+      } else if (res.ok) {
+        await db().update(pushSubscriptions).set({ lastUsedAt: sql`(unixepoch())` }).where(eq(pushSubscriptions.id, sub.id)).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.error('Failed to send push to all', err);
+  }
+}
+
+/**
+ * Broadcast push notification to all STAFF subscribers (mod, admin, owner)
+ */
+export async function sendPushToStaff(
+  payload: PushPayload,
+  skipUserId?: string | null,
+  env?: { VAPID_PUBLIC_KEY?: string; VAPID_PRIVATE_KEY?: string; VAPID_SUBJECT?: string },
+): Promise<void> {
+  try {
+    const skip = skipUserId ?? '\0';
+    const staffRows = await db()
+      .select({ discordId: users.discordId })
+      .from(users)
+      .where(
+        sql`${users.discordId} <> ${skip} AND (
+          ${users.discordLevel} IN ('owner', 'admin', 'mod') OR 
+          ${users.manualLevel} IN ('owner', 'admin', 'mod')
+        )`
+      );
+
+    if (!staffRows.length) return;
+
+    for (const row of staffRows) {
+      await sendPushToUser(row.discordId, payload, env);
+    }
+  } catch (err) {
+    console.error('Failed to send push to staff', err);
   }
 }
