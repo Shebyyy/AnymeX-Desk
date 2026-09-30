@@ -1,12 +1,12 @@
 ﻿import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { db } from '../../../lib/db/client';
-import { chatMessages, chatChannels, users, reports } from '../../../lib/db/schema';
+import { chatMessages, chatChannels, users, reports, chatMessageReactions } from '../../../lib/db/schema';
 import { currentUser } from '../../../lib/auth';
 import { levelOf, atLeast, isOwner } from '../../../lib/staff';
 import { sendPushToUser } from '../../../lib/webpush';
 import { inIds } from '../../../lib/db/sql';
-import { eq, desc, and, lt } from 'drizzle-orm';
+import { eq, desc, and, lt, sql } from 'drizzle-orm';
 
 export const prerender = false;
 
@@ -68,8 +68,9 @@ export const GET: APIRoute = async (ctx) => {
       .orderBy(desc(chatMessages.createdAt))
       .limit(limit);
 
-    // Messages are returned in chronological order
+    // Messages in chronological order
     const ordered = rawMessages.reverse();
+    const msgIds = ordered.map((m) => m.id);
 
     // Collect reply IDs to hydrate replies
     const replyIds = ordered
@@ -124,6 +125,38 @@ export const GET: APIRoute = async (ctx) => {
       }
     }
 
+    // Collect reactions for all messages
+    const currentUserId = user?.id || '\0';
+    const reactionsMap = new Map<number, Array<{ emoji: string; count: number; reactedByMe: boolean }>>();
+
+    if (msgIds.length > 0) {
+      const reactionRows = await db().all<{
+        message_id: number;
+        emoji: string;
+        count: number;
+        reacted_by_me: number;
+      }>(sql`
+        SELECT 
+          message_id,
+          emoji,
+          count(*) as count,
+          max(case when user_id = ${currentUserId} then 1 else 0 end) as reacted_by_me
+        FROM chat_message_reactions
+        WHERE ${inIds(chatMessageReactions.messageId, msgIds)}
+        GROUP BY message_id, emoji
+      `);
+
+      for (const r of reactionRows) {
+        const list = reactionsMap.get(r.message_id) || [];
+        list.push({
+          emoji: r.emoji,
+          count: r.count,
+          reactedByMe: r.reacted_by_me === 1,
+        });
+        reactionsMap.set(r.message_id, list);
+      }
+    }
+
     // Assemble enriched message objects
     const messages = ordered.map((m) => {
       let taggedReports: any[] = [];
@@ -148,11 +181,13 @@ export const GET: APIRoute = async (ctx) => {
         isPinned: m.isPinned,
         createdAt: m.createdAt,
         updatedAt: m.updatedAt,
+        isEdited: m.updatedAt > m.createdAt + 2,
         authorName: m.authorName,
         authorAvatar: m.authorAvatar,
         authorRole: role,
         replyTo: m.replyToId ? replyMap.get(m.replyToId) || null : null,
         taggedReports,
+        reactions: reactionsMap.get(m.id) || [],
       };
     });
 
@@ -230,12 +265,11 @@ export const POST: APIRoute = async (ctx) => {
       .returning();
 
     // ─────────────────────────────────────────────────────────────
-    // Push Notifications for Replies & Mentions (Astro 6/7 Cloudflare safe)
+    // Push Notifications for Replies & Mentions
     // ─────────────────────────────────────────────────────────────
     const cf = (ctx.locals as any)?.cfContext;
     const runtimeEnv = env as any;
 
-    // 1. If replying to a message, notify original author via Push
     if (inserted.replyToId) {
       const [parent] = await db()
         .select({ userId: chatMessages.userId, body: chatMessages.body })
@@ -262,7 +296,6 @@ export const POST: APIRoute = async (ctx) => {
       }
     }
 
-    // 2. Extract @username mentions
     const mentionMatches = Array.from(trimmedBody.matchAll(/@([a-zA-Z0-9_.-]+)/g));
     if (mentionMatches.length > 0) {
       const mentionedNames = Array.from(new Set(mentionMatches.map((m) => m[1].toLowerCase())));
@@ -300,6 +333,132 @@ export const POST: APIRoute = async (ctx) => {
   } catch (err: any) {
     console.error('[chat:messages:post] Error creating chat message:', err?.message || err);
     return new Response(JSON.stringify({ ok: false, error: err?.message || 'Internal Server Error' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+};
+
+export const PATCH: APIRoute = async (ctx) => {
+  const user = await currentUser(ctx);
+  if (!user) {
+    return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    const { id, body } = await ctx.request.json();
+    if (!id || !body || !body.trim()) {
+      return new Response(JSON.stringify({ ok: false, error: 'Missing message ID or content' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const messageId = Number(id);
+    const [msg] = await db()
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.id, messageId))
+      .limit(1);
+
+    if (!msg) {
+      return new Response(JSON.stringify({ ok: false, error: 'Message not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const isStaff = atLeast(await levelOf(user.id), 'mod');
+    if (msg.userId !== user.id && !isStaff) {
+      return new Response(JSON.stringify({ ok: false, error: 'You cannot edit this message' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const trimmedBody = body.trim().slice(0, 4000);
+    const reportMatches = Array.from(trimmedBody.matchAll(/#(\d+)\b/g));
+    const taggedIds = Array.from(new Set(reportMatches.map((m) => parseInt(m[1], 10)))).slice(0, 5);
+    const taggedReportIds = taggedIds.length > 0 ? JSON.stringify(taggedIds) : null;
+
+    const [updated] = await db()
+      .update(chatMessages)
+      .set({
+        body: trimmedBody,
+        taggedReportIds,
+        updatedAt: sql`(unixepoch())`,
+      })
+      .where(eq(chatMessages.id, messageId))
+      .returning();
+
+    return new Response(JSON.stringify({ ok: true, message: updated }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (err: any) {
+    console.error('[chat:messages:patch] Edit error:', err);
+    return new Response(JSON.stringify({ ok: false, error: 'Failed to edit message' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+};
+
+export const DELETE: APIRoute = async (ctx) => {
+  const user = await currentUser(ctx);
+  if (!user) {
+    return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    const url = new URL(ctx.request.url);
+    const id = url.searchParams.get('id');
+    if (!id) {
+      return new Response(JSON.stringify({ ok: false, error: 'Missing message ID' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const messageId = Number(id);
+    const [msg] = await db()
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.id, messageId))
+      .limit(1);
+
+    if (!msg) {
+      return new Response(JSON.stringify({ ok: false, error: 'Message not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const isStaff = atLeast(await levelOf(user.id), 'mod');
+    if (msg.userId !== user.id && !isStaff) {
+      return new Response(JSON.stringify({ ok: false, error: 'You cannot delete this message' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    await db()
+      .delete(chatMessages)
+      .where(eq(chatMessages.id, messageId));
+
+    return new Response(JSON.stringify({ ok: true, id: messageId }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (err: any) {
+    console.error('[chat:messages:delete] Delete error:', err);
+    return new Response(JSON.stringify({ ok: false, error: 'Failed to delete message' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

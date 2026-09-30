@@ -19,15 +19,23 @@ const currentUserProp = user
   : null;
 ---
 
-<Base title="Support & Community Lounge · AnymeX Desk" description="Live discussion, support, and community talk for AnymeX Desk">
-  <div class="shell support-page-container">
+<Base
+  title="Support & Community Lounge · AnymeX Desk"
+  description="Live discussion, support, and community talk for AnymeX Desk"
+  fullWidth={true}
+  noFooter={true}
+>
+  <div class="support-chat-fullscreen">
     <ChatRoom client:load currentUser={currentUserProp} />
   </div>
 </Base>
 
 <style>
-  .support-page-container {
-    padding-top: 1.25rem;
-    padding-bottom: 2rem;
+  .support-chat-fullscreen {
+    width: 100%;
+    height: calc(100dvh - 56px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 </style>

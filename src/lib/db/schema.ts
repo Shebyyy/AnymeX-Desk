@@ -601,6 +601,24 @@ export const chatMessages = sqliteTable(
   ],
 );
 
+
+export const chatMessageReactions = sqliteTable(
+  'chat_message_reactions',
+  {
+    messageId: integer('message_id')
+      .notNull()
+      .references(() => chatMessages.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.discordId, { onDelete: 'cascade' }),
+    emoji: text('emoji').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.messageId, t.userId, t.emoji] }),
+    index('reactions_by_chat_message').on(t.messageId),
+  ],
+);
+
 export const commentReactions = sqliteTable(
   'comment_reactions',
   {
@@ -636,6 +654,9 @@ export type Label = typeof labels.$inferSelect;
 export type ReportLabel = typeof reportLabels.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type CommentReaction = typeof commentReactions.$inferSelect;
+
+export type ChatMessageReaction = typeof chatMessageReactions.$inferSelect;
+
 
 export type PushSubscription = typeof pushSubscriptions.$inferSelect;
 export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;

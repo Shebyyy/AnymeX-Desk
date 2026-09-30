@@ -1,4 +1,4 @@
----
+﻿---
 import { Font } from 'astro:assets';
 import '../styles/tokens.css';
 import '../styles/base.css';
@@ -14,12 +14,16 @@ interface Props {
   description?: string;
   /** Wide pages (the board) vs reading pages (docs, forms). */
   narrow?: boolean;
+  fullWidth?: boolean;
+  noFooter?: boolean;
 }
 
 const {
   title,
   description = 'AnymeX bug and suggestion tracker. Vote on what matters most.',
   narrow = false,
+  fullWidth = false,
+  noFooter = false,
 } = Astro.props;
 
 const baseUser = await currentUser(Astro);
@@ -94,16 +98,18 @@ const ogImage = reportIdMatch
     )}
     <a class="skip-link" href="#main">Skip to content</a>
     <Header />
-    <main id="main" class:list={['shell', { prose: narrow }]}>
+    <main id="main" class:list={[{ shell: !fullWidth, prose: narrow, 'full-bleed': fullWidth }]}>
       <slot />
     </main>
 
+    {!noFooter && (
     <footer class="shell foot">
       <p>
         AnymeX Bug & Suggestion Desk.
         <a href="https://github.com/RyanYuuki/AnymeX">AnymeX</a>.
       </p>
     </footer>
+    )}
 
     <PreferencesModal />
     <InstallBanner />
