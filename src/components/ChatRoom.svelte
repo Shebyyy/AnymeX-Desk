@@ -64,6 +64,29 @@
     avatarUrl: string;
   }
 
+  interface ProfileData {
+    id: string;
+    username: string;
+    avatarUrl: string;
+    role: string;
+    accountCreatedAt: number;
+    firstSeen: number;
+    chatBanned: boolean;
+    chatBanReason: string | null;
+    timedOutUntil: number | null;
+    timeoutReason: string | null;
+    isTimedOut: boolean;
+  }
+
+  interface ModLogItem {
+    id: number;
+    action: string;
+    reason: string;
+    durationSeconds: number | null;
+    createdAt: number;
+    actorName: string;
+  }
+
   let { currentUser }: { currentUser: UserInfo | null } = $props();
 
   let channels = $state<Channel[]>([]);
@@ -87,7 +110,6 @@
   let activeContextMsg = $state<ChatMessage | null>(null);
   let contextMenuPos = $state<{ x: number; y: number } | null>(null);
   let isMobileSheet = $state<boolean>(false);
-  let showCopiedToast = $state<boolean>(false);
 
   // Quick reaction popup from hover toolbar
   let hoverReactionMsgId = $state<number | null>(null);
@@ -96,7 +118,242 @@
   let editingMessage = $state<ChatMessage | null>(null);
   let isSavingEdit = $state<boolean>(false);
 
+  // ─────────────────────────────────────────────────────────────
+  // Custom Toast Notification System (NO browser alert())
+  // ─────────────────────────────────────────────────────────────
+  let toastMessage = $state<string | null>(null);
+  let toastType = $state<'success' | 'error' | 'info'>('info');
+  let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function showToast(msg: string, type: 'success' | 'error' | 'info' = 'info') {
+    toastMessage = msg;
+    toastType = type;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toastMessage = null;
+    }, 3500);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Custom Delete Confirmation Modal (NO browser confirm())
+  // ─────────────────────────────────────────────────────────────
+  let deleteModalTarget = $state<ChatMessage | null>(null);
+  let isDeletingMessage = $state<boolean>(false);
+
+  function openDeleteModal(msg: ChatMessage) {
+    closeContextMenu();
+    deleteModalTarget = msg;
+  }
+
+  function closeDeleteModal() {
+    deleteModalTarget = null;
+    isDeletingMessage = false;
+  }
+
+  async function confirmDeleteMessage() {
+    if (!deleteModalTarget || isDeletingMessage) return;
+    isDeletingMessage = true;
+    const id = deleteModalTarget.id;
+
+    try {
+      const res = await fetch(`/api/chat/messages?id=${id}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.ok) {
+        messages = messages.filter((m) => m.id !== id);
+        showToast('Message deleted.', 'success');
+        closeDeleteModal();
+      } else {
+        showToast(data.error || 'Failed to delete message', 'error');
+        isDeletingMessage = false;
+      }
+    } catch (err) {
+      console.error('Failed deleting message:', err);
+      showToast('Network error while deleting message', 'error');
+      isDeletingMessage = false;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Custom User Profile Popup Modal with Staff Moderation
+  // ─────────────────────────────────────────────────────────────
+  let profileModalOpen = $state<boolean>(false);
+  let profileTargetUserId = $state<string | null>(null);
+  let profileData = $state<ProfileData | null>(null);
+  let profileModLogs = $state<ModLogItem[]>([]);
+  let isLoadingProfile = $state<boolean>(false);
+
+  // Staff moderation action inside profile modal
+  let modActionType = $state<'timeout' | 'untimeout' | 'ban' | 'unban' | null>(null);
+  let modReason = $state<string>('');
+  let modDuration = $state<string>('1h');
+  let isExecutingMod = $state<boolean>(false);
+
+  async function openUserProfile(userId: string) {
+    closeContextMenu();
+    profileTargetUserId = userId;
+    profileModalOpen = true;
+    isLoadingProfile = true;
+    profileData = null;
+    profileModLogs = [];
+    modActionType = null;
+    modReason = '';
+
+    try {
+      const res = await fetch(`/api/chat/user-profile?id=${encodeURIComponent(userId)}`);
+      const data = await res.json();
+      if (data.ok && data.user) {
+        profileData = data.user;
+        profileModLogs = data.logs || [];
+      } else {
+        showToast(data.error || 'Failed to load user profile', 'error');
+        profileModalOpen = false;
+      }
+    } catch (err) {
+      console.error('Failed fetching user profile:', err);
+      showToast('Network error loading profile', 'error');
+      profileModalOpen = false;
+    } finally {
+      isLoadingProfile = false;
+    }
+  }
+
+  function closeUserProfile() {
+    profileModalOpen = false;
+    profileTargetUserId = null;
+    profileData = null;
+    modActionType = null;
+  }
+
+  async function executeModeration(action: 'timeout' | 'untimeout' | 'ban' | 'unban') {
+    if (!profileData || isExecutingMod) return;
+    if (!modReason.trim()) {
+      showToast('A reason is strictly required for this moderation action.', 'error');
+      return;
+    }
+
+    isExecutingMod = true;
+    try {
+      const res = await fetch('/api/chat/moderate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          targetId: profileData.id,
+          reason: modReason.trim(),
+          duration: action === 'timeout' ? modDuration : undefined,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.ok) {
+        showToast(`✓ ${action.toUpperCase()} applied to @${profileData.username}`, 'success');
+        // Refresh profile data
+        await openUserProfile(profileData.id);
+      } else {
+        showToast(data.error || 'Moderation action failed', 'error');
+      }
+    } catch (err) {
+      console.error('Moderation error:', err);
+      showToast('Network error executing moderation', 'error');
+    } finally {
+      isExecutingMod = false;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Staff Slash Commands (e.g. /timeout @user 1h reason)
+  // ─────────────────────────────────────────────────────────────
+  async function handleStaffSlashCommand(cmdText: string): Promise<boolean> {
+    const parts = cmdText.trim().split(/\s+/);
+    const command = parts[0].toLowerCase();
+
+    if (command === '/help' || command === '/commands') {
+      showToast('Staff Commands: /timeout @user [dur] [reason], /untimeout @user [reason], /ban @user [reason], /unban @user [reason]', 'info');
+      inputText = '';
+      return true;
+    }
+
+    if (command === '/timeout' || command === '/mute') {
+      if (parts.length < 4) {
+        showToast('Usage: /timeout @user [duration: 5m, 1h, 1d] [reason is required]', 'error');
+        return true;
+      }
+      const targetUser = parts[1];
+      const dur = parts[2];
+      const reason = parts.slice(3).join(' ');
+      await executeDirectSlashMod('timeout', targetUser, reason, dur);
+      inputText = '';
+      return true;
+    }
+
+    if (command === '/untimeout' || command === '/unmute') {
+      if (parts.length < 3) {
+        showToast('Usage: /untimeout @user [reason is required]', 'error');
+        return true;
+      }
+      const targetUser = parts[1];
+      const reason = parts.slice(2).join(' ');
+      await executeDirectSlashMod('untimeout', targetUser, reason);
+      inputText = '';
+      return true;
+    }
+
+    if (command === '/ban') {
+      if (parts.length < 3) {
+        showToast('Usage: /ban @user [reason is required]', 'error');
+        return true;
+      }
+      const targetUser = parts[1];
+      const reason = parts.slice(2).join(' ');
+      await executeDirectSlashMod('ban', targetUser, reason);
+      inputText = '';
+      return true;
+    }
+
+    if (command === '/unban') {
+      if (parts.length < 3) {
+        showToast('Usage: /unban @user [reason is required]', 'error');
+        return true;
+      }
+      const targetUser = parts[1];
+      const reason = parts.slice(2).join(' ');
+      await executeDirectSlashMod('unban', targetUser, reason);
+      inputText = '';
+      return true;
+    }
+
+    return false;
+  }
+
+  async function executeDirectSlashMod(action: string, targetUsername: string, reason: string, duration?: string) {
+    try {
+      const res = await fetch('/api/chat/moderate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          targetUsername,
+          reason,
+          duration,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.ok) {
+        showToast(data.message || `✓ ${action} completed on ${targetUsername}`, 'success');
+      } else {
+        showToast(data.error || 'Slash command failed', 'error');
+      }
+    } catch (err) {
+      showToast('Network error executing slash command', 'error');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // # Tag Autocomplete Search Popover
+  // ─────────────────────────────────────────────────────────────
   let showReportPicker = $state<boolean>(false);
   let reportSearchQuery = $state<string>('');
   let reportGroups = $state<Record<string, TaggedReport[]>>({ bug: [], suggestion: [], extension: [] });
@@ -106,7 +363,6 @@
   let selectedReportIndex = $state<number>(0);
   let reportReqSeq = 0;
 
-  // Flattened reports for arrow navigation
   let flattenedReports = $derived.by(() => {
     const list: TaggedReport[] = [];
     if (reportGroups.bug) list.push(...reportGroups.bug);
@@ -115,7 +371,9 @@
     return list;
   });
 
+  // ─────────────────────────────────────────────────────────────
   // @ User Mention Autocomplete Popover
+  // ─────────────────────────────────────────────────────────────
   let showUserPicker = $state<boolean>(false);
   let userSearchQuery = $state<string>('');
   let userSearchResults = $state<MentionUser[]>([]);
@@ -177,14 +435,12 @@
     }, 2500);
   }
 
-  // Auto-resize Textarea
   function autoResize() {
     if (!textareaRef) return;
     textareaRef.style.height = 'auto';
     textareaRef.style.height = Math.min(textareaRef.scrollHeight, 180) + 'px';
   }
 
-  // Report Search API with Sequential Guard & Fast Filtering
   async function searchReports(query: string) {
     const seq = ++reportReqSeq;
     isSearchingReports = true;
@@ -203,7 +459,6 @@
     }
   }
 
-  // User Mention Search API with Sequential Guard & Fast Filtering
   async function searchUsers(query: string) {
     const seq = ++userReqSeq;
     isSearchingUsers = true;
@@ -225,7 +480,6 @@
   function checkInputTriggers(inputVal: string, cursorPosition: number) {
     const textBeforeCursor = inputVal.slice(0, cursorPosition);
 
-    // 1. Check for @mention trigger (e.g. "@" or "@sheby", strictly no whitespace)
     const mentionMatch = textBeforeCursor.match(/(?:^|\s)@([a-zA-Z0-9_.-]*)$/);
     if (mentionMatch) {
       const query = mentionMatch[1];
@@ -243,7 +497,6 @@
       showUserPicker = false;
     }
 
-    // 2. Check for #report trigger (e.g. "#" or "#cras", strictly no whitespace)
     const reportMatch = textBeforeCursor.match(/(?:^|\s)#([a-zA-Z0-9_\-]*)$/);
     if (reportMatch) {
       const query = reportMatch[1];
@@ -373,12 +626,22 @@
     }
   }
 
-  function handleSendOrSave() {
+  async function handleSendOrSave() {
     if (editingMessage) {
       saveEdit();
-    } else {
-      sendMessage();
+      return;
     }
+
+    const trimmed = inputText.trim();
+    if (!trimmed) return;
+
+    // Check if user is staff and typed a slash command
+    if (currentUser?.isStaff && trimmed.startsWith('/')) {
+      const handled = await handleStaffSlashCommand(trimmed);
+      if (handled) return;
+    }
+
+    sendMessage();
   }
 
   async function sendMessage() {
@@ -410,11 +673,11 @@
         }
         await loadMessages(true);
       } else {
-        alert(data.error || 'Failed to send message');
+        showToast(data.error || 'Failed to send message', 'error');
       }
     } catch (err) {
       console.error('Failed sending message:', err);
-      alert('Failed sending message');
+      showToast('Network error sending message', 'error');
     } finally {
       isSending = false;
     }
@@ -464,8 +727,8 @@
       contextMenuPos = null;
     } else {
       isMobileSheet = false;
-      const menuWidth = 220;
-      const menuHeight = 260;
+      const menuWidth = 230;
+      const menuHeight = 310;
       const clampedX = Math.min(x, window.innerWidth - menuWidth - 10);
       const clampedY = Math.min(y, window.innerHeight - menuHeight - 10);
       contextMenuPos = { x: clampedX, y: clampedY };
@@ -480,10 +743,7 @@
   function copyMessageText(msg: ChatMessage) {
     navigator.clipboard.writeText(msg.body);
     closeContextMenu();
-    showCopiedToast = true;
-    setTimeout(() => {
-      showCopiedToast = false;
-    }, 2000);
+    showToast('✓ Copied to clipboard', 'success');
   }
 
   function triggerReply(msg: ChatMessage) {
@@ -495,7 +755,6 @@
     }, 20);
   }
 
-  // Edit in Main Bottom Input Box
   function startEditing(msg: ChatMessage) {
     editingMessage = msg;
     replyingTo = null;
@@ -537,34 +796,15 @@
           m.id === id ? { ...m, body: trimmed, isEdited: true, updatedAt: Math.floor(Date.now() / 1000) } : m,
         );
         cancelEditing();
+        showToast('Message updated', 'success');
       } else {
-        alert(data.error || 'Failed to edit message');
+        showToast(data.error || 'Failed to edit message', 'error');
       }
     } catch (err) {
       console.error('Failed saving edit:', err);
-      alert('Failed to edit message');
+      showToast('Network error saving edit', 'error');
     } finally {
       isSavingEdit = false;
-    }
-  }
-
-  async function deleteMessage(id: number) {
-    closeContextMenu();
-    if (!confirm('Are you sure you want to delete this message? This cannot be undone.')) return;
-
-    try {
-      const res = await fetch(`/api/chat/messages?id=${id}`, {
-        method: 'DELETE',
-      });
-      const data = await res.json();
-      if (data.ok) {
-        messages = messages.filter((m) => m.id !== id);
-      } else {
-        alert(data.error || 'Failed to delete message');
-      }
-    } catch (err) {
-      console.error('Failed deleting message:', err);
-      alert('Failed to delete message');
     }
   }
 
@@ -616,10 +856,16 @@
     if (!pushSupported) return;
     if (pushActive) {
       const ok = await unsubscribeFromPush();
-      if (ok) pushActive = false;
+      if (ok) {
+        pushActive = false;
+        showToast('Push notifications disabled', 'info');
+      }
     } else {
       const sub = await subscribeToPush();
-      if (sub) pushActive = true;
+      if (sub) {
+        pushActive = true;
+        showToast('🔔 Push notifications enabled!', 'success');
+      }
     }
   }
 
@@ -634,6 +880,11 @@
   function formatTime(timestamp: number) {
     const d = new Date(timestamp * 1000);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function formatDate(timestamp: number) {
+    const d = new Date(timestamp * 1000);
+    return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
   }
 
   function renderKindBadge(kind: string) {
@@ -668,6 +919,7 @@
     if (pollTimer) clearInterval(pollTimer);
     if (reportDebounceTimer) clearTimeout(reportDebounceTimer);
     if (userDebounceTimer) clearTimeout(userDebounceTimer);
+    if (toastTimer) clearTimeout(toastTimer);
   });
 </script>
 
@@ -777,12 +1029,15 @@
             <line x1="10" y1="22" x2="14" y2="22"></line>
             <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"></path>
           </svg>
-          <span>Pro Tips</span>
+          <span>Staff & Pro Tips</span>
         </div>
         <div class="info-body">
-          <p>• Type <strong>#</strong> to link any bug or suggestion report.</p>
-          <p>• Type <strong>@</strong> to mention community members.</p>
-          <p>• <strong>Right-click</strong> or <strong>long-press</strong> any message for Discord actions & reactions.</p>
+          <p>• Type <strong>#</strong> to link any report.</p>
+          <p>• Type <strong>@</strong> to mention members.</p>
+          <p>• <strong>Click user name/avatar</strong> for Profile & Moderation.</p>
+          {#if currentUser?.isStaff}
+            <p>• Staff commands: <code>/timeout @user 1h reason</code>, <code>/ban @user reason</code>.</p>
+          {/if}
         </div>
       </div>
     </aside>
@@ -840,26 +1095,39 @@
               {/if}
 
               <div class="message-content-box">
-                <!-- Avatar -->
-                <div class="author-avatar-wrap">
-                  {#if msg.authorAvatar}
-                    <img
-                      src="https://cdn.discordapp.com/avatars/{msg.userId}/{msg.authorAvatar}.png?size=48"
-                      alt={msg.authorName}
-                      class="author-avatar"
-                      loading="lazy"
-                    />
-                  {:else}
-                    <div class="author-avatar-fallback">
-                      {msg.authorName.slice(0, 2).toUpperCase()}
-                    </div>
-                  {/if}
-                </div>
+                <!-- Avatar (Click to open User Profile modal) -->
+                <button
+                  class="author-avatar-btn"
+                  onclick={() => openUserProfile(msg.userId)}
+                  title="View @{msg.authorName}'s Profile"
+                  aria-label="View @{msg.authorName}'s Profile"
+                >
+                  <div class="author-avatar-wrap">
+                    {#if msg.authorAvatar}
+                      <img
+                        src="https://cdn.discordapp.com/avatars/{msg.userId}/{msg.authorAvatar}.png?size=48"
+                        alt={msg.authorName}
+                        class="author-avatar"
+                        loading="lazy"
+                      />
+                    {:else}
+                      <div class="author-avatar-fallback">
+                        {msg.authorName.slice(0, 2).toUpperCase()}
+                      </div>
+                    {/if}
+                  </div>
+                </button>
 
                 <div class="message-inner">
                   <!-- Header: Author Name, Role, Timestamp -->
                   <div class="message-meta">
-                    <span class="author-name">{msg.authorName}</span>
+                    <button
+                      class="author-name-btn"
+                      onclick={() => openUserProfile(msg.userId)}
+                      title="View @{msg.authorName}'s Profile"
+                    >
+                      {msg.authorName}
+                    </button>
                     {#if msg.authorRole && msg.authorRole !== 'member'}
                       <span class="role-tag role-{msg.authorRole}">{msg.authorRole}</span>
                     {/if}
@@ -1140,7 +1408,7 @@
               class="composer-textarea"
               placeholder={editingMessage
                 ? 'Edit your message...'
-                : `Message #${channels.find((c) => c.id === activeChannelId)?.name || 'channel'} (Type # to link report, @ to mention)...`}
+                : `Message #${channels.find((c) => c.id === activeChannelId)?.name || 'channel'} (Type # to link report, @ to mention, / for commands)...`}
               bind:value={inputText}
               rows="1"
               oninput={handleInputChange}
@@ -1157,12 +1425,10 @@
               {#if isSending || isSavingEdit}
                 <span class="sending-spinner"></span>
               {:else if editingMessage}
-                <!-- Checkmark Icon for Save -->
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="20 6 9 17 4 12"></polyline>
                 </svg>
               {:else}
-                <!-- Paper Plane Icon for Send -->
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
                   <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
                 </svg>
@@ -1224,17 +1490,30 @@
       <span class="item-label">Copy Text</span>
     </button>
 
+    <!-- Profile & Moderation Option -->
+    <button class="context-menu-item" onclick={() => activeContextMsg && openUserProfile(activeContextMsg.userId)}>
+      <span class="item-icon">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+          <circle cx="12" cy="7" r="4"></circle>
+        </svg>
+      </span>
+      <span class="item-label">{currentUser?.isStaff ? 'Moderate / Profile' : 'View Profile'}</span>
+    </button>
+
     {#if currentUser && (currentUser.id === activeContextMsg.userId || currentUser.isStaff)}
       <div class="context-divider"></div>
-      <button class="context-menu-item" onclick={() => activeContextMsg && startEditing(activeContextMsg)}>
-        <span class="item-icon">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-          </svg>
-        </span>
-        <span class="item-label">Edit Message</span>
-      </button>
-      <button class="context-menu-item danger" onclick={() => activeContextMsg && deleteMessage(activeContextMsg.id)}>
+      {#if currentUser.id === activeContextMsg.userId || currentUser.isStaff}
+        <button class="context-menu-item" onclick={() => activeContextMsg && startEditing(activeContextMsg)}>
+          <span class="item-icon">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+            </svg>
+          </span>
+          <span class="item-label">Edit Message</span>
+        </button>
+      {/if}
+      <button class="context-menu-item danger" onclick={() => activeContextMsg && openDeleteModal(activeContextMsg)}>
         <span class="item-icon">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="3 6 5 6 21 6"></polyline>
@@ -1290,16 +1569,28 @@
           <span class="sheet-label">Copy Text</span>
         </button>
 
+        <button class="sheet-item" onclick={() => activeContextMsg && openUserProfile(activeContextMsg.userId)}>
+          <span class="sheet-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+          </span>
+          <span class="sheet-label">{currentUser?.isStaff ? 'Moderate / Profile' : 'View Profile'}</span>
+        </button>
+
         {#if currentUser && (currentUser.id === activeContextMsg.userId || currentUser.isStaff)}
-          <button class="sheet-item" onclick={() => activeContextMsg && startEditing(activeContextMsg)}>
-            <span class="sheet-icon">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-              </svg>
-            </span>
-            <span class="sheet-label">Edit Message</span>
-          </button>
-          <button class="sheet-item danger" onclick={() => activeContextMsg && deleteMessage(activeContextMsg.id)}>
+          {#if currentUser.id === activeContextMsg.userId || currentUser.isStaff}
+            <button class="sheet-item" onclick={() => activeContextMsg && startEditing(activeContextMsg)}>
+              <span class="sheet-icon">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+                </svg>
+              </span>
+              <span class="sheet-label">Edit Message</span>
+            </button>
+          {/if}
+          <button class="sheet-item danger" onclick={() => activeContextMsg && openDeleteModal(activeContextMsg)}>
             <span class="sheet-icon">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="3 6 5 6 21 6"></polyline>
@@ -1320,13 +1611,231 @@
   </div>
 {/if}
 
-<!-- Copied Toast -->
-{#if showCopiedToast}
-  <div class="copied-toast">
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#34d399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="20 6 9 17 4 12"></polyline>
-    </svg>
-    <span>Copied to clipboard</span>
+<!-- ─────────────────────────────────────────────────────────────
+     Discord-Style Custom Delete Confirmation Modal Dialog
+     ───────────────────────────────────────────────────────────── -->
+{#if deleteModalTarget}
+  <div class="custom-modal-backdrop" onclick={closeDeleteModal}>
+    <div class="custom-modal-card delete-dialog" onclick={(e) => e.stopPropagation()}>
+      <div class="modal-header-danger">
+        <div class="danger-icon-circle">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            <line x1="10" y1="11" x2="10" y2="17"></line>
+            <line x1="14" y1="11" x2="14" y2="17"></line>
+          </svg>
+        </div>
+        <h3 class="modal-title">Delete Message</h3>
+      </div>
+
+      <p class="modal-body-text">
+        Are you sure you want to delete this message? This cannot be undone.
+      </p>
+
+      <div class="delete-msg-preview">
+        <span class="preview-author">@{deleteModalTarget.authorName}:</span>
+        <span class="preview-text">"{deleteModalTarget.body.slice(0, 100)}"</span>
+      </div>
+
+      <div class="modal-footer-actions">
+        <button class="modal-btn cancel-btn" onclick={closeDeleteModal} disabled={isDeletingMessage}>
+          Cancel
+        </button>
+        <button class="modal-btn delete-btn" onclick={confirmDeleteMessage} disabled={isDeletingMessage}>
+          {isDeletingMessage ? 'Deleting...' : 'Delete'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- ─────────────────────────────────────────────────────────────
+     Discord-Style Custom User Profile & Moderation Modal
+     ───────────────────────────────────────────────────────────── -->
+{#if profileModalOpen}
+  <div class="custom-modal-backdrop" onclick={closeUserProfile}>
+    <div class="custom-modal-card profile-card" onclick={(e) => e.stopPropagation()}>
+      {#if isLoadingProfile}
+        <div class="profile-loading">
+          <div class="spinner"></div>
+          <span>Loading user profile...</span>
+        </div>
+      {:else if profileData}
+        <!-- Top Profile Banner -->
+        <div class="profile-banner">
+          <button class="profile-close-btn" onclick={closeUserProfile} aria-label="Close Profile">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Avatar & Main Meta -->
+        <div class="profile-avatar-row">
+          <img src={profileData.avatarUrl} alt={profileData.username} class="profile-avatar-large" />
+          <div class="profile-user-info">
+            <div class="profile-name-line">
+              <span class="profile-username">@{profileData.username}</span>
+              <span class="role-tag role-{profileData.role}">{profileData.role}</span>
+            </div>
+            <div class="profile-id-line">ID: {profileData.id}</div>
+          </div>
+        </div>
+
+        <!-- Moderation Status Badges -->
+        <div class="profile-status-bar">
+          {#if profileData.chatBanned}
+            <div class="status-chip banned">
+              🚫 BANNED FROM CHAT
+              {#if profileData.chatBanReason}
+                <div class="status-reason">Reason: {profileData.chatBanReason}</div>
+              {/if}
+            </div>
+          {:else if profileData.isTimedOut && profileData.timedOutUntil}
+            <div class="status-chip timed-out">
+              ⏱️ TIMED OUT UNTIL {new Date(profileData.timedOutUntil * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {#if profileData.timeoutReason}
+                <div class="status-reason">Reason: {profileData.timeoutReason}</div>
+              {/if}
+            </div>
+          {:else}
+            <div class="status-chip active">
+              ✓ Good Standing
+            </div>
+          {/if}
+        </div>
+
+        <!-- Dates Grid -->
+        <div class="profile-dates-grid">
+          <div class="date-item">
+            <span class="date-label">TRACKER JOINED</span>
+            <span class="date-val">{formatDate(profileData.firstSeen)}</span>
+          </div>
+          <div class="date-item">
+            <span class="date-label">DISCORD CREATED</span>
+            <span class="date-val">{formatDate(profileData.accountCreatedAt)}</span>
+          </div>
+        </div>
+
+        <!-- Staff Moderation Panel -->
+        {#if currentUser?.isStaff && currentUser.id !== profileData.id}
+          <div class="staff-mod-section">
+            <div class="mod-section-header">
+              <span class="mod-header-icon">🛡️</span>
+              <span class="mod-header-title">STAFF MODERATION</span>
+            </div>
+
+            <!-- Mod Action Selection Buttons -->
+            <div class="mod-action-buttons">
+              {#if profileData.isTimedOut}
+                <button
+                  class="mod-action-btn untimeout"
+                  class:selected={modActionType === 'untimeout'}
+                  onclick={() => (modActionType = modActionType === 'untimeout' ? null : 'untimeout')}
+                >
+                  Remove Timeout
+                </button>
+              {:else}
+                <button
+                  class="mod-action-btn timeout"
+                  class:selected={modActionType === 'timeout'}
+                  onclick={() => (modActionType = modActionType === 'timeout' ? null : 'timeout')}
+                >
+                  Timeout User
+                </button>
+              {/if}
+
+              {#if profileData.chatBanned}
+                <button
+                  class="mod-action-btn unban"
+                  class:selected={modActionType === 'unban'}
+                  onclick={() => (modActionType = modActionType === 'unban' ? null : 'unban')}
+                >
+                  Unban from Chat
+                </button>
+              {:else}
+                <button
+                  class="mod-action-btn ban"
+                  class:selected={modActionType === 'ban'}
+                  onclick={() => (modActionType = modActionType === 'ban' ? null : 'ban')}
+                >
+                  Ban from Chat
+                </button>
+              {/if}
+            </div>
+
+            <!-- Moderation Action Form (Requires Reason!) -->
+            {#if modActionType}
+              <div class="mod-action-form">
+                {#if modActionType === 'timeout'}
+                  <div class="mod-field">
+                    <label class="mod-label">TIMEOUT DURATION</label>
+                    <select bind:value={modDuration} class="mod-select">
+                      <option value="5m">5 Minutes</option>
+                      <option value="10m">10 Minutes</option>
+                      <option value="1h">1 Hour</option>
+                      <option value="24h">24 Hours (1 Day)</option>
+                      <option value="7d">7 Days (1 Week)</option>
+                    </select>
+                  </div>
+                {/if}
+
+                <div class="mod-field">
+                  <label class="mod-label">
+                    REASON (REQUIRED FOR AUDIT LOG) <span class="required-star">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    bind:value={modReason}
+                    placeholder="Enter explicit reason (e.g. spamming, harassment)..."
+                    class="mod-input"
+                  />
+                </div>
+
+                <div class="mod-form-footer">
+                  <button class="mod-btn cancel" onclick={() => (modActionType = null)}>Cancel</button>
+                  <button
+                    class="mod-btn submit"
+                    disabled={!modReason.trim() || isExecutingMod}
+                    onclick={() => modActionType && executeModeration(modActionType)}
+                  >
+                    {isExecutingMod ? 'Executing...' : `Confirm ${modActionType.toUpperCase()}`}
+                  </button>
+                </div>
+              </div>
+            {/if}
+
+            <!-- Recent Mod History Logs -->
+            {#if profileModLogs.length > 0}
+              <div class="mod-history-wrap">
+                <div class="mod-history-title">RECENT AUDIT LOGS</div>
+                <div class="mod-history-list">
+                  {#each profileModLogs as log (log.id)}
+                    <div class="mod-log-row">
+                      <div class="log-top">
+                        <span class="log-action tag-{log.action}">{log.action.toUpperCase()}</span>
+                        <span class="log-time">{formatDate(log.createdAt)}</span>
+                      </div>
+                      <div class="log-reason">"{log.reason}"</div>
+                      <div class="log-actor">by @{log.actorName || 'Staff'}</div>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
+      {/if}
+    </div>
+  </div>
+{/if}
+
+<!-- Toast Notification -->
+{#if toastMessage}
+  <div class="app-toast toast-{toastType}">
+    <span>{toastMessage}</span>
   </div>
 {/if}
 
@@ -1591,7 +2100,7 @@
   }
 
   /* ─────────────────────────────────────────────────────────────
-     Messages Stream (The ONLY scrollable container!)
+     Messages Stream
      ───────────────────────────────────────────────────────────── */
   .messages-stream {
     flex: 1 1 auto;
@@ -1698,13 +2207,24 @@
     position: relative;
   }
 
-  .author-avatar-wrap {
+  .author-avatar-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
     flex-shrink: 0;
+  }
+
+  .author-avatar-wrap {
     width: 38px;
     height: 38px;
     border-radius: 50%;
     overflow: hidden;
     background: rgba(255, 255, 255, 0.08);
+    transition: transform 0.1s ease;
+  }
+  .author-avatar-btn:hover .author-avatar-wrap {
+    transform: scale(1.08);
   }
 
   .author-avatar {
@@ -1738,10 +2258,19 @@
     gap: 8px;
   }
 
-  .author-name {
+  .author-name-btn {
+    background: none;
+    border: none;
+    padding: 0;
     font-size: 14px;
     font-weight: 700;
     color: var(--text-primary, #fff);
+    cursor: pointer;
+    text-align: left;
+  }
+  .author-name-btn:hover {
+    text-decoration: underline;
+    color: var(--accent-gold, #f59e0b);
   }
 
   .role-tag {
@@ -1927,9 +2456,7 @@
     color: #fbbf24;
   }
 
-  /* ─────────────────────────────────────────────────────────────
-     Discord-style Clean Hover Bar (Desktop)
-     ───────────────────────────────────────────────────────────── */
+  /* Desktop Hover Bar */
   .desktop-hover-bar {
     position: absolute;
     right: 8px;
@@ -1998,12 +2525,10 @@
     background: rgba(255, 255, 255, 0.1);
   }
 
-  /* ─────────────────────────────────────────────────────────────
-     Discord Context Menu (Desktop Right Click)
-     ───────────────────────────────────────────────────────────── */
+  /* Discord Context Menu */
   .discord-context-menu {
     position: fixed;
-    width: 220px;
+    width: 230px;
     background: #18191c;
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 8px;
@@ -2078,9 +2603,7 @@
     width: 18px;
   }
 
-  /* ─────────────────────────────────────────────────────────────
-     Discord Mobile Action Sheet (Mobile Long Press)
-     ───────────────────────────────────────────────────────────── */
+  /* Mobile Sheet */
   .mobile-sheet-backdrop {
     position: fixed;
     top: 0;
@@ -2102,7 +2625,7 @@
     padding: 12px 16px calc(16px + env(safe-area-inset-bottom, 0px)) 16px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
@@ -2140,7 +2663,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 12px 14px;
+    padding: 11px 14px;
     border-radius: 10px;
     background: rgba(255, 255, 255, 0.04);
     border: none;
@@ -2180,32 +2703,490 @@
   }
 
   @keyframes slideUp {
-    from {
-      transform: translateY(100%);
-    }
-    to {
-      transform: translateY(0);
-    }
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
   }
 
-  /* Copied Toast */
-  .copied-toast {
+  /* ─────────────────────────────────────────────────────────────
+     Custom Modal Dialog System (Delete Dialog & Profile Modal)
+     ───────────────────────────────────────────────────────────── */
+  .custom-modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+
+  .custom-modal-card {
+    background: #18191c;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 14px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75);
+    width: 100%;
+    max-width: 480px;
+    overflow: hidden;
+    animation: popIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes popIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  /* Delete Confirmation Dialog */
+  .delete-dialog {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .modal-header-danger {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .danger-icon-circle {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(239, 68, 68, 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .modal-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    margin: 0;
+  }
+
+  .modal-body-text {
+    font-size: 14px;
+    color: var(--text-secondary, #d4d4d8);
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  .delete-msg-preview {
+    padding: 10px 14px;
+    background: rgba(0, 0, 0, 0.3);
+    border-left: 3px solid rgba(239, 68, 68, 0.5);
+    border-radius: 6px;
+    font-size: 13px;
+    display: flex;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .preview-author {
+    font-weight: 600;
+    color: var(--accent-gold, #f59e0b);
+    white-space: nowrap;
+  }
+
+  .preview-text {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .modal-footer-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 6px;
+  }
+
+  .modal-btn {
+    padding: 8px 18px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.12s;
+  }
+  .modal-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .modal-btn.cancel-btn {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+  }
+  .modal-btn.delete-btn {
+    background: #ef4444;
+    color: #fff;
+  }
+  .modal-btn.delete-btn:hover:not(:disabled) {
+    background: #dc2626;
+  }
+
+  /* User Profile Modal */
+  .profile-card {
+    max-height: 90vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .profile-banner {
+    height: 70px;
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.3), rgba(59, 130, 246, 0.3));
+    position: relative;
+    padding: 12px;
+  }
+
+  .profile-close-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    border: none;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  .profile-avatar-row {
+    padding: 0 20px;
+    display: flex;
+    align-items: flex-end;
+    gap: 16px;
+    margin-top: -36px;
+  }
+
+  .profile-avatar-large {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    border: 4px solid #18191c;
+    background: #27272a;
+    object-fit: cover;
+  }
+
+  .profile-user-info {
+    margin-bottom: 6px;
+  }
+
+  .profile-name-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .profile-username {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .profile-id-line {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .profile-status-bar {
+    padding: 12px 20px 0 20px;
+  }
+
+  .status-chip {
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .status-chip.active {
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: #34d399;
+  }
+  .status-chip.timed-out {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: #fbbf24;
+  }
+  .status-chip.banned {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #f87171;
+  }
+  .status-reason {
+    font-size: 11px;
+    font-weight: normal;
+    margin-top: 2px;
+    opacity: 0.9;
+  }
+
+  .profile-dates-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .date-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .date-label {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+
+  .date-val {
+    font-size: 13px;
+    color: #fff;
+    font-weight: 500;
+  }
+
+  /* Staff Moderation Panel inside Profile */
+  .staff-mod-section {
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  .mod-section-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: #60a5fa;
+  }
+
+  .mod-action-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .mod-action-btn {
+    flex: 1 1 calc(50% - 4px);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .mod-action-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  .mod-action-btn.timeout {
+    color: #fbbf24;
+    border-color: rgba(245, 158, 11, 0.3);
+  }
+  .mod-action-btn.untimeout {
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.3);
+  }
+  .mod-action-btn.ban {
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+  .mod-action-btn.unban {
+    color: #60a5fa;
+    border-color: rgba(59, 130, 246, 0.3);
+  }
+  .mod-action-btn.selected {
+    outline: 2px solid currentColor;
+  }
+
+  .mod-action-form {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .mod-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .mod-label {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  .required-star {
+    color: #ef4444;
+  }
+
+  .mod-select,
+  .mod-input {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: #fff;
+    font-size: 13px;
+    outline: none;
+  }
+  .mod-input:focus,
+  .mod-select:focus {
+    border-color: #60a5fa;
+  }
+
+  .mod-form-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .mod-btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+  }
+  .mod-btn.cancel {
+    background: rgba(255, 255, 255, 0.08);
+    color: #d4d4d8;
+  }
+  .mod-btn.submit {
+    background: #3b82f6;
+    color: #fff;
+  }
+  .mod-btn.submit:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .mod-history-wrap {
+    margin-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 10px;
+  }
+
+  .mod-history-title {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .mod-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 140px;
+    overflow-y: auto;
+  }
+
+  .mod-log-row {
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .log-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .log-action {
+    font-weight: 800;
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .log-action.tag-timeout { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+  .log-action.tag-untimeout { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+  .log-action.tag-ban { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+  .log-action.tag-unban { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+
+  .log-time { color: var(--text-muted); font-size: 10px; }
+  .log-reason { color: #d4d4d8; font-style: italic; }
+  .log-actor { color: var(--text-muted); font-size: 10px; }
+
+  .profile-loading {
+    padding: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-muted);
+  }
+
+  /* App Toast */
+  .app-toast {
     position: fixed;
     bottom: 80px;
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(24, 25, 28, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    color: #fff;
-    padding: 8px 16px;
+    padding: 9px 18px;
     border-radius: 20px;
     font-size: 13px;
     font-weight: 600;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-    z-index: 1100;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+    z-index: 2500;
+    animation: toastPop 0.15s ease-out;
+  }
+  @keyframes toastPop {
+    from { opacity: 0; transform: translate(-50%, 8px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+  }
+  .app-toast.toast-info {
+    background: #18191c;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+  }
+  .app-toast.toast-success {
+    background: #064e3b;
+    border: 1px solid #059669;
+    color: #6ee7b7;
+  }
+  .app-toast.toast-error {
+    background: #7f1d1d;
+    border: 1px solid #dc2626;
+    color: #fca5a5;
   }
 
   /* ─────────────────────────────────────────────────────────────
@@ -2548,9 +3529,7 @@
   }
 
   @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
+    to { transform: rotate(360deg); }
   }
 
   /* ─────────────────────────────────────────────────────────────

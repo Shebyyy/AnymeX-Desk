@@ -193,6 +193,12 @@ export const users = sqliteTable('users', {
   telegramPhotoUrl: text('telegram_photo_url'),
   notifyTelegram: integer('notify_telegram', { mode: 'boolean' }).notNull().default(true),
   notifyDiscord: integer('notify_discord', { mode: 'boolean' }).notNull().default(true),
+
+  /** Chat moderation fields */
+  chatBanned: integer('chat_banned', { mode: 'boolean' }).notNull().default(false),
+  chatBanReason: text('chat_ban_reason'),
+  timedOutUntil: integer('timed_out_until'),
+  timeoutReason: text('timeout_reason'),
 });
 
 export const reports = sqliteTable(
@@ -602,6 +608,16 @@ export const chatMessages = sqliteTable(
 );
 
 
+export const chatModerationLogs = sqliteTable('chat_moderation_logs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  targetUserId: text('target_user_id').notNull(),
+  actorUserId: text('actor_user_id').notNull(),
+  action: text('action').notNull(), // 'timeout', 'untimeout', 'ban', 'unban'
+  reason: text('reason').notNull(),
+  durationSeconds: integer('duration_seconds'),
+  createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+});
+
 export const chatMessageReactions = sqliteTable(
   'chat_message_reactions',
   {
@@ -663,6 +679,7 @@ export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
 export type ChatChannel = typeof chatChannels.$inferSelect;
 export type ChatMessage = typeof chatMessages.$inferSelect;
 export type NewChatMessage = typeof chatMessages.$inferInsert;
+export type ChatModerationLog = typeof chatModerationLogs.$inferSelect;
 
 
 // ═══════════════════════════════════════════════════════════════════════════════

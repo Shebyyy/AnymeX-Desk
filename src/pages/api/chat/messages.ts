@@ -227,6 +227,40 @@ export const POST: APIRoute = async (ctx) => {
     const trimmedBody = body.trim().slice(0, 4000);
     const isStaff = atLeast(await levelOf(user.id), 'mod');
 
+    // Enforce Chat Ban and Timeout
+    const [authorRecord] = await db()
+      .select({
+        chatBanned: users.chatBanned,
+        chatBanReason: users.chatBanReason,
+        timedOutUntil: users.timedOutUntil,
+        timeoutReason: users.timeoutReason,
+      })
+      .from(users)
+      .where(eq(users.discordId, user.id))
+      .limit(1);
+
+    if (authorRecord?.chatBanned) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: `You are banned from chat. Reason: ${authorRecord.chatBanReason || 'No reason specified'}`,
+        }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (authorRecord?.timedOutUntil && authorRecord.timedOutUntil > nowSec) {
+      const remainingMinutes = Math.ceil((authorRecord.timedOutUntil - nowSec) / 60);
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: `You are timed out for another ${remainingMinutes} min(s). Reason: ${authorRecord.timeoutReason || 'No reason specified'}`,
+        }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
     const [channel] = await db()
       .select()
       .from(chatChannels)
