@@ -1,0 +1,33 @@
+﻿---
+import Base from '../layouts/Base.astro';
+import ChatRoom from '../components/ChatRoom.svelte';
+import { currentUser } from '../lib/auth';
+import { levelOf, atLeast } from '../lib/staff';
+
+export const prerender = false;
+
+const user = await currentUser(Astro);
+const isStaff = user ? atLeast(await levelOf(user.id), 'mod') : false;
+
+const currentUserProp = user
+  ? {
+      id: user.id,
+      username: user.username,
+      avatarHash: user.avatarHash,
+      isStaff,
+    }
+  : null;
+---
+
+<Base title="Support & Community Lounge · AnymeX Desk" description="Live discussion, support, and community talk for AnymeX Desk">
+  <div class="shell support-page-container">
+    <ChatRoom client:load currentUser={currentUserProp} />
+  </div>
+</Base>
+
+<style>
+  .support-page-container {
+    padding-top: 1.25rem;
+    padding-bottom: 2rem;
+  }
+</style>

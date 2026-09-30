@@ -538,6 +538,69 @@ export const subscriptions = sqliteTable(
 /**
  * Emoji reactions on comments.
  */
+
+/**
+ * Browser Web Push Subscriptions for native device notifications.
+ */
+export const pushSubscriptions = sqliteTable(
+  'push_subscriptions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.discordId, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull().unique(),
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    userAgent: text('user_agent'),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    lastUsedAt: integer('last_used_at'),
+  },
+  (t) => [index('push_subs_by_user').on(t.userId)],
+);
+
+/**
+ * Dedicated Chat & Support channels.
+ */
+export const chatChannels = sqliteTable('chat_channels', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description'),
+  icon: text('icon').default('message-square'),
+  isStaffOnly: integer('is_staff_only', { mode: 'boolean' }).default(false),
+  position: integer('position').default(0),
+});
+
+/**
+ * Dedicated Chat / Support messages with Discord-like replies, mentions, and report tags.
+ */
+export const chatMessages = sqliteTable(
+  'chat_messages',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    channelId: text('channel_id')
+      .notNull()
+      .references(() => chatChannels.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.discordId, { onDelete: 'cascade' }),
+    body: text('body').notNull(),
+    /** Discord-style reply reference */
+    replyToId: integer('reply_to_id'),
+    /** JSON string array of report IDs, e.g. "[42, 108]" */
+    taggedReportIds: text('tagged_report_ids'),
+    attachmentCount: integer('attachment_count').default(0),
+    isPinned: integer('is_pinned', { mode: 'boolean' }).default(false),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => [
+    index('chat_by_channel').on(t.channelId, t.createdAt),
+    index('chat_by_reply').on(t.replyToId),
+    index('chat_by_user').on(t.userId),
+  ],
+);
+
 export const commentReactions = sqliteTable(
   'comment_reactions',
   {
@@ -573,6 +636,13 @@ export type Label = typeof labels.$inferSelect;
 export type ReportLabel = typeof reportLabels.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type CommentReaction = typeof commentReactions.$inferSelect;
+
+export type PushSubscription = typeof pushSubscriptions.$inferSelect;
+export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
+export type ChatChannel = typeof chatChannels.$inferSelect;
+export type ChatMessage = typeof chatMessages.$inferSelect;
+export type NewChatMessage = typeof chatMessages.$inferInsert;
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers

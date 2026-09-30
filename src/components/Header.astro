@@ -30,6 +30,11 @@ const primaryTabs = [
     match: (p: string) =>
       p === '/' && new URL(Astro.url).searchParams.get('kind') === 'extension',
   },
+  {
+    href: '/support',
+    label: 'Support Lounge',
+    match: (p: string) => p.startsWith('/support'),
+  },
 ];
 
 const secondaryTabs = [
