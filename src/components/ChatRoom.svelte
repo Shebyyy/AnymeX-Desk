@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { isPushSupported, getPushSubscription, subscribeToPush, unsubscribeFromPush } from '../scripts/push-client';
 
@@ -28,7 +28,9 @@
     id: number;
     title: string;
     status: string;
+    statusLabel?: string;
     kind: string;
+    kindLabel?: string;
     votes: number;
     category: string | null;
   }
@@ -61,6 +63,16 @@
   let messagesEndRef = $state<HTMLDivElement | null>(null);
   let highlightedMessageId = $state<number | null>(null);
   let mobileSidebarOpen = $state<boolean>(false);
+
+  // ─────────────────────────────────────────────────────────────
+  // # Tag Autocomplete Search Popover
+  // ─────────────────────────────────────────────────────────────
+  let showReportPicker = $state<boolean>(false);
+  let reportSearchQuery = $state<string>('');
+  let reportGroups = $state<Record<string, TaggedReport[]>>({ bug: [], suggestion: [], extension: [] });
+  let isSearchingReports = $state<boolean>(false);
+  let reportDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let tagMatchStart = $state<number>(-1);
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -114,9 +126,67 @@
     }, 2500);
   }
 
+  async function searchReports(query: string) {
+    isSearchingReports = true;
+    try {
+      const res = await fetch(`/api/chat/reports-search?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      if (data.ok && data.grouped) {
+        reportGroups = data.grouped;
+        showReportPicker = true;
+      }
+    } catch (err) {
+      console.error('Failed searching reports:', err);
+    } finally {
+      isSearchingReports = false;
+    }
+  }
+
+  function checkInputForReportTag(inputVal: string, cursorPosition: number) {
+    const textBeforeCursor = inputVal.slice(0, cursorPosition);
+    const match = textBeforeCursor.match(/#([a-zA-Z0-9_\-\s]*)$/);
+
+    if (match && match[0].length <= 30) {
+      const query = match[1].trim();
+      tagMatchStart = match.index ?? 0;
+      reportSearchQuery = query;
+
+      if (reportDebounceTimer) clearTimeout(reportDebounceTimer);
+      reportDebounceTimer = setTimeout(() => {
+        searchReports(query);
+      }, 150);
+    } else {
+      showReportPicker = false;
+    }
+  }
+
+  function handleInput(e: Event) {
+    const target = e.target as HTMLTextAreaElement;
+    checkInputForReportTag(target.value, target.selectionStart || target.value.length);
+  }
+
+  function selectReportTag(rep: TaggedReport) {
+    const inputEl = document.getElementById('chat-composer-input') as HTMLTextAreaElement | null;
+    if (!inputEl) return;
+
+    const cursorPos = inputEl.selectionStart || inputText.length;
+    const before = inputText.slice(0, tagMatchStart);
+    const after = inputText.slice(cursorPos);
+
+    inputText = `${before}#${rep.id} ${after}`;
+    showReportPicker = false;
+
+    setTimeout(() => {
+      inputEl.focus();
+      const newPos = before.length + String(rep.id).length + 2;
+      inputEl.setSelectionRange(newPos, newPos);
+    }, 30);
+  }
+
   async function sendMessage() {
     if (!inputText.trim() || isSending || !currentUser) return;
     isSending = true;
+    showReportPicker = false;
 
     try {
       const res = await fetch('/api/chat/messages', {
@@ -145,7 +215,18 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      showReportPicker = false;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
+      if (showReportPicker) {
+        const first = reportGroups.bug[0] || reportGroups.suggestion[0] || reportGroups.extension[0];
+        if (first) {
+          e.preventDefault();
+          selectReportTag(first);
+          return;
+        }
+      }
       e.preventDefault();
       sendMessage();
     }
@@ -161,6 +242,16 @@
     inputText = inputText ? `${inputText} @${username} ` : `@${username} `;
     const inputEl = document.getElementById('chat-composer-input');
     if (inputEl) inputEl.focus();
+  }
+
+  function openTagPickerDirectly() {
+    inputText = inputText ? `${inputText} #` : '#';
+    const inputEl = document.getElementById('chat-composer-input') as HTMLTextAreaElement | null;
+    if (inputEl) {
+      inputEl.focus();
+      tagMatchStart = inputText.length - 1;
+      searchReports('');
+    }
   }
 
   async function togglePush() {
@@ -184,7 +275,6 @@
     await loadChannels();
     await loadMessages(true);
 
-    // Short-polling for live chat (every 3 seconds when tab is visible)
     pollTimer = setInterval(() => {
       if (document.visibilityState === 'visible') {
         loadMessages(false);
@@ -194,6 +284,7 @@
 
   onDestroy(() => {
     if (pollTimer) clearInterval(pollTimer);
+    if (reportDebounceTimer) clearTimeout(reportDebounceTimer);
   });
 
   function selectChannel(id: string) {
@@ -202,6 +293,7 @@
     isLoading = true;
     messages = [];
     replyingTo = null;
+    showReportPicker = false;
     loadMessages(true);
   }
 
@@ -424,8 +516,72 @@
       {/if}
     </div>
 
-    <!-- Message Composer -->
+    <!-- Message Composer with # Report Tagging Popover -->
     <div class="chat-composer-box">
+      <!-- Report Tagging Autocomplete Popover (Kind-wise) -->
+      {#if showReportPicker}
+        <div class="report-picker-popover">
+          <div class="picker-header">
+            <span class="picker-title">Tag a Report (Bugs, Suggestions, Extensions)</span>
+            <span class="picker-hint">{reportSearchQuery ? `Matching: "${reportSearchQuery}"` : 'Recent reports'}</span>
+            <button type="button" class="picker-close" onclick={() => (showReportPicker = false)}>✕</button>
+          </div>
+
+          <div class="picker-scroll-body">
+            {#if isSearchingReports}
+              <div class="picker-loading">Searching reports...</div>
+            {:else if !reportGroups.bug.length && !reportGroups.suggestion.length && !reportGroups.extension.length}
+              <div class="picker-empty">No reports matching "#{reportSearchQuery}"</div>
+            {:else}
+              <!-- Kind Section: Bugs -->
+              {#if reportGroups.bug.length > 0}
+                <div class="picker-kind-section">
+                  <div class="kind-section-title kind-bug">🐛 BUGS ({reportGroups.bug.length})</div>
+                  {#each reportGroups.bug as rep}
+                    <button type="button" class="picker-item" onclick={() => selectReportTag(rep)}>
+                      <span class="item-id">#{rep.id}</span>
+                      <span class="item-title">{rep.title}</span>
+                      <span class="item-status status-{rep.status}">{rep.statusLabel || rep.status}</span>
+                      <span class="item-votes">▲ {rep.votes}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+
+              <!-- Kind Section: Suggestions -->
+              {#if reportGroups.suggestion.length > 0}
+                <div class="picker-kind-section">
+                  <div class="kind-section-title kind-suggestion">💡 SUGGESTIONS ({reportGroups.suggestion.length})</div>
+                  {#each reportGroups.suggestion as rep}
+                    <button type="button" class="picker-item" onclick={() => selectReportTag(rep)}>
+                      <span class="item-id">#{rep.id}</span>
+                      <span class="item-title">{rep.title}</span>
+                      <span class="item-status status-{rep.status}">{rep.statusLabel || rep.status}</span>
+                      <span class="item-votes">▲ {rep.votes}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+
+              <!-- Kind Section: Extensions -->
+              {#if reportGroups.extension.length > 0}
+                <div class="picker-kind-section">
+                  <div class="kind-section-title kind-extension">🧩 EXTENSION ISSUES ({reportGroups.extension.length})</div>
+                  {#each reportGroups.extension as rep}
+                    <button type="button" class="picker-item" onclick={() => selectReportTag(rep)}>
+                      <span class="item-id">#{rep.id}</span>
+                      <span class="item-title">{rep.title}</span>
+                      <span class="item-status status-{rep.status}">{rep.statusLabel || rep.status}</span>
+                      <span class="item-votes">▲ {rep.votes}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            {/if}
+          </div>
+        </div>
+      {/if}
+
       {#if replyingTo}
         <div class="active-reply-bar">
           <div class="reply-bar-left">
@@ -439,14 +595,27 @@
 
       {#if currentUser}
         <div class="composer-input-row">
-          <textarea
-            id="chat-composer-input"
-            class="composer-textarea"
-            placeholder="Message #{channels.find((c) => c.id === activeChannelId)?.name || 'channel'}..."
-            bind:value={inputText}
-            onkeydown={handleKeydown}
-            rows="1"
-          ></textarea>
+          <div class="textarea-wrapper">
+            <textarea
+              id="chat-composer-input"
+              class="composer-textarea"
+              placeholder="Message #{channels.find((c) => c.id === activeChannelId)?.name || 'channel'}... Type #crash or #12 to tag a report"
+              bind:value={inputText}
+              oninput={handleInput}
+              onkeydown={handleKeydown}
+              rows="1"
+            ></textarea>
+            <!-- Quick Tag Report Helper Button -->
+            <button
+              type="button"
+              class="tag-helper-btn"
+              title="Tag a report (#)"
+              onclick={openTagPickerDirectly}
+            >
+              # Tag
+            </button>
+          </div>
+
           <button
             type="button"
             class="send-btn"
@@ -951,6 +1120,148 @@
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
+    position: relative;
+  }
+
+  /* Report Picker Popover */
+  .report-picker-popover {
+    position: absolute;
+    bottom: 100%;
+    left: 0.85rem;
+    right: 0.85rem;
+    max-height: 320px;
+    background: #181a24;
+    border: 1px solid rgba(88, 101, 242, 0.4);
+    border-radius: 10px;
+    box-shadow: 0 -8px 25px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    z-index: 50;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+
+  .picker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 0.78rem;
+  }
+
+  .picker-title {
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .picker-hint {
+    color: #94a3b8;
+    font-size: 0.72rem;
+  }
+
+  .picker-close {
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .picker-scroll-body {
+    overflow-y: auto;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .picker-loading,
+  .picker-empty {
+    padding: 1rem;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 0.82rem;
+  }
+
+  .picker-kind-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .kind-section-title {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    display: inline-block;
+  }
+
+  .kind-bug {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.12);
+  }
+
+  .kind-suggestion {
+    color: #60a5fa;
+    background: rgba(59, 130, 246, 0.12);
+  }
+
+  .kind-extension {
+    color: #c084fc;
+    background: rgba(168, 85, 247, 0.12);
+  }
+
+  .picker-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    padding: 0.4rem 0.6rem;
+    color: #e2e8f0;
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.82rem;
+    transition: background 0.12s, border-color 0.12s;
+  }
+
+  .picker-item:hover {
+    background: rgba(88, 101, 242, 0.2);
+    border-color: #5865f2;
+  }
+
+  .item-id {
+    font-weight: 700;
+    color: #5865f2;
+    min-width: 32px;
+  }
+
+  .item-title {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #fff;
+  }
+
+  .item-status {
+    font-size: 0.68rem;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #cbd5e1;
+    white-space: nowrap;
+  }
+
+  .item-votes {
+    font-size: 0.72rem;
+    color: #f59e0b;
+    font-weight: 700;
   }
 
   .active-reply-bar {
@@ -995,12 +1306,19 @@
     align-items: flex-end;
   }
 
-  .composer-textarea {
+  .textarea-wrapper {
     flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .composer-textarea {
+    width: 100%;
     background: rgba(0, 0, 0, 0.25);
     border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
     border-radius: 8px;
-    padding: 0.55rem 0.75rem;
+    padding: 0.55rem 3.5rem 0.55rem 0.75rem;
     color: #fff;
     font-size: 0.9rem;
     font-family: inherit;
@@ -1012,6 +1330,24 @@
 
   .composer-textarea:focus {
     border-color: #5865f2;
+  }
+
+  .tag-helper-btn {
+    position: absolute;
+    right: 6px;
+    background: rgba(88, 101, 242, 0.18);
+    border: 1px solid rgba(88, 101, 242, 0.3);
+    color: #a5b4fc;
+    border-radius: 5px;
+    padding: 2px 7px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .tag-helper-btn:hover {
+    background: #5865f2;
+    color: #fff;
   }
 
   .send-btn {

@@ -1,4 +1,5 @@
 ﻿import type { APIRoute } from 'astro';
+import { env } from 'cloudflare:workers';
 import { db } from '../../../lib/db/client';
 import { chatMessages, chatChannels, users, reports } from '../../../lib/db/schema';
 import { currentUser } from '../../../lib/auth';
@@ -229,9 +230,10 @@ export const POST: APIRoute = async (ctx) => {
       .returning();
 
     // ─────────────────────────────────────────────────────────────
-    // Push Notifications for Replies & Mentions
+    // Push Notifications for Replies & Mentions (Astro 6/7 Cloudflare safe)
     // ─────────────────────────────────────────────────────────────
-    const runtimeEnv = ctx.locals.runtime?.env as any;
+    const cf = (ctx.locals as any)?.cfContext;
+    const runtimeEnv = env as any;
 
     // 1. If replying to a message, notify original author via Push
     if (inserted.replyToId) {
@@ -242,18 +244,21 @@ export const POST: APIRoute = async (ctx) => {
         .limit(1);
 
       if (parent && parent.userId !== user.id) {
-        ctx.locals.runtime?.ctx?.waitUntil(
-          sendPushToUser(
-            parent.userId,
-            {
-              title: `#${channel.name}: ${user.username} replied to you`,
-              body: trimmedBody.slice(0, 100),
-              url: `/support?channel=${channelId}`,
-              tag: `reply-${inserted.id}`,
-            },
-            runtimeEnv,
-          ),
+        const task = sendPushToUser(
+          parent.userId,
+          {
+            title: `#${channel.name}: ${user.username} replied to you`,
+            body: trimmedBody.slice(0, 100),
+            url: `/support?channel=${channelId}`,
+            tag: `reply-${inserted.id}`,
+          },
+          runtimeEnv,
         );
+        if (cf?.waitUntil) {
+          cf.waitUntil(task);
+        } else {
+          task.catch(() => {});
+        }
       }
     }
 
@@ -269,18 +274,21 @@ export const POST: APIRoute = async (ctx) => {
           .limit(1);
 
         if (targetUser && targetUser.discordId !== user.id) {
-          ctx.locals.runtime?.ctx?.waitUntil(
-            sendPushToUser(
-              targetUser.discordId,
-              {
-                title: `#${channel.name}: ${user.username} mentioned you`,
-                body: trimmedBody.slice(0, 100),
-                url: `/support?channel=${channelId}`,
-                tag: `mention-${inserted.id}`,
-              },
-              runtimeEnv,
-            ),
+          const task = sendPushToUser(
+            targetUser.discordId,
+            {
+              title: `#${channel.name}: ${user.username} mentioned you`,
+              body: trimmedBody.slice(0, 100),
+              url: `/support?channel=${channelId}`,
+              tag: `mention-${inserted.id}`,
+            },
+            runtimeEnv,
           );
+          if (cf?.waitUntil) {
+            cf.waitUntil(task);
+          } else {
+            task.catch(() => {});
+          }
         }
       }
     }
