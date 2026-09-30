@@ -92,15 +92,11 @@
   // Quick reaction popup from hover toolbar
   let hoverReactionMsgId = $state<number | null>(null);
 
-  // ─────────────────────────────────────────────────────────────
-  // Editing state using main bottom input box (Discord style)
-  // ─────────────────────────────────────────────────────────────
+  // Editing state using main bottom input box (Discord / Telegram style)
   let editingMessage = $state<ChatMessage | null>(null);
   let isSavingEdit = $state<boolean>(false);
 
-  // ─────────────────────────────────────────────────────────────
   // # Tag Autocomplete Search Popover
-  // ─────────────────────────────────────────────────────────────
   let showReportPicker = $state<boolean>(false);
   let reportSearchQuery = $state<string>('');
   let reportGroups = $state<Record<string, TaggedReport[]>>({ bug: [], suggestion: [], extension: [] });
@@ -119,9 +115,7 @@
     return list;
   });
 
-  // ─────────────────────────────────────────────────────────────
   // @ User Mention Autocomplete Popover
-  // ─────────────────────────────────────────────────────────────
   let showUserPicker = $state<boolean>(false);
   let userSearchQuery = $state<string>('');
   let userSearchResults = $state<MentionUser[]>([]);
@@ -183,18 +177,14 @@
     }, 2500);
   }
 
-  // ─────────────────────────────────────────────────────────────
   // Auto-resize Textarea
-  // ─────────────────────────────────────────────────────────────
   function autoResize() {
     if (!textareaRef) return;
     textareaRef.style.height = 'auto';
     textareaRef.style.height = Math.min(textareaRef.scrollHeight, 180) + 'px';
   }
 
-  // ─────────────────────────────────────────────────────────────
   // Report Search API with Sequential Guard & Fast Filtering
-  // ─────────────────────────────────────────────────────────────
   async function searchReports(query: string) {
     const seq = ++reportReqSeq;
     isSearchingReports = true;
@@ -213,9 +203,7 @@
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // User Mention Search API with Sequential Guard & Fast Filtering
-  // ─────────────────────────────────────────────────────────────
   async function searchUsers(query: string) {
     const seq = ++userReqSeq;
     isSearchingUsers = true;
@@ -285,7 +273,6 @@
     if (tagMatchStart < 0) return;
     const beforeTag = inputText.slice(0, tagMatchStart);
     const afterCursor = inputText.slice(textareaRef?.selectionStart ?? inputText.length);
-    // Insert #ID followed by a space
     inputText = `${beforeTag}#${report.id} ${afterCursor}`;
     showReportPicker = false;
     tagMatchStart = -1;
@@ -305,7 +292,6 @@
     if (userMatchStart < 0) return;
     const beforeMention = inputText.slice(0, userMatchStart);
     const afterCursor = inputText.slice(textareaRef?.selectionStart ?? inputText.length);
-    // Insert @username followed by a space
     inputText = `${beforeMention}@${user.username} ${afterCursor}`;
     showUserPicker = false;
     userMatchStart = -1;
@@ -322,7 +308,6 @@
   }
 
   function handleKeyDown(e: KeyboardEvent) {
-    // Navigation inside @ User Mention picker
     if (showUserPicker && userSearchResults.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -347,7 +332,6 @@
       }
     }
 
-    // Navigation inside # Report Tag picker
     if (showReportPicker && flattenedReports.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -372,7 +356,6 @@
       }
     }
 
-    // Cancel edit or reply with Escape
     if (e.key === 'Escape') {
       if (editingMessage) {
         cancelEditing();
@@ -384,7 +367,6 @@
       }
     }
 
-    // Enter sends message or saves edit (Shift+Enter inserts newline)
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendOrSave();
@@ -438,9 +420,7 @@
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Discord-style Context Menu / Long Press Sheet Handlers
-  // ─────────────────────────────────────────────────────────────
+  // Discord-style Context Menu / Long Press Handlers
   let longPressTimer: ReturnType<typeof setTimeout> | null = null;
   let touchStartX = 0;
   let touchStartY = 0;
@@ -515,9 +495,7 @@
     }, 20);
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Edit in Main Bottom Input Box (Discord / Telegram style)
-  // ─────────────────────────────────────────────────────────────
+  // Edit in Main Bottom Input Box
   function startEditing(msg: ChatMessage) {
     editingMessage = msg;
     replyingTo = null;
@@ -590,15 +568,12 @@
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // Emoji Reactions
-  // ─────────────────────────────────────────────────────────────
   async function toggleReaction(messageId: number, emoji: string) {
     if (!currentUser) return;
     hoverReactionMsgId = null;
     closeContextMenu();
 
-    // Optimistic UI update
     messages = messages.map((m) => {
       if (m.id !== messageId) return m;
       const current = m.reactions || [];
@@ -636,9 +611,7 @@
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Push Notification Subscription
-  // ─────────────────────────────────────────────────────────────
+  // Push Notifications
   async function togglePush() {
     if (!pushSupported) return;
     if (pushActive) {
@@ -711,7 +684,9 @@
       onclick={() => (mobileSidebarOpen = !mobileSidebarOpen)}
       aria-label="Toggle Channels"
     >
-      <span class="icon">💬</span>
+      <svg class="ui-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+      </svg>
       <span class="curr-channel-name">#{channels.find((c) => c.id === activeChannelId)?.name || 'channels'}</span>
       <span class="arrow">{mobileSidebarOpen ? '▲' : '▼'}</span>
     </button>
@@ -723,7 +698,20 @@
           onclick={togglePush}
           title={pushActive ? 'Disable Push' : 'Enable Push'}
         >
-          {pushActive ? '🔔' : '🔕'}
+          {#if pushActive}
+            <svg class="ui-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+            </svg>
+          {:else}
+            <svg class="ui-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              <path d="M18.63 13A17.89 17.89 0 0 1 18 8"></path>
+              <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"></path>
+              <path d="M18 8a6 6 0 0 0-9.33-5"></path>
+              <line x1="1" y1="1" x2="23" y2="23"></line>
+            </svg>
+          {/if}
         </button>
       {/if}
     </div>
@@ -734,7 +722,9 @@
     <aside class="chat-sidebar" class:mobile-open={mobileSidebarOpen}>
       <div class="sidebar-header">
         <div class="sidebar-title">
-          <span class="title-icon">💬</span>
+          <svg class="ui-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          </svg>
           <span class="title-text">CHANNELS</span>
         </div>
         {#if pushSupported}
@@ -744,7 +734,22 @@
             onclick={togglePush}
             title={pushActive ? 'Push Notifications Active' : 'Enable Push Notifications'}
           >
-            {pushActive ? '🔔 Push On' : '🔕 Push Off'}
+            {#if pushActive}
+              <svg class="ui-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              </svg>
+              <span>Push On</span>
+            {:else}
+              <svg class="ui-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                <path d="M18.63 13A17.89 17.89 0 0 1 18 8"></path>
+                <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"></path>
+                <path d="M18 8a6 6 0 0 0-9.33-5"></path>
+                <line x1="1" y1="1" x2="23" y2="23"></line>
+              </svg>
+              <span>Push Off</span>
+            {/if}
           </button>
         {/if}
       </div>
@@ -756,8 +761,8 @@
             class:active={activeChannelId === channel.id}
             onclick={() => handleSelectChannel(channel.id)}
           >
-            <span class="chan-icon">{channel.icon}</span>
-            <span class="chan-name">#{channel.name}</span>
+            <span class="chan-hash-icon">#</span>
+            <span class="chan-name">{channel.name}</span>
             {#if channel.isStaffOnly}
               <span class="staff-badge">STAFF</span>
             {/if}
@@ -766,7 +771,14 @@
       </div>
 
       <div class="sidebar-info-card">
-        <div class="info-title">💡 Pro Tips</div>
+        <div class="info-title">
+          <svg class="ui-icon info-svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="9" y1="18" x2="15" y2="18"></line>
+            <line x1="10" y1="22" x2="14" y2="22"></line>
+            <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"></path>
+          </svg>
+          <span>Pro Tips</span>
+        </div>
         <div class="info-body">
           <p>• Type <strong>#</strong> to link any bug or suggestion report.</p>
           <p>• Type <strong>@</strong> to mention community members.</p>
@@ -798,7 +810,11 @@
           </div>
         {:else if messages.length === 0}
           <div class="stream-state empty">
-            <div class="empty-icon">💬</div>
+            <div class="empty-icon-wrap">
+              <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+              </svg>
+            </div>
             <h3>Welcome to #{channels.find((c) => c.id === activeChannelId)?.name}!</h3>
             <p>This is the start of this channel. Say hello or share what's on your mind!</p>
           </div>
@@ -912,7 +928,7 @@
                   {/if}
                 </div>
 
-                <!-- Clean Discord-Style Hover Bar (Only 3 icons on Desktop) -->
+                <!-- Clean Discord-Style Hover Bar (Only 3 crisp SVG icons on Desktop) -->
                 <div class="desktop-hover-bar">
                   <!-- Quick Reaction Picker Toggle -->
                   <div class="reaction-trigger-wrap">
@@ -923,8 +939,14 @@
                         hoverReactionMsgId = hoverReactionMsgId === msg.id ? null : msg.id;
                       }}
                       title="Add Reaction"
+                      aria-label="Add Reaction"
                     >
-                      😊
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                        <line x1="9" y1="9" x2="9.01" y2="9"></line>
+                        <line x1="15" y1="9" x2="15.01" y2="9"></line>
+                      </svg>
                     </button>
                     {#if hoverReactionMsgId === msg.id}
                       <div class="hover-emoji-picker" onclick={(e) => e.stopPropagation()}>
@@ -938,8 +960,11 @@
                   </div>
 
                   <!-- Reply -->
-                  <button class="hover-icon-btn" onclick={() => triggerReply(msg)} title="Reply">
-                    ↩
+                  <button class="hover-icon-btn" onclick={() => triggerReply(msg)} title="Reply" aria-label="Reply">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="9 17 4 12 9 7"></polyline>
+                      <path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>
+                    </svg>
                   </button>
 
                   <!-- More Options (...) -->
@@ -950,8 +975,13 @@
                       openContextMenu(msg, e.clientX, e.clientY);
                     }}
                     title="More Options"
+                    aria-label="More Options"
                   >
-                    ⋯
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                      <circle cx="5" cy="12" r="2"></circle>
+                      <circle cx="12" cy="12" r="2"></circle>
+                      <circle cx="19" cy="12" r="2"></circle>
+                    </svg>
                   </button>
                 </div>
               </div>
@@ -1059,13 +1089,21 @@
         <!-- Active Reply Quoting Bar -->
         {#if replyingTo && !editingMessage}
           <div class="active-reply-bar">
-            <span class="reply-icon">↪</span>
+            <span class="reply-icon">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 17 4 12 9 7"></polyline>
+                <path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>
+              </svg>
+            </span>
             <div class="reply-text">
               Replying to <span class="reply-target">@{replyingTo.authorName}</span>:
               <span class="reply-snippet-quote">"{replyingTo.body.slice(0, 80)}"</span>
             </div>
             <button class="reply-cancel-btn" onclick={() => (replyingTo = null)} aria-label="Cancel reply">
-              ✕
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
             </button>
           </div>
         {/if}
@@ -1074,13 +1112,22 @@
         {#if editingMessage}
           <div class="active-edit-bar">
             <div class="edit-bar-left">
-              <span class="edit-bar-icon">✏️</span>
+              <span class="edit-bar-icon">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+                </svg>
+              </span>
               <span class="edit-bar-title">Editing message:</span>
               <span class="edit-bar-snippet">"{editingMessage.body.slice(0, 70)}"</span>
             </div>
             <div class="edit-bar-right">
               <span class="edit-hint-text">esc to cancel · enter to save</span>
-              <button class="edit-cancel-btn" onclick={cancelEditing} aria-label="Cancel editing">✕</button>
+              <button class="edit-cancel-btn" onclick={cancelEditing} aria-label="Cancel editing">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
             </div>
           </div>
         {/if}
@@ -1111,8 +1158,8 @@
                 <span class="sending-spinner"></span>
               {:else if editingMessage}
                 <!-- Checkmark Icon for Save -->
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="20 6 9 17 4 12"></polyline>
                 </svg>
               {:else}
                 <!-- Paper Plane Icon for Send -->
@@ -1158,23 +1205,44 @@
     <div class="context-divider"></div>
 
     <button class="context-menu-item" onclick={() => activeContextMsg && triggerReply(activeContextMsg)}>
-      <span class="item-icon">↩</span>
+      <span class="item-icon">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 17 4 12 9 7"></polyline>
+          <path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>
+        </svg>
+      </span>
       <span class="item-label">Reply</span>
     </button>
 
     <button class="context-menu-item" onclick={() => activeContextMsg && copyMessageText(activeContextMsg)}>
-      <span class="item-icon">📋</span>
+      <span class="item-icon">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      </span>
       <span class="item-label">Copy Text</span>
     </button>
 
     {#if currentUser && (currentUser.id === activeContextMsg.userId || currentUser.isStaff)}
       <div class="context-divider"></div>
       <button class="context-menu-item" onclick={() => activeContextMsg && startEditing(activeContextMsg)}>
-        <span class="item-icon">✏️</span>
+        <span class="item-icon">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+          </svg>
+        </span>
         <span class="item-label">Edit Message</span>
       </button>
       <button class="context-menu-item danger" onclick={() => activeContextMsg && deleteMessage(activeContextMsg.id)}>
-        <span class="item-icon">🗑️</span>
+        <span class="item-icon">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            <line x1="10" y1="11" x2="10" y2="17"></line>
+            <line x1="14" y1="11" x2="14" y2="17"></line>
+          </svg>
+        </span>
         <span class="item-label">Delete Message</span>
       </button>
     {/if}
@@ -1203,22 +1271,43 @@
 
       <div class="sheet-items-list">
         <button class="sheet-item" onclick={() => activeContextMsg && triggerReply(activeContextMsg)}>
-          <span class="sheet-icon">↩</span>
+          <span class="sheet-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 17 4 12 9 7"></polyline>
+              <path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>
+            </svg>
+          </span>
           <span class="sheet-label">Reply</span>
         </button>
 
         <button class="sheet-item" onclick={() => activeContextMsg && copyMessageText(activeContextMsg)}>
-          <span class="sheet-icon">📋</span>
+          <span class="sheet-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </span>
           <span class="sheet-label">Copy Text</span>
         </button>
 
         {#if currentUser && (currentUser.id === activeContextMsg.userId || currentUser.isStaff)}
           <button class="sheet-item" onclick={() => activeContextMsg && startEditing(activeContextMsg)}>
-            <span class="sheet-icon">✏️</span>
+            <span class="sheet-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+              </svg>
+            </span>
             <span class="sheet-label">Edit Message</span>
           </button>
           <button class="sheet-item danger" onclick={() => activeContextMsg && deleteMessage(activeContextMsg.id)}>
-            <span class="sheet-icon">🗑️</span>
+            <span class="sheet-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                <line x1="10" y1="11" x2="10" y2="17"></line>
+                <line x1="14" y1="11" x2="14" y2="17"></line>
+              </svg>
+            </span>
             <span class="sheet-label">Delete Message</span>
           </button>
         {/if}
@@ -1234,7 +1323,10 @@
 <!-- Copied Toast -->
 {#if showCopiedToast}
   <div class="copied-toast">
-    <span>✓ Copied to clipboard</span>
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#34d399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="20 6 9 17 4 12"></polyline>
+    </svg>
+    <span>Copied to clipboard</span>
   </div>
 {/if}
 
@@ -1296,7 +1388,9 @@
     padding: 6px 10px;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .push-toggle-btn-small.active {
     background: rgba(16, 185, 129, 0.15);
@@ -1347,6 +1441,9 @@
     color: var(--text-secondary, #a1a1aa);
     cursor: pointer;
     transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 5px;
   }
   .push-toggle-btn.active {
     background: rgba(16, 185, 129, 0.15);
@@ -1390,6 +1487,12 @@
     font-weight: 600;
   }
 
+  .chan-hash-icon {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-muted);
+  }
+
   .chan-name {
     flex: 1 1 auto;
     overflow: hidden;
@@ -1418,6 +1521,9 @@
   }
 
   .info-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-weight: 700;
     color: var(--text-secondary, #a1a1aa);
     margin-bottom: 6px;
@@ -1510,8 +1616,8 @@
     padding: 40px 20px;
   }
 
-  .stream-state.empty .empty-icon {
-    font-size: 40px;
+  .empty-icon-wrap {
+    color: var(--text-muted);
     margin-bottom: 12px;
   }
 
@@ -1846,7 +1952,6 @@
     border: none;
     color: var(--text-secondary, #a1a1aa);
     padding: 4px 7px;
-    font-size: 13px;
     cursor: pointer;
     transition: background 0.1s, color 0.1s;
     display: flex;
@@ -1967,9 +2072,10 @@
   }
 
   .item-icon {
-    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 18px;
-    text-align: center;
   }
 
   /* ─────────────────────────────────────────────────────────────
@@ -2055,7 +2161,9 @@
   }
 
   .sheet-icon {
-    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 22px;
   }
 
@@ -2095,6 +2203,9 @@
     font-weight: 600;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
     z-index: 1100;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   /* ─────────────────────────────────────────────────────────────
@@ -2243,6 +2354,8 @@
   }
 
   .reply-icon {
+    display: flex;
+    align-items: center;
     color: var(--accent-gold, #f59e0b);
   }
 
@@ -2269,8 +2382,10 @@
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    padding: 2px 6px;
-    font-size: 12px;
+    padding: 2px 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .reply-cancel-btn:hover {
     color: #fff;
@@ -2297,7 +2412,9 @@
   }
 
   .edit-bar-icon {
-    font-size: 13px;
+    display: flex;
+    align-items: center;
+    color: #60a5fa;
   }
 
   .edit-bar-title {
@@ -2331,8 +2448,10 @@
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    padding: 2px 6px;
-    font-size: 12px;
+    padding: 2px 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .edit-cancel-btn:hover {
     color: #fff;
