@@ -37,7 +37,7 @@ const ogImage = reportIdMatch
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" class:list={[{ 'full-screen-layout': fullWidth }]}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -92,7 +92,7 @@ const ogImage = reportIdMatch
     />
   </head>
 
-  <body>
+  <body class:list={[{ 'full-screen-layout': fullWidth }]}>
     {staffPreview?.isPreview && (
       <RolePreviewBanner realLevel={staffPreview.realLevel} effectiveLevel={staffPreview.effectiveLevel} />
     )}
@@ -114,6 +114,28 @@ const ogImage = reportIdMatch
     <PreferencesModal />
     <InstallBanner />
 
+    <style is:global>
+      html.full-screen-layout,
+      body.full-screen-layout {
+        height: 100dvh !important;
+        max-height: 100dvh !important;
+        overflow: hidden !important;
+      }
+      body.full-screen-layout {
+        display: flex !important;
+        flex-direction: column !important;
+      }
+      body.full-screen-layout main.full-bleed {
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        height: calc(100dvh - 56px) !important;
+        max-height: calc(100dvh - 56px) !important;
+        overflow: hidden !important;
+        padding-block: 0 !important;
+        padding-inline: 0 !important;
+        max-inline-size: 100% !important;
+      }
+    </style>
     <style>
       main {
         flex: 1 1 auto;

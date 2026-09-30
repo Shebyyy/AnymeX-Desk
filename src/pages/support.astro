@@ -25,17 +25,5 @@ const currentUserProp = user
   fullWidth={true}
   noFooter={true}
 >
-  <div class="support-chat-fullscreen">
-    <ChatRoom client:load currentUser={currentUserProp} />
-  </div>
+  <ChatRoom client:load currentUser={currentUserProp} />
 </Base>
-
-<style>
-  .support-chat-fullscreen {
-    width: 100%;
-    height: calc(100dvh - 56px);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-</style>

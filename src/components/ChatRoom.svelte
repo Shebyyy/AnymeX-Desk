@@ -82,11 +82,20 @@
 
   // Quick reactions palette
   const QUICK_EMOJIS = ['👍', '❤️', '🔥', '😂', '🎉', '👀', '🚀'];
-  let activeReactionMenuMsgId = $state<number | null>(null);
 
-  // Edit message state
-  let editingMessageId = $state<number | null>(null);
-  let editingText = $state<string>('');
+  // Discord-style Context Menu / Long Press Action Sheet
+  let activeContextMsg = $state<ChatMessage | null>(null);
+  let contextMenuPos = $state<{ x: number; y: number } | null>(null);
+  let isMobileSheet = $state<boolean>(false);
+  let showCopiedToast = $state<boolean>(false);
+
+  // Quick reaction popup from hover toolbar
+  let hoverReactionMsgId = $state<number | null>(null);
+
+  // ─────────────────────────────────────────────────────────────
+  // Editing state using main bottom input box (Discord style)
+  // ─────────────────────────────────────────────────────────────
+  let editingMessage = $state<ChatMessage | null>(null);
   let isSavingEdit = $state<boolean>(false);
 
   // ─────────────────────────────────────────────────────────────
@@ -99,6 +108,7 @@
   let reportDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let tagMatchStart = $state<number>(-1);
   let selectedReportIndex = $state<number>(0);
+  let reportReqSeq = 0;
 
   // Flattened reports for arrow navigation
   let flattenedReports = $derived.by(() => {
@@ -119,6 +129,7 @@
   let userDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let userMatchStart = $state<number>(-1);
   let selectedUserIndex = $state<number>(0);
+  let userReqSeq = 0;
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -182,14 +193,15 @@
   }
 
   // ─────────────────────────────────────────────────────────────
-  // Report Search API & Picker Selection
+  // Report Search API with Sequential Guard & Fast Filtering
   // ─────────────────────────────────────────────────────────────
   async function searchReports(query: string) {
+    const seq = ++reportReqSeq;
     isSearchingReports = true;
     try {
       const res = await fetch(`/api/chat/reports-search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
-      if (data.ok && data.grouped) {
+      if (seq === reportReqSeq && data.ok && data.grouped) {
         reportGroups = data.grouped;
         selectedReportIndex = 0;
         showReportPicker = true;
@@ -197,19 +209,20 @@
     } catch (err) {
       console.error('Failed searching reports:', err);
     } finally {
-      isSearchingReports = false;
+      if (seq === reportReqSeq) isSearchingReports = false;
     }
   }
 
   // ─────────────────────────────────────────────────────────────
-  // User Mention Search API & Picker Selection
+  // User Mention Search API with Sequential Guard & Fast Filtering
   // ─────────────────────────────────────────────────────────────
   async function searchUsers(query: string) {
+    const seq = ++userReqSeq;
     isSearchingUsers = true;
     try {
       const res = await fetch(`/users/search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
-      if (Array.isArray(data)) {
+      if (seq === userReqSeq && Array.isArray(data)) {
         userSearchResults = data;
         selectedUserIndex = 0;
         showUserPicker = true;
@@ -217,42 +230,44 @@
     } catch (err) {
       console.error('Failed searching users:', err);
     } finally {
-      isSearchingUsers = false;
+      if (seq === userReqSeq) isSearchingUsers = false;
     }
   }
 
   function checkInputTriggers(inputVal: string, cursorPosition: number) {
     const textBeforeCursor = inputVal.slice(0, cursorPosition);
 
-    // 1. Check for @mention trigger: @username without spaces
+    // 1. Check for @mention trigger (e.g. "@" or "@sheby", strictly no whitespace)
     const mentionMatch = textBeforeCursor.match(/(?:^|\s)@([a-zA-Z0-9_.-]*)$/);
     if (mentionMatch) {
+      const query = mentionMatch[1];
       const atSymbolIndex = textBeforeCursor.lastIndexOf('@');
       userMatchStart = atSymbolIndex;
-      userSearchQuery = mentionMatch[1];
+      userSearchQuery = query;
       showReportPicker = false;
 
       if (userDebounceTimer) clearTimeout(userDebounceTimer);
       userDebounceTimer = setTimeout(() => {
-        searchUsers(userSearchQuery);
-      }, 100);
+        searchUsers(query);
+      }, 40);
       return;
     } else {
       showUserPicker = false;
     }
 
-    // 2. Check for #report trigger: #keyword without spaces
+    // 2. Check for #report trigger (e.g. "#" or "#cras", strictly no whitespace)
     const reportMatch = textBeforeCursor.match(/(?:^|\s)#([a-zA-Z0-9_\-]*)$/);
     if (reportMatch) {
+      const query = reportMatch[1];
       const hashSymbolIndex = textBeforeCursor.lastIndexOf('#');
       tagMatchStart = hashSymbolIndex;
-      reportSearchQuery = reportMatch[1];
+      reportSearchQuery = query;
       showUserPicker = false;
 
       if (reportDebounceTimer) clearTimeout(reportDebounceTimer);
       reportDebounceTimer = setTimeout(() => {
-        searchReports(reportSearchQuery);
-      }, 150);
+        searchReports(query);
+      }, 40);
       return;
     } else {
       showReportPicker = false;
@@ -270,7 +285,7 @@
     if (tagMatchStart < 0) return;
     const beforeTag = inputText.slice(0, tagMatchStart);
     const afterCursor = inputText.slice(textareaRef?.selectionStart ?? inputText.length);
-    // Replace trigger with #ID and a trailing space
+    // Insert #ID followed by a space
     inputText = `${beforeTag}#${report.id} ${afterCursor}`;
     showReportPicker = false;
     tagMatchStart = -1;
@@ -290,7 +305,7 @@
     if (userMatchStart < 0) return;
     const beforeMention = inputText.slice(0, userMatchStart);
     const afterCursor = inputText.slice(textareaRef?.selectionStart ?? inputText.length);
-    // Replace trigger with @username and a trailing space
+    // Insert @username followed by a space
     inputText = `${beforeMention}@${user.username} ${afterCursor}`;
     showUserPicker = false;
     userMatchStart = -1;
@@ -307,7 +322,7 @@
   }
 
   function handleKeyDown(e: KeyboardEvent) {
-    // Handling navigation when @ User Mention picker is open
+    // Navigation inside @ User Mention picker
     if (showUserPicker && userSearchResults.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -332,7 +347,7 @@
       }
     }
 
-    // Handling navigation when # Report Tag picker is open
+    // Navigation inside # Report Tag picker
     if (showReportPicker && flattenedReports.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -357,9 +372,29 @@
       }
     }
 
-    // Normal Enter sends the message (Shift+Enter inserts newline)
+    // Cancel edit or reply with Escape
+    if (e.key === 'Escape') {
+      if (editingMessage) {
+        cancelEditing();
+        return;
+      }
+      if (replyingTo) {
+        replyingTo = null;
+        return;
+      }
+    }
+
+    // Enter sends message or saves edit (Shift+Enter inserts newline)
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      handleSendOrSave();
+    }
+  }
+
+  function handleSendOrSave() {
+    if (editingMessage) {
+      saveEdit();
+    } else {
       sendMessage();
     }
   }
@@ -404,23 +439,113 @@
   }
 
   // ─────────────────────────────────────────────────────────────
-  // Edit & Delete Actions
+  // Discord-style Context Menu / Long Press Sheet Handlers
+  // ─────────────────────────────────────────────────────────────
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let touchStartX = 0;
+  let touchStartY = 0;
+
+  function handleTouchStart(e: TouchEvent, msg: ChatMessage) {
+    const touch = e.touches[0];
+    touchStartX = touch.clientX;
+    touchStartY = touch.clientY;
+    longPressTimer = setTimeout(() => {
+      openContextMenu(msg, touch.clientX, touch.clientY);
+    }, 400);
+  }
+
+  function handleTouchMove(e: TouchEvent) {
+    if (!longPressTimer) return;
+    const touch = e.touches[0];
+    if (Math.abs(touch.clientX - touchStartX) > 10 || Math.abs(touch.clientY - touchStartY) > 10) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function handleTouchEnd() {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function handleContextMenu(e: MouseEvent, msg: ChatMessage) {
+    e.preventDefault();
+    openContextMenu(msg, e.clientX, e.clientY);
+  }
+
+  function openContextMenu(msg: ChatMessage, x: number, y: number) {
+    activeContextMsg = msg;
+    hoverReactionMsgId = null;
+
+    if (window.innerWidth <= 768) {
+      isMobileSheet = true;
+      contextMenuPos = null;
+    } else {
+      isMobileSheet = false;
+      const menuWidth = 220;
+      const menuHeight = 260;
+      const clampedX = Math.min(x, window.innerWidth - menuWidth - 10);
+      const clampedY = Math.min(y, window.innerHeight - menuHeight - 10);
+      contextMenuPos = { x: clampedX, y: clampedY };
+    }
+  }
+
+  function closeContextMenu() {
+    activeContextMsg = null;
+    contextMenuPos = null;
+  }
+
+  function copyMessageText(msg: ChatMessage) {
+    navigator.clipboard.writeText(msg.body);
+    closeContextMenu();
+    showCopiedToast = true;
+    setTimeout(() => {
+      showCopiedToast = false;
+    }, 2000);
+  }
+
+  function triggerReply(msg: ChatMessage) {
+    replyingTo = msg;
+    editingMessage = null;
+    closeContextMenu();
+    setTimeout(() => {
+      if (textareaRef) textareaRef.focus();
+    }, 20);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Edit in Main Bottom Input Box (Discord / Telegram style)
   // ─────────────────────────────────────────────────────────────
   function startEditing(msg: ChatMessage) {
-    editingMessageId = msg.id;
-    editingText = msg.body;
-    activeReactionMenuMsgId = null;
+    editingMessage = msg;
+    replyingTo = null;
+    inputText = msg.body;
+    closeContextMenu();
+    setTimeout(() => {
+      if (textareaRef) {
+        textareaRef.focus();
+        textareaRef.setSelectionRange(inputText.length, inputText.length);
+        autoResize();
+      }
+    }, 20);
   }
 
   function cancelEditing() {
-    editingMessageId = null;
-    editingText = '';
+    editingMessage = null;
+    inputText = '';
+    if (textareaRef) {
+      textareaRef.style.height = 'auto';
+    }
   }
 
-  async function saveEdit(id: number) {
-    const trimmed = editingText.trim();
+  async function saveEdit() {
+    if (!editingMessage) return;
+    const trimmed = inputText.trim();
     if (!trimmed || isSavingEdit) return;
 
+    const id = editingMessage.id;
     isSavingEdit = true;
     try {
       const res = await fetch('/api/chat/messages', {
@@ -446,6 +571,7 @@
   }
 
   async function deleteMessage(id: number) {
+    closeContextMenu();
     if (!confirm('Are you sure you want to delete this message? This cannot be undone.')) return;
 
     try {
@@ -469,7 +595,8 @@
   // ─────────────────────────────────────────────────────────────
   async function toggleReaction(messageId: number, emoji: string) {
     if (!currentUser) return;
-    activeReactionMenuMsgId = null;
+    hoverReactionMsgId = null;
+    closeContextMenu();
 
     // Optimistic UI update
     messages = messages.map((m) => {
@@ -571,6 +698,11 @@
   });
 </script>
 
+<svelte:window onclick={() => {
+  if (contextMenuPos) closeContextMenu();
+  if (hoverReactionMsgId !== null) hoverReactionMsgId = null;
+}} />
+
 <div class="chat-wrapper">
   <!-- Mobile Header Drawer Toggle -->
   <div class="chat-mobile-bar">
@@ -636,9 +768,9 @@
       <div class="sidebar-info-card">
         <div class="info-title">💡 Pro Tips</div>
         <div class="info-body">
-          <p>• Type <strong>#</strong> to link any bug or suggestion report with live cards.</p>
-          <p>• Type <strong>@</strong> to mention any community member.</p>
-          <p>• Press <strong>Enter</strong> to send, <strong>Shift+Enter</strong> for newline.</p>
+          <p>• Type <strong>#</strong> to link any bug or suggestion report.</p>
+          <p>• Type <strong>@</strong> to mention community members.</p>
+          <p>• <strong>Right-click</strong> or <strong>long-press</strong> any message for Discord actions & reactions.</p>
         </div>
       </div>
     </aside>
@@ -657,7 +789,7 @@
         </div>
       </div>
 
-      <!-- Messages Stream -->
+      <!-- Messages Stream (The ONLY area that scrolls) -->
       <div class="messages-stream" id="messages-stream">
         {#if isLoading}
           <div class="stream-state loading">
@@ -677,6 +809,10 @@
               class="message-row"
               class:highlighted={highlightedMessageId === msg.id}
               class:is-me={currentUser && msg.userId === currentUser.id}
+              oncontextmenu={(e) => handleContextMenu(e, msg)}
+              ontouchstart={(e) => handleTouchStart(e, msg)}
+              ontouchmove={handleTouchMove}
+              ontouchend={handleTouchEnd}
             >
               <!-- Reply Spine Connector -->
               {#if msg.replyTo}
@@ -717,49 +853,25 @@
                     {/if}
                   </div>
 
-                  <!-- Message Body or Inline Editor -->
-                  {#if editingMessageId === msg.id}
-                    <div class="inline-edit-box">
-                      <textarea
-                        class="inline-edit-textarea"
-                        bind:value={editingText}
-                        rows="2"
-                        onkeydown={(e) => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            saveEdit(msg.id);
-                          } else if (e.key === 'Escape') {
-                            cancelEditing();
-                          }
-                        }}
-                      ></textarea>
-                      <div class="inline-edit-actions">
-                        <button class="edit-btn cancel" onclick={cancelEditing}>Cancel</button>
-                        <button class="edit-btn save" onclick={() => saveEdit(msg.id)} disabled={isSavingEdit}>
-                          {isSavingEdit ? 'Saving...' : 'Save'}
-                        </button>
-                      </div>
-                    </div>
-                  {:else}
-                    <div class="message-text">
-                      {#each msg.body.split(/(@[a-zA-Z0-9_.-]+|#\d+)/g) as part}
-                        {#if part.startsWith('@')}
-                          <span
-                            class="mention-chip"
-                            class:mention-me={currentUser && part.toLowerCase() === `@${currentUser.username.toLowerCase()}`}
-                          >
-                            {part}
-                          </span>
-                        {:else if part.startsWith('#') && /#\d+$/.test(part)}
-                          <a href="/report/{part.slice(1)}" class="report-link-chip" target="_blank">
-                            {part}
-                          </a>
-                        {:else}
+                  <!-- Message Text Body -->
+                  <div class="message-text">
+                    {#each msg.body.split(/(@[a-zA-Z0-9_.-]+|#\d+)/g) as part}
+                      {#if part.startsWith('@')}
+                        <span
+                          class="mention-chip"
+                          class:mention-me={currentUser && part.toLowerCase() === `@${currentUser.username.toLowerCase()}`}
+                        >
                           {part}
-                        {/if}
-                      {/each}
-                    </div>
-                  {/if}
+                        </span>
+                      {:else if part.startsWith('#') && /#\d+$/.test(part)}
+                        <a href="/report/{part.slice(1)}" class="report-link-chip" target="_blank">
+                          {part}
+                        </a>
+                      {:else}
+                        {part}
+                      {/if}
+                    {/each}
+                  </div>
 
                   <!-- Embedded Report Cards -->
                   {#if msg.taggedReports && msg.taggedReports.length > 0}
@@ -800,39 +912,47 @@
                   {/if}
                 </div>
 
-                <!-- Hover Floating Actions Bar -->
-                <div class="floating-actions">
-                  <!-- Quick Reactions -->
-                  <div class="quick-reactions-menu">
-                    {#each QUICK_EMOJIS as emoji}
-                      <button
-                        class="quick-emoji-btn"
-                        onclick={() => toggleReaction(msg.id, emoji)}
-                        title="React {emoji}"
-                      >
-                        {emoji}
-                      </button>
-                    {/each}
+                <!-- Clean Discord-Style Hover Bar (Only 3 icons on Desktop) -->
+                <div class="desktop-hover-bar">
+                  <!-- Quick Reaction Picker Toggle -->
+                  <div class="reaction-trigger-wrap">
+                    <button
+                      class="hover-icon-btn"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        hoverReactionMsgId = hoverReactionMsgId === msg.id ? null : msg.id;
+                      }}
+                      title="Add Reaction"
+                    >
+                      😊
+                    </button>
+                    {#if hoverReactionMsgId === msg.id}
+                      <div class="hover-emoji-picker" onclick={(e) => e.stopPropagation()}>
+                        {#each QUICK_EMOJIS as emoji}
+                          <button class="picker-emoji-btn" onclick={() => toggleReaction(msg.id, emoji)}>
+                            {emoji}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
                   </div>
 
                   <!-- Reply -->
-                  <button class="action-btn" onclick={() => (replyingTo = msg)} title="Reply">
+                  <button class="hover-icon-btn" onclick={() => triggerReply(msg)} title="Reply">
                     ↩
                   </button>
 
-                  <!-- Edit (Author or Staff) -->
-                  {#if currentUser && (currentUser.id === msg.userId || currentUser.isStaff)}
-                    <button class="action-btn" onclick={() => startEditing(msg)} title="Edit">
-                      ✏️
-                    </button>
-                  {/if}
-
-                  <!-- Delete (Author or Staff) -->
-                  {#if currentUser && (currentUser.id === msg.userId || currentUser.isStaff)}
-                    <button class="action-btn delete" onclick={() => deleteMessage(msg.id)} title="Delete">
-                      🗑️
-                    </button>
-                  {/if}
+                  <!-- More Options (...) -->
+                  <button
+                    class="hover-icon-btn"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      openContextMenu(msg, e.clientX, e.clientY);
+                    }}
+                    title="More Options"
+                  >
+                    ⋯
+                  </button>
                 </div>
               </div>
             </div>
@@ -841,7 +961,7 @@
         <div bind:this={messagesEndRef} class="stream-bottom-anchor"></div>
       </div>
 
-      <!-- Composer Area (Pinned at Bottom) -->
+      <!-- Composer Area (Pinned at Bottom, Always 100% Visible) -->
       <div class="composer-container">
         <!-- @ Mention Autocomplete Popover -->
         {#if showUserPicker && userSearchResults.length > 0}
@@ -879,7 +999,7 @@
 
             <div class="popover-scrollable">
               {#if flattenedReports.length === 0}
-                <div class="popover-empty">No reports matching "{reportSearchQuery}"</div>
+                <div class="popover-empty">No reports matching "#{reportSearchQuery}"</div>
               {:else}
                 {#if reportGroups.bug && reportGroups.bug.length > 0}
                   <div class="group-heading">🐛 BUGS</div>
@@ -937,7 +1057,7 @@
         {/if}
 
         <!-- Active Reply Quoting Bar -->
-        {#if replyingTo}
+        {#if replyingTo && !editingMessage}
           <div class="active-reply-bar">
             <span class="reply-icon">↪</span>
             <div class="reply-text">
@@ -950,13 +1070,30 @@
           </div>
         {/if}
 
-        <!-- Input Box -->
+        <!-- Active Message Editing Bar (Discord / Telegram style) -->
+        {#if editingMessage}
+          <div class="active-edit-bar">
+            <div class="edit-bar-left">
+              <span class="edit-bar-icon">✏️</span>
+              <span class="edit-bar-title">Editing message:</span>
+              <span class="edit-bar-snippet">"{editingMessage.body.slice(0, 70)}"</span>
+            </div>
+            <div class="edit-bar-right">
+              <span class="edit-hint-text">esc to cancel · enter to save</span>
+              <button class="edit-cancel-btn" onclick={cancelEditing} aria-label="Cancel editing">✕</button>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Input Box (Always Visible) -->
         {#if currentUser}
-          <div class="composer-box">
+          <div class="composer-box" class:is-editing={!!editingMessage}>
             <textarea
               bind:this={textareaRef}
               class="composer-textarea"
-              placeholder="Message #{channels.find((c) => c.id === activeChannelId)?.name || 'channel'} (Type # to link report, @ to mention)..."
+              placeholder={editingMessage
+                ? 'Edit your message...'
+                : `Message #${channels.find((c) => c.id === activeChannelId)?.name || 'channel'} (Type # to link report, @ to mention)...`}
               bind:value={inputText}
               rows="1"
               oninput={handleInputChange}
@@ -964,13 +1101,21 @@
             ></textarea>
             <button
               class="send-btn"
-              disabled={!inputText.trim() || isSending}
-              onclick={sendMessage}
-              aria-label="Send message"
+              class:save-btn={!!editingMessage}
+              disabled={!inputText.trim() || isSending || isSavingEdit}
+              onclick={handleSendOrSave}
+              aria-label={editingMessage ? 'Save edit' : 'Send message'}
+              title={editingMessage ? 'Save edit (Enter)' : 'Send message (Enter)'}
             >
-              {#if isSending}
+              {#if isSending || isSavingEdit}
                 <span class="sending-spinner"></span>
+              {:else if editingMessage}
+                <!-- Checkmark Icon for Save -->
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                </svg>
               {:else}
+                <!-- Paper Plane Icon for Send -->
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
                   <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
                 </svg>
@@ -988,6 +1133,111 @@
   </div>
 </div>
 
+<!-- ─────────────────────────────────────────────────────────────
+     Discord Context Menu (Desktop Right Click / "..." Menu)
+     ───────────────────────────────────────────────────────────── -->
+{#if activeContextMsg && contextMenuPos && !isMobileSheet}
+  <div
+    class="discord-context-menu"
+    style="top: {contextMenuPos.y}px; left: {contextMenuPos.x}px;"
+    onclick={(e) => e.stopPropagation()}
+  >
+    <!-- Quick Reactions Row -->
+    <div class="context-reactions-bar">
+      {#each QUICK_EMOJIS as emoji}
+        <button
+          class="context-emoji-btn"
+          onclick={() => activeContextMsg && toggleReaction(activeContextMsg.id, emoji)}
+          title="React {emoji}"
+        >
+          {emoji}
+        </button>
+      {/each}
+    </div>
+
+    <div class="context-divider"></div>
+
+    <button class="context-menu-item" onclick={() => activeContextMsg && triggerReply(activeContextMsg)}>
+      <span class="item-icon">↩</span>
+      <span class="item-label">Reply</span>
+    </button>
+
+    <button class="context-menu-item" onclick={() => activeContextMsg && copyMessageText(activeContextMsg)}>
+      <span class="item-icon">📋</span>
+      <span class="item-label">Copy Text</span>
+    </button>
+
+    {#if currentUser && (currentUser.id === activeContextMsg.userId || currentUser.isStaff)}
+      <div class="context-divider"></div>
+      <button class="context-menu-item" onclick={() => activeContextMsg && startEditing(activeContextMsg)}>
+        <span class="item-icon">✏️</span>
+        <span class="item-label">Edit Message</span>
+      </button>
+      <button class="context-menu-item danger" onclick={() => activeContextMsg && deleteMessage(activeContextMsg.id)}>
+        <span class="item-icon">🗑️</span>
+        <span class="item-label">Delete Message</span>
+      </button>
+    {/if}
+  </div>
+{/if}
+
+<!-- ─────────────────────────────────────────────────────────────
+     Discord Mobile Action Sheet (Mobile Long Press / "..." Menu)
+     ───────────────────────────────────────────────────────────── -->
+{#if activeContextMsg && isMobileSheet}
+  <div class="mobile-sheet-backdrop" onclick={closeContextMenu}>
+    <div class="mobile-sheet-card" onclick={(e) => e.stopPropagation()}>
+      <div class="sheet-drag-handle"></div>
+
+      <!-- Quick Reactions Row -->
+      <div class="sheet-reactions-bar">
+        {#each QUICK_EMOJIS as emoji}
+          <button
+            class="sheet-emoji-btn"
+            onclick={() => activeContextMsg && toggleReaction(activeContextMsg.id, emoji)}
+          >
+            {emoji}
+          </button>
+        {/each}
+      </div>
+
+      <div class="sheet-items-list">
+        <button class="sheet-item" onclick={() => activeContextMsg && triggerReply(activeContextMsg)}>
+          <span class="sheet-icon">↩</span>
+          <span class="sheet-label">Reply</span>
+        </button>
+
+        <button class="sheet-item" onclick={() => activeContextMsg && copyMessageText(activeContextMsg)}>
+          <span class="sheet-icon">📋</span>
+          <span class="sheet-label">Copy Text</span>
+        </button>
+
+        {#if currentUser && (currentUser.id === activeContextMsg.userId || currentUser.isStaff)}
+          <button class="sheet-item" onclick={() => activeContextMsg && startEditing(activeContextMsg)}>
+            <span class="sheet-icon">✏️</span>
+            <span class="sheet-label">Edit Message</span>
+          </button>
+          <button class="sheet-item danger" onclick={() => activeContextMsg && deleteMessage(activeContextMsg.id)}>
+            <span class="sheet-icon">🗑️</span>
+            <span class="sheet-label">Delete Message</span>
+          </button>
+        {/if}
+      </div>
+
+      <button class="sheet-cancel-btn" onclick={closeContextMenu}>
+        Cancel
+      </button>
+    </div>
+  </div>
+{/if}
+
+<!-- Copied Toast -->
+{#if showCopiedToast}
+  <div class="copied-toast">
+    <span>✓ Copied to clipboard</span>
+  </div>
+{/if}
+
 <style>
   .chat-wrapper {
     display: flex;
@@ -997,6 +1247,7 @@
     background: var(--bg-surface-1, #0c0d0e);
     color: var(--text-primary, #f4f4f5);
     overflow: hidden;
+    position: relative;
   }
 
   .chat-body-container {
@@ -1234,7 +1485,7 @@
   }
 
   /* ─────────────────────────────────────────────────────────────
-     Messages Stream
+     Messages Stream (The ONLY scrollable container!)
      ───────────────────────────────────────────────────────────── */
   .messages-stream {
     flex: 1 1 auto;
@@ -1244,7 +1495,8 @@
     padding: 16px 20px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
+    overscroll-behavior-y: contain;
   }
 
   .stream-state {
@@ -1285,23 +1537,24 @@
     position: relative;
     display: flex;
     flex-direction: column;
-    padding: 4px 8px;
+    padding: 6px 10px;
     border-radius: 8px;
-    transition: background 0.15s ease;
+    transition: background 0.12s ease;
+    user-select: text;
   }
 
   .message-row:hover {
-    background: rgba(255, 255, 255, 0.025);
+    background: rgba(255, 255, 255, 0.03);
   }
 
-  .message-row:hover .floating-actions {
+  .message-row:hover .desktop-hover-bar {
     opacity: 1;
     pointer-events: auto;
   }
 
   .message-row.highlighted {
-    background: rgba(245, 158, 11, 0.12);
-    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3);
+    background: rgba(245, 158, 11, 0.15);
+    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.4);
   }
 
   /* Reply Spine */
@@ -1311,7 +1564,7 @@
     gap: 6px;
     font-size: 12px;
     color: var(--text-muted, #71717a);
-    margin-left: 20px;
+    margin-left: 24px;
     margin-bottom: 3px;
     cursor: pointer;
   }
@@ -1452,50 +1705,6 @@
     text-decoration: underline;
   }
 
-  /* Inline Message Editor */
-  .inline-edit-box {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 4px;
-  }
-
-  .inline-edit-textarea {
-    width: 100%;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid var(--accent-gold, #f59e0b);
-    border-radius: 6px;
-    padding: 8px;
-    color: #fff;
-    font-family: inherit;
-    font-size: 14px;
-    resize: vertical;
-    outline: none;
-  }
-
-  .inline-edit-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-
-  .edit-btn {
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    border: none;
-  }
-  .edit-btn.cancel {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--text-secondary);
-  }
-  .edit-btn.save {
-    background: var(--accent-gold, #f59e0b);
-    color: #000;
-  }
-
   /* Tagged Report Cards */
   .tagged-reports-grid {
     display: flex;
@@ -1612,71 +1821,284 @@
     color: #fbbf24;
   }
 
-  /* Floating Action Buttons */
-  .floating-actions {
+  /* ─────────────────────────────────────────────────────────────
+     Discord-style Clean Hover Bar (Desktop)
+     ───────────────────────────────────────────────────────────── */
+  .desktop-hover-bar {
     position: absolute;
     right: 8px;
     top: -12px;
     display: flex;
     align-items: center;
-    gap: 4px;
     background: var(--bg-surface-2, #18191c);
     border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.15));
-    border-radius: 8px;
-    padding: 2px 4px;
+    border-radius: 6px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.12s ease;
     z-index: 5;
+    overflow: visible;
   }
 
-  .quick-reactions-menu {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding-right: 4px;
-    border-right: 1px solid rgba(255, 255, 255, 0.1);
-  }
-
-  .quick-emoji-btn {
+  .hover-icon-btn {
     background: none;
     border: none;
+    color: var(--text-secondary, #a1a1aa);
+    padding: 4px 7px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .hover-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+
+  .reaction-trigger-wrap {
+    position: relative;
+  }
+
+  .hover-emoji-picker {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-surface-2, #18191c);
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.18));
+    border-radius: 8px;
+    padding: 4px 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    z-index: 50;
+  }
+
+  .picker-emoji-btn {
+    background: none;
+    border: none;
+    font-size: 16px;
     padding: 3px 5px;
-    font-size: 14px;
     cursor: pointer;
     border-radius: 4px;
     transition: transform 0.1s, background 0.1s;
   }
 
-  .quick-emoji-btn:hover {
-    transform: scale(1.2);
+  .picker-emoji-btn:hover {
+    transform: scale(1.25);
     background: rgba(255, 255, 255, 0.1);
-  }
-
-  .action-btn {
-    background: none;
-    border: none;
-    color: var(--text-secondary, #a1a1aa);
-    padding: 3px 6px;
-    border-radius: 4px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s;
-  }
-
-  .action-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
-  }
-
-  .action-btn.delete:hover {
-    background: rgba(239, 68, 68, 0.2);
-    color: #f87171;
   }
 
   /* ─────────────────────────────────────────────────────────────
-     Composer Area (Pinned Bottom)
+     Discord Context Menu (Desktop Right Click)
+     ───────────────────────────────────────────────────────────── */
+  .discord-context-menu {
+    position: fixed;
+    width: 220px;
+    background: #18191c;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+    padding: 6px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .context-reactions-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px;
+  }
+
+  .context-emoji-btn {
+    background: none;
+    border: none;
+    font-size: 18px;
+    padding: 3px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: transform 0.1s;
+  }
+  .context-emoji-btn:hover {
+    transform: scale(1.3);
+  }
+
+  .context-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+    margin: 4px 2px;
+  }
+
+  .context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 10px;
+    border: none;
+    background: none;
+    color: var(--text-secondary, #d4d4d8);
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 5px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.1s, color 0.1s;
+  }
+
+  .context-menu-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+  }
+
+  .context-menu-item.danger {
+    color: #f87171;
+  }
+  .context-menu-item.danger:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+  }
+
+  .item-icon {
+    font-size: 14px;
+    width: 18px;
+    text-align: center;
+  }
+
+  /* ─────────────────────────────────────────────────────────────
+     Discord Mobile Action Sheet (Mobile Long Press)
+     ───────────────────────────────────────────────────────────── */
+  .mobile-sheet-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+
+  .mobile-sheet-card {
+    background: #18191c;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 16px 16px 0 0;
+    padding: 12px 16px calc(16px + env(safe-area-inset-bottom, 0px)) 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .sheet-drag-handle {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.2);
+    margin: 0 auto 4px auto;
+  }
+
+  .sheet-reactions-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .sheet-emoji-btn {
+    background: none;
+    border: none;
+    font-size: 24px;
+    padding: 6px;
+    cursor: pointer;
+  }
+
+  .sheet-items-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .sheet-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: none;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .sheet-item:active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .sheet-item.danger {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.1);
+  }
+
+  .sheet-icon {
+    font-size: 18px;
+    width: 22px;
+  }
+
+  .sheet-cancel-btn {
+    padding: 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    border: none;
+    color: var(--text-secondary);
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+
+  @keyframes slideUp {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
+  /* Copied Toast */
+  .copied-toast {
+    position: fixed;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(24, 25, 28, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #fff;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    z-index: 1100;
+  }
+
+  /* ─────────────────────────────────────────────────────────────
+     Composer Area (PINNED AT BOTTOM, ALWAYS VISIBLE!)
      ───────────────────────────────────────────────────────────── */
   .composer-container {
     position: relative;
@@ -1687,6 +2109,7 @@
     flex-direction: column;
     gap: 8px;
     flex-shrink: 0;
+    z-index: 20;
   }
 
   /* Autocomplete Popovers */
@@ -1853,6 +2276,68 @@
     color: #fff;
   }
 
+  /* Active Message Editing Bar */
+  .active-edit-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 12px;
+    background: rgba(59, 130, 246, 0.12);
+    border-left: 3px solid #60a5fa;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+
+  .edit-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .edit-bar-icon {
+    font-size: 13px;
+  }
+
+  .edit-bar-title {
+    font-weight: 700;
+    color: #93c5fd;
+    white-space: nowrap;
+  }
+
+  .edit-bar-snippet {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 350px;
+  }
+
+  .edit-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .edit-hint-text {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .edit-cancel-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 6px;
+    font-size: 12px;
+  }
+  .edit-cancel-btn:hover {
+    color: #fff;
+  }
+
   /* Composer Input Box */
   .composer-box {
     display: flex;
@@ -1862,12 +2347,17 @@
     border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
     border-radius: 12px;
     padding: 6px 10px;
-    transition: border-color 0.15s ease;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
 
   .composer-box:focus-within {
     border-color: var(--accent-gold, #f59e0b);
     box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.2);
+  }
+
+  .composer-box.is-editing {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.3);
   }
 
   .composer-textarea {
@@ -1899,8 +2389,13 @@
     justify-content: center;
     color: #000;
     cursor: pointer;
-    transition: opacity 0.12s, transform 0.1s;
+    transition: opacity 0.12s, transform 0.1s, background 0.12s;
     flex-shrink: 0;
+  }
+
+  .send-btn.save-btn {
+    background: #3b82f6;
+    color: #fff;
   }
 
   .send-btn:hover:not(:disabled) {
@@ -1963,23 +2458,24 @@
     }
 
     .composer-container {
-      padding: 8px 12px;
+      padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px)) 12px;
     }
 
     .messages-stream {
-      padding: 12px;
+      padding: 10px 12px;
     }
 
-    .floating-actions {
-      opacity: 1;
-      pointer-events: auto;
-      top: -10px;
-      right: 4px;
+    .desktop-hover-bar {
+      display: none;
     }
 
     .autocomplete-popover {
       left: 8px;
       right: 8px;
+    }
+
+    .edit-hint-text {
+      display: none;
     }
   }
 </style>
