@@ -221,6 +221,48 @@
   let swipeTriggered = $state<boolean>(false);
   let currentTouchMsg = $state<ChatMessage | null>(null);
 
+  // Real-time typing indicators (Discord style)
+  interface TypingUser {
+    userId: string;
+    username: string;
+  }
+
+  let typingUsers = $state<TypingUser[]>([]);
+  let lastTypingPing = 0;
+
+  function notifyTyping() {
+    if (!currentUser) return;
+    const now = Date.now();
+    if (now - lastTypingPing > 2200) {
+      lastTypingPing = now;
+      fetch('/api/chat/typing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId: activeChannelId }),
+      }).catch(() => {});
+    }
+  }
+
+  async function pollTyping() {
+    try {
+      const res = await fetch(`/api/chat/typing?channel=${encodeURIComponent(activeChannelId)}`);
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.typingUsers)) {
+        typingUsers = data.typingUsers.filter((u: TypingUser) => u.userId !== currentUser?.id);
+      }
+    } catch {}
+  }
+
+  let typingLabel = $derived.by(() => {
+    const list = typingUsers;
+    const count = list.length;
+    if (count === 0) return '';
+    if (count === 1) return `${list[0].username} is typing...`;
+    if (count === 2) return `${list[0].username} and ${list[1].username} are typing...`;
+    if (count === 3) return `${list[0].username}, ${list[1].username}, and ${list[2].username} are typing...`;
+    return 'Several people are typing...';
+  });
+
   function handleFileAttach(e: Event) {
     const input = e.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) return;
@@ -1045,6 +1087,7 @@
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let channelPollTimer: ReturnType<typeof setInterval> | null = null;
+  let typingPollTimer: ReturnType<typeof setInterval> | null = null;
 
   async function loadChannels() {
     try {
@@ -1095,6 +1138,10 @@
 
         if (scrollBottom || prevCount === 0 || prevCount < messages.length) {
           scrollToBottom();
+        }
+
+        if (Array.isArray(data.typingUsers)) {
+          typingUsers = data.typingUsers.filter((u: TypingUser) => u.userId !== currentUser?.id);
         }
       }
     } catch (err) {
@@ -1219,6 +1266,7 @@
     autoResize();
     const cursor = target.selectionStart ?? target.value.length;
     checkInputTriggers(target.value, cursor);
+    notifyTyping();
   }
 
   function selectReport(report: TaggedReport) {
@@ -1870,6 +1918,10 @@
     channelPollTimer = setInterval(() => {
       loadChannels();
     }, 10000);
+
+    typingPollTimer = setInterval(() => {
+      pollTyping();
+    }, 2500);
   });
 
   onDestroy(() => {
@@ -1878,6 +1930,7 @@
     }
     if (pollTimer) clearInterval(pollTimer);
     if (channelPollTimer) clearInterval(channelPollTimer);
+    if (typingPollTimer) clearInterval(typingPollTimer);
     if (reportDebounceTimer) clearTimeout(reportDebounceTimer);
     if (userDebounceTimer) clearTimeout(userDebounceTimer);
     if (toastTimer) clearTimeout(toastTimer);
@@ -2705,6 +2758,18 @@
                 </svg>
               </button>
             </div>
+          </div>
+        {/if}
+
+        <!-- Real-time Typing Indicator (Discord Style with wave bouncing animation) -->
+        {#if typingLabel}
+          <div class="chat-typing-indicator">
+            <span class="typing-dots">
+              <span class="dot dot-1"></span>
+              <span class="dot dot-2"></span>
+              <span class="dot dot-3"></span>
+            </span>
+            <span class="typing-text"><strong>{typingLabel}</strong></span>
           </div>
         {/if}
 
@@ -5479,6 +5544,57 @@
   }
   .hidden-file-input {
     display: none;
+  }
+
+  /* Real-time Typing Indicator (Discord Style Wave Animation) */
+  .chat-typing-indicator {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 2px 10px;
+    margin-bottom: 4px;
+    font-size: 11.5px;
+    color: var(--text-muted, #a1a1aa);
+    animation: fadeIn 0.15s ease;
+    user-select: none;
+    min-height: 18px;
+  }
+  .typing-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding-top: 1px;
+  }
+  .typing-dots .dot {
+    width: 4px;
+    height: 4px;
+    background: var(--text-muted, #a1a1aa);
+    border-radius: 50%;
+    animation: typingWave 1.4s infinite ease-in-out;
+  }
+  .typing-dots .dot-1 {
+    animation-delay: 0s;
+  }
+  .typing-dots .dot-2 {
+    animation-delay: 0.2s;
+  }
+  .typing-dots .dot-3 {
+    animation-delay: 0.4s;
+  }
+  @keyframes typingWave {
+    0%, 60%, 100% {
+      transform: translateY(0);
+      opacity: 0.35;
+    }
+    30% {
+      transform: translateY(-3.5px);
+      opacity: 1;
+      background: var(--accent-gold, #f59e0b);
+    }
+  }
+  .typing-text strong {
+    color: var(--text-secondary, #e4e4e7);
+    font-weight: 600;
   }
 
   /* Composer Input Box */

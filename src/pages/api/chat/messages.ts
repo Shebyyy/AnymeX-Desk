@@ -208,7 +208,25 @@ export const GET: APIRoute = async (ctx) => {
       };
     });
 
-    return new Response(JSON.stringify({ ok: true, channel, messages }), {
+    // Hydrate typing users from KV
+    const typingUsers: { userId: string; username: string }[] = [];
+    try {
+      const kv = (env as any).SESSION as KVNamespace | undefined;
+      if (kv) {
+        const raw = await kv.get(`chat_typing:${channelId}`);
+        if (raw) {
+          const map = JSON.parse(raw) as Record<string, { username: string; expiresAt: number }>;
+          const now = Date.now();
+          for (const [uid, item] of Object.entries(map)) {
+            if (item && item.expiresAt > now && uid !== user?.id) {
+              typingUsers.push({ userId: uid, username: item.username });
+            }
+          }
+        }
+      }
+    } catch {}
+
+    return new Response(JSON.stringify({ ok: true, channel, messages, typingUsers }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
