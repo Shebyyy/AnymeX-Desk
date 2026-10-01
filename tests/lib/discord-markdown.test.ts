@@ -91,6 +91,20 @@ describe('Discord Markdown Parser', () => {
     expect(res.html).toContain('/report/123');
   });
 
+  it('parses user test sequence with inline backtick combinations and spoilers', () => {
+    const input = `# Markdown Check
+## Markdown Check
+### Markdown Check
+\`Markdown\` ||Markdown||
+\`\`Check\`\` \`\`\`Check\`\`\`
+-# Markdown Check`;
+    const res = parseDiscordMarkdown(input);
+    expect(res.html).toContain('<h2 class="discord-h1 md-heading md-h1">Markdown Check</h2>');
+    expect(res.html).toContain('<code class="discord-inline-code md-code">Markdown</code> <span class="discord-spoiler md-spoiler" tabindex="0" role="button" title="Click to reveal spoiler">Markdown</span>');
+    expect(res.html).toContain('<code class="discord-inline-code md-code">Check</code> <code class="discord-inline-code md-code">Check</code>');
+    expect(res.html).toContain('<div class="discord-subtext md-subtext">Markdown Check</div>');
+  });
+
   it('parses bold, italic, underline, strikethrough combos', () => {
     const res = parseDiscordMarkdown('**bold** *italic* __underline__ ~~strike~~ ***bold italic*** __***all three***__');
     expect(res.html).toContain('<strong>bold</strong>');

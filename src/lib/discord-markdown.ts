@@ -144,21 +144,21 @@ export function parseDiscordMarkdown(
     return `\u0000${store.length - 1}\u0000`;
   };
 
-  // 2. Fenced Code Blocks with language: ```lang\n...```
-  working = working.replace(/```([a-zA-Z0-9_-]+)\n([\s\S]*?)```/g, (_m, lang: string, code: string) => {
-    const cls = ` class="discord-code md-code language-${escapeHtml(lang.toLowerCase())}"`;
+  // 2. Fenced Code Blocks (require newline after opening fence or on their own block)
+  working = working.replace(/```([a-zA-Z0-9_-]+)?(?:\n)([\s\S]*?)```/g, (_m, lang: string | undefined, code: string) => {
+    const cls = lang ? ` class="discord-code md-code language-${escapeHtml(lang.toLowerCase())}"` : ' class="discord-code md-code"';
     const trimmed = code.replace(/\n$/, '');
     return stash(`<pre class="discord-code-block md-codeblock"><code${cls}>${escapeHtml(trimmed)}</code></pre>`);
   });
 
-  // Fenced Code Blocks without language: ```\n...``` or ```...```
-  working = working.replace(/```([\s\S]*?)```/g, (_m, code: string) => {
+  // Multiline code blocks on separate lines without language tag
+  working = working.replace(/(?:^|\n)```([\s\S]*?)```(?:\n|$)/g, (_m, code: string) => {
     const trimmed = code.replace(/^\n/, '').replace(/\n$/, '');
     return stash(`<pre class="discord-code-block md-codeblock"><code class="discord-code md-code">${escapeHtml(trimmed)}</code></pre>`);
   });
 
-  // 3. Inline code (`code`)
-  working = working.replace(/`([^`\n]+?)`/g, (_m, code: string) =>
+  // 3. Inline code spans (`code`, ``code``, ```code```)
+  working = working.replace(/`{1,3}([^`\n]+?)`{1,3}/g, (_m, code: string) =>
     stash(`<code class="discord-inline-code md-code">${escapeHtml(code)}</code>`)
   );
 
@@ -212,11 +212,11 @@ export function parseDiscordMarkdown(
       return stash(`<button type="button" class="mention-chip mention-user-chip" data-mention-user="${id}">@user</button>`);
     });
 
-    // Spoilers: ||spoiler||
+    // Spoilers: ||spoiler|| (click to reveal handled cleanly in ChatRoom)
     t = t.replace(
       /\|\|([\s\S]+?)\|\|/g,
       (_m, spoilerText: string) =>
-        stash(`<span class="discord-spoiler md-spoiler" tabindex="0" role="button" title="Click to reveal spoiler" onclick="this.classList.toggle('revealed');this.classList.toggle('is-revealed')">${escapeHtml(spoilerText)}</span>`)
+        stash(`<span class="discord-spoiler md-spoiler" tabindex="0" role="button" title="Click to reveal spoiler">${escapeHtml(spoilerText)}</span>`)
     );
 
     // Escape raw HTML before applying emphasis

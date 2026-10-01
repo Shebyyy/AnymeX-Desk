@@ -262,11 +262,14 @@
   }
 
   function handleMessageBodyClick(e: MouseEvent) {
-    const target = (e.target as HTMLElement).closest('[data-mention-user], [data-channel-jump], [data-msg-jump], .discord-spoiler') as HTMLElement | null;
+    const target = (e.target as HTMLElement).closest('[data-mention-user], [data-channel-jump], [data-msg-jump], .discord-spoiler, .md-spoiler') as HTMLElement | null;
     if (!target) return;
 
-    if (target.classList.contains('discord-spoiler')) {
+    if (target.classList.contains('discord-spoiler') || target.classList.contains('md-spoiler')) {
+      e.preventDefault();
+      e.stopPropagation();
       target.classList.toggle('revealed');
+      target.classList.toggle('is-revealed');
       return;
     }
 
@@ -4268,19 +4271,25 @@
     line-height: 1.3;
   }
 
-  :global(.discord-spoiler) {
-    background: #2b2d31;
-    color: transparent;
+  :global(.discord-spoiler),
+  :global(.md-spoiler) {
+    background: #2b2d31 !important;
+    color: transparent !important;
     border-radius: 4px;
-    padding: 0 4px;
+    padding: 1px 5px;
     cursor: pointer;
     user-select: none;
     transition: all 0.15s ease;
+    display: inline-block;
+    vertical-align: baseline;
   }
 
-  :global(.discord-spoiler.revealed) {
-    background: rgba(255, 255, 255, 0.1);
-    color: inherit;
+  :global(.discord-spoiler.revealed),
+  :global(.discord-spoiler.is-revealed),
+  :global(.md-spoiler.revealed),
+  :global(.md-spoiler.is-revealed) {
+    background: rgba(255, 255, 255, 0.12) !important;
+    color: var(--text-primary, #f4f4f5) !important;
     user-select: auto;
   }
 
