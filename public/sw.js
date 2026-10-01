@@ -1,4 +1,5 @@
-const CACHE_NAME = 'anymex-desk-v2';
+const CACHE_NAME = 'anymex-desk-v3';
+
 
 const STATIC_PRECACHE = [
   '/offline',
