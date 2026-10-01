@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { isPushSupported, getPushSubscription, subscribeToPush, unsubscribeFromPush } from '../scripts/push-client';
+  import { parseDiscordMarkdown } from '../lib/discord-markdown';
 
   interface UserInfo {
     id: string;
@@ -208,8 +209,15 @@
     }
   }
 
-  // Media upload state
-  let pendingAttachment = $state<{ file: File; previewUrl: string; isUploading: boolean } | null>(null);
+  // Media upload state (supports multiple attachments up to 5)
+  interface PendingAttachmentItem {
+    id: string;
+    file: File;
+    previewUrl: string;
+    isUploading: boolean;
+  }
+
+  let pendingAttachments = $state<PendingAttachmentItem[]>([]);
 
   // New message indicator tracking (Discord-style unread divider line)
   let firstUnreadMessageId = $state<number | null>(null);
@@ -220,6 +228,53 @@
   let isSwiping = $state<boolean>(false);
   let swipeTriggered = $state<boolean>(false);
   let currentTouchMsg = $state<ChatMessage | null>(null);
+
+  // Floating scroll-to-bottom state
+  let showScrollBottomBtn = $state<boolean>(false);
+  let messagesStreamRef = $state<HTMLDivElement | null>(null);
+
+  function handleStreamScroll() {
+    if (!messagesStreamRef) return;
+    const { scrollTop, scrollHeight, clientHeight } = messagesStreamRef;
+    const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+    showScrollBottomBtn = distanceFromBottom > 160;
+  }
+
+  function handleScrollToBottomClick() {
+    scrollToBottom();
+    showScrollBottomBtn = false;
+    firstUnreadMessageId = null;
+  }
+
+  function handleMessageBodyClick(e: MouseEvent) {
+    const target = (e.target as HTMLElement).closest('[data-mention-user], [data-channel-jump], [data-msg-jump], .discord-spoiler') as HTMLElement | null;
+    if (!target) return;
+
+    if (target.classList.contains('discord-spoiler')) {
+      target.classList.toggle('revealed');
+      return;
+    }
+
+    const mentionUser = target.getAttribute('data-mention-user');
+    if (mentionUser) {
+      e.preventDefault();
+      e.stopPropagation();
+      openUserProfile({ username: mentionUser });
+      return;
+    }
+
+    const channelJump = target.getAttribute('data-channel-jump');
+    const msgJump = target.getAttribute('data-msg-jump');
+    if (channelJump) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (msgJump) {
+        navigateToMessage(channelJump, parseInt(msgJump, 10));
+      } else {
+        handleSelectChannel(channelJump);
+      }
+    }
+  }
 
   // Real-time typing indicators (Discord style)
   interface TypingUser {
@@ -266,22 +321,50 @@
   function handleFileAttach(e: Event) {
     const input = e.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) return;
-    const file = input.files[0];
-    if (file.size > 25 * 1024 * 1024) {
-      showToast('File too large (max 25MB)', 'error');
+
+    if (pendingAttachments.length >= 5) {
+      showToast('Maximum 5 attachments per message', 'error');
       input.value = '';
       return;
     }
-    const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : '';
-    pendingAttachment = { file, previewUrl, isUploading: false };
+
+    const newItems: PendingAttachmentItem[] = [];
+    for (let i = 0; i < input.files.length; i++) {
+      if (pendingAttachments.length + newItems.length >= 5) {
+        showToast('Maximum 5 attachments reached (skipped extra)', 'error');
+        break;
+      }
+      const file = input.files[i];
+      if (file.size > 25 * 1024 * 1024) {
+        showToast(`${file.name} is too large (max 25MB)`, 'error');
+        continue;
+      }
+      const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : '';
+      newItems.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        file,
+        previewUrl,
+        isUploading: false,
+      });
+    }
+
+    pendingAttachments = [...pendingAttachments, ...newItems];
     input.value = '';
   }
 
-  function removeAttachment() {
-    if (pendingAttachment?.previewUrl) {
-      URL.revokeObjectURL(pendingAttachment.previewUrl);
+  function removeAttachment(id: string) {
+    const item = pendingAttachments.find((a) => a.id === id);
+    if (item?.previewUrl) {
+      URL.revokeObjectURL(item.previewUrl);
     }
-    pendingAttachment = null;
+    pendingAttachments = pendingAttachments.filter((a) => a.id !== id);
+  }
+
+  function clearAllAttachments() {
+    for (const a of pendingAttachments) {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    }
+    pendingAttachments = [];
   }
 
   function openForwardModal(msg: ChatMessage) {
@@ -1119,7 +1202,7 @@
         if (typeof window !== 'undefined' && serverMessages.length > 0) {
           const lastRead = parseInt(localStorage.getItem(`anymex_chat_read_${activeChannelId}`) || '0', 10);
           if (lastRead > 0) {
-            const firstUnread = serverMessages.find((m) => m.id > lastRead);
+            const firstUnread = serverMessages.find((m) => m.id > lastRead && (!currentUser || m.userId !== currentUser.id));
             if (firstUnread && firstUnread.id !== serverMessages[0].id) {
               firstUnreadMessageId = firstUnread.id;
             } else {
@@ -1464,7 +1547,7 @@
     }
 
     const trimmed = inputText.trim();
-    if (!trimmed) return;
+    if (!trimmed && pendingAttachments.length === 0) return;
 
     // Check if input is a slash command
     if (trimmed.startsWith('/')) {
@@ -1478,32 +1561,34 @@
   async function sendMessage(retryMsg?: ChatMessage) {
     if (!currentUser) return;
     const body = retryMsg ? retryMsg.body : inputText.trim();
-    if (!body && !pendingAttachment) return;
+    if (!body && pendingAttachments.length === 0) return;
 
-    let attachmentUrl = '';
-    if (pendingAttachment && !retryMsg) {
-      pendingAttachment.isUploading = true;
-      try {
-        const fd = new FormData();
-        fd.append('file', pendingAttachment.file);
-        const upRes = await fetch('/api/chat/upload', { method: 'POST', body: fd });
-        const upData = await upRes.json();
-        if (upData.ok && upData.url) {
-          attachmentUrl = upData.url;
-        } else {
-          showToast(upData.error || 'Failed to upload file', 'error');
+    const uploadedUrls: string[] = [];
+    if (pendingAttachments.length > 0 && !retryMsg) {
+      for (const item of pendingAttachments) {
+        item.isUploading = true;
+        try {
+          const fd = new FormData();
+          fd.append('file', item.file);
+          const upRes = await fetch('/api/chat/upload', { method: 'POST', body: fd });
+          const upData = await upRes.json();
+          if (upData.ok && upData.url) {
+            uploadedUrls.push(upData.url);
+          } else {
+            showToast(upData.error || `Failed to upload ${item.file.name}`, 'error');
+          }
+        } catch (upErr) {
+          console.warn('Attachment upload failed:', upErr);
+          showToast(`Network error uploading ${item.file.name}`, 'error');
         }
-      } catch (upErr) {
-        console.warn('Attachment upload failed:', upErr);
-        showToast('Network error uploading attachment', 'error');
-      } finally {
-        removeAttachment();
       }
+      clearAllAttachments();
     }
 
     let finalBody = body;
-    if (attachmentUrl) {
-      finalBody = finalBody ? `${finalBody}\n${attachmentUrl}` : attachmentUrl;
+    if (uploadedUrls.length > 0) {
+      const urlsJoined = uploadedUrls.join('\n');
+      finalBody = finalBody ? `${finalBody}\n${urlsJoined}` : urlsJoined;
     }
     if (!finalBody) return;
 
@@ -1549,6 +1634,7 @@
       };
 
       messages = [...messages, optimisticMsg];
+      firstUnreadMessageId = null;
       scrollToBottom();
     } else {
       // Mark existing failed message as sending again
@@ -1570,6 +1656,10 @@
       if (data.ok && data.message) {
         // Confirmed by server: replace optimistic message with verified server record
         messages = messages.map((m) => (m.id === tempId ? { ...data.message, sendState: 'sent' } : m));
+        firstUnreadMessageId = null;
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(`anymex_chat_read_${activeChannelId}`, String(data.message.id));
+        }
       } else {
         messages = messages.map((m) => (m.id === tempId ? { ...m, sendState: 'failed' } : m));
         showToast(data.error || 'Failed to send message', 'error');
@@ -1934,6 +2024,7 @@
     if (reportDebounceTimer) clearTimeout(reportDebounceTimer);
     if (userDebounceTimer) clearTimeout(userDebounceTimer);
     if (toastTimer) clearTimeout(toastTimer);
+    clearAllAttachments();
   });
 </script>
 
@@ -2070,7 +2161,7 @@
           </svg>
         </button>
 
-        <div class="chan-meta desktop-only">
+        <div class="chan-meta desktop-header-meta">
           <span class="chan-hash">#</span>
           <span class="chan-title">{channels.find((c) => c.id === activeChannelId)?.name || activeChannelId}</span>
           {#if channels.find((c) => c.id === activeChannelId)?.description}
@@ -2094,7 +2185,12 @@
       </div>
 
       <!-- Messages Stream (The ONLY area that scrolls) -->
-      <div class="messages-stream" id="messages-stream">
+      <div
+        class="messages-stream"
+        id="messages-stream"
+        bind:this={messagesStreamRef}
+        onscroll={handleStreamScroll}
+      >
         {#if isLoading}
           <div class="stream-state loading">
             <div class="spinner"></div>
@@ -2113,6 +2209,7 @@
         {:else}
           {#each messages as msg (msg.id)}
             {@const parsed = parseForwardedMessage(msg.body)}
+            {@const parsedMd = parseDiscordMarkdown(parsed.text, { channels, currentUsername: currentUser?.username })}
             {#if msg.id === firstUnreadMessageId}
               <div class="new-messages-divider" role="separator" aria-label="New messages">
                 <span class="new-messages-line"></span>
@@ -2132,7 +2229,7 @@
               ontouchstart={(e) => handleTouchStart(e, msg)}
               ontouchmove={handleTouchMove}
               ontouchend={handleTouchEnd}
-              style={swipingMsgId === msg.id ? `transform: translateX(${swipeOffset}px); transition: ${isSwiping ? 'none' : 'transform 0.25s cubic-bezier(0.2, 0, 0, 1)'};` : ''}
+              style={swipingMsgId === msg.id ? `transform: translateX(${swipeOffset}px); transition: ${isSwiping ? 'none' : 'transform 0.25s cubic-bezier(0.2, 0, 1)'};` : ''}
             >
               <!-- Mobile Swipe-to-Reply Floating Pill -->
               {#if swipingMsgId === msg.id && swipeOffset < -8}
@@ -2168,7 +2265,7 @@
                     {#if msg.authorAvatar}
                       <img
                         src="https://cdn.discordapp.com/avatars/{msg.userId}/{msg.authorAvatar}.png?size=48"
-                        alt={msg.authorName}
+                        alt=""
                         class="author-avatar"
                         loading="lazy"
                       />
@@ -2222,7 +2319,7 @@
                   </div>
 
                   <!-- Message Text Body & Forwarded Embed -->
-                  <div class="message-text">
+                  <div class="message-text" onclick={handleMessageBodyClick}>
                     {#if parsed.forward}
                       <div class="forward-header-badge">
                         <svg class="forward-icon-svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -2284,97 +2381,27 @@
                       </div>
                     {/if}
 
-                    {#if parsed.text}
-                      <div class="forward-commentary-text">
-                        {#each parsed.text.split(/(@[a-zA-Z0-9_.-]+|#[a-zA-Z0-9_\-]+|https?:\/\/[^\s]+|\/support\?[^\s]+)/g) as part}
-                          {#if part.startsWith('@')}
-                            {@const cleanMention = part.slice(1).toLowerCase()}
-                            {#if cleanMention === 'everyone' || cleanMention === 'here'}
-                              <span class="mention-chip mention-broadcast" title="Broadcast notification to everyone in this channel">
-                                <svg class="chip-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-                                  <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-                                </svg>
-                                {part}
-                              </span>
-                            {:else if cleanMention === 'staff' || cleanMention === 'admin' || cleanMention === 'mod'}
-                              <span class="mention-chip mention-role-chip role-{cleanMention}" title="Role notification for {cleanMention}">
-                                <svg class="chip-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                                </svg>
-                                {part}
-                              </span>
-                            {:else}
-                              <button
-                                type="button"
-                                class="mention-chip mention-user-chip"
-                                class:mention-me={currentUser && cleanMention === currentUser.username.toLowerCase()}
-                                onclick={() => openUserProfile({ username: part.slice(1) })}
-                                title="Click to view @{part.slice(1)}'s profile"
-                              >
-                                {part}
-                              </button>
-                            {/if}
-                          {:else if part.startsWith('#') && /#\d+$/.test(part)}
-                            <a href="/report/{part.slice(1)}" class="report-link-chip" target="_blank">
-                              {part}
-                            </a>
-                          {:else if part.startsWith('#') && channels.some((c) => '#' + c.name.toLowerCase() === part.toLowerCase() || '#' + c.id.toLowerCase() === part.toLowerCase())}
-                            {@const targetCh = channels.find((c) => '#' + c.name.toLowerCase() === part.toLowerCase() || '#' + c.id.toLowerCase() === part.toLowerCase())}
-                            {#if targetCh}
-                              <button
-                                type="button"
-                                class="channel-link-chip"
-                                onclick={() => handleSelectChannel(targetCh.id)}
-                                title="Switch to #{targetCh.name}"
-                              >
-                                <svg class="chip-hash-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                  <line x1="4" y1="9" x2="20" y2="9"></line>
-                                  <line x1="4" y1="15" x2="20" y2="15"></line>
-                                  <line x1="10" y1="3" x2="8" y2="21"></line>
-                                  <line x1="16" y1="3" x2="14" y2="21"></line>
-                                </svg>
-                                <span>{targetCh.name}</span>
-                              </button>
-                            {/if}
-                          {:else if (part.includes('/support?') && part.includes('channel='))}
-                            {@const linkMatch = part.match(/[?&]channel=([a-zA-Z0-9_-]+)(?:&(?:amp;)?message=(\d+))?/)}
-                            {#if linkMatch}
-                              {@const lChan = linkMatch[1]}
-                              {@const lMsg = linkMatch[2] ? parseInt(linkMatch[2], 10) : null}
-                              <button
-                                type="button"
-                                class="message-link-chip"
-                                onclick={() => navigateToMessage(lChan, lMsg || undefined)}
-                                title="Jump to #{lChan}{lMsg ? ` message #${lMsg}` : ''}"
-                              >
-                                <svg class="chip-hash-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                  <line x1="4" y1="9" x2="20" y2="9"></line>
-                                  <line x1="4" y1="15" x2="20" y2="15"></line>
-                                  <line x1="10" y1="3" x2="8" y2="21"></line>
-                                  <line x1="16" y1="3" x2="14" y2="21"></line>
-                                </svg>
-                                <span>#{lChan}</span>
-                                {#if lMsg}
-                                  <span class="msg-num-badge">› msg #{lMsg}</span>
-                                {/if}
-                                <svg class="chip-jump-svg" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                                  <polyline points="15 3 21 3 21 9"></polyline>
-                                  <line x1="10" y1="14" x2="21" y2="3"></line>
-                                </svg>
-                              </button>
-                            {:else if (part.match(/\.(png|jpg|jpeg|gif|webp|avif)(\?[^\s]*)?$/i) || part.includes('/uploads/chat-'))}
-                              <div class="chat-inline-media-wrap">
-                                <a href={part} target="_blank" rel="noopener noreferrer">
-                                  <img src={part} alt="Attached image" class="chat-inline-media" loading="lazy" />
-                                </a>
-                              </div>
-                            {:else}
-                              <a href={part} target="_blank" rel="noopener noreferrer" class="chat-external-link">{part}</a>
-                            {/if}
+                    {#if parsedMd.html}
+                      <div class="discord-text-content">
+                        {@html parsedMd.html}
+                      </div>
+                    {/if}
+
+                    {#if parsedMd.media && parsedMd.media.length > 0}
+                      <div class="chat-media-attachments-grid">
+                        {#each parsedMd.media as m}
+                          {#if m.type === 'video'}
+                            <div class="chat-video-attachment-card">
+                              <video src={m.url} controls preload="metadata" class="chat-video-player">
+                                <track kind="captions" />
+                              </video>
+                            </div>
                           {:else}
-                            {part}
+                            <div class="chat-image-attachment-card">
+                              <a href={m.url} target="_blank" rel="noopener noreferrer" class="chat-image-lightbox-link">
+                                <img src={m.url} alt="Attached media" class="chat-media-img" loading="lazy" />
+                              </a>
+                            </div>
                           {/if}
                         {/each}
                       </div>
@@ -2490,6 +2517,25 @@
         {/if}
         <div bind:this={messagesEndRef} class="stream-bottom-anchor"></div>
       </div>
+
+      <!-- Floating Scroll-to-Bottom Arrow Button -->
+      {#if showScrollBottomBtn}
+        <button
+          type="button"
+          class="scroll-bottom-floating-btn"
+          onclick={handleScrollToBottomClick}
+          aria-label="Scroll to bottom"
+          title="Jump to present"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <polyline points="19 12 12 19 5 12"></polyline>
+          </svg>
+          {#if firstUnreadMessageId}
+            <span class="scroll-unread-dot" title="Unread messages"></span>
+          {/if}
+        </button>
+      {/if}
 
       <!-- Composer Area (Pinned at Bottom, Always 100% Visible) -->
       <div class="composer-container">
@@ -2642,32 +2688,36 @@
           </div>
         {/if}
 
-        <!-- Media Attachment Preview Card -->
-        {#if pendingAttachment}
-          <div class="pending-attachment-card">
-            <div class="attach-preview-thumb-wrap">
-              {#if pendingAttachment.previewUrl}
-                <img src={pendingAttachment.previewUrl} alt="Preview" class="attach-preview-thumb" />
-              {:else}
-                <div class="attach-preview-file-icon">📎</div>
-              {/if}
-            </div>
-            <div class="attach-info">
-              <span class="attach-name">{pendingAttachment.file.name}</span>
-              <span class="attach-size">{(pendingAttachment.file.size / 1024).toFixed(1)} KB</span>
-            </div>
-            <button
-              type="button"
-              class="attach-remove-btn"
-              onclick={removeAttachment}
-              title="Remove attachment"
-              aria-label="Remove attachment"
-            >
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </svg>
-            </button>
+        <!-- Media Attachment Preview Cards (Multiple) -->
+        {#if pendingAttachments.length > 0}
+          <div class="pending-attachments-list">
+            {#each pendingAttachments as item (item.id)}
+              <div class="pending-attachment-card">
+                <div class="attach-preview-thumb-wrap">
+                  {#if item.previewUrl}
+                    <img src={item.previewUrl} alt="Preview" class="attach-preview-thumb" />
+                  {:else}
+                    <div class="attach-preview-file-icon">📎</div>
+                  {/if}
+                </div>
+                <div class="attach-info">
+                  <span class="attach-name" title={item.file.name}>{item.file.name}</span>
+                  <span class="attach-size">{(item.file.size / 1024).toFixed(1)} KB</span>
+                </div>
+                <button
+                  type="button"
+                  class="attach-remove-btn"
+                  onclick={() => removeAttachment(item.id)}
+                  title="Remove attachment"
+                  aria-label="Remove attachment"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+            {/each}
           </div>
         {/if}
 
@@ -2777,10 +2827,11 @@
         {#if currentUser}
           <div class="composer-box" class:is-editing={!!editingMessage}>
             {#if !editingMessage}
-              <label class="media-attach-btn" title="Attach image or file" aria-label="Attach file">
+              <label class="media-attach-btn" title="Attach images or videos (up to 5)" aria-label="Attach media">
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/*,video/mp4,video/webm"
+                  multiple
                   class="hidden-file-input"
                   onchange={handleFileAttach}
                 />
@@ -2795,7 +2846,9 @@
               class="composer-textarea"
               placeholder={editingMessage
                 ? 'Edit your message (Ctrl+Enter to save, Esc to cancel)...'
-                : `Message #${channels.find((c) => c.id === activeChannelId)?.name || 'channel'} (Ctrl+Enter to send, Enter for newline)...`}
+                : pendingAttachments.length > 0
+                  ? 'Add an optional comment or press send...'
+                  : `Message #${channels.find((c) => c.id === activeChannelId)?.name || 'channel'} (Ctrl+Enter to send, Enter for newline)...`}
               bind:value={inputText}
               rows="1"
               oninput={handleInputChange}
@@ -2804,7 +2857,7 @@
             <button
               class="send-btn"
               class:save-btn={!!editingMessage}
-              disabled={(!inputText.trim() && !pendingAttachment) || isSending || isSavingEdit}
+              disabled={(!inputText.trim() && pendingAttachments.length === 0) || isSending || isSavingEdit}
               onclick={handleSendOrSave}
               aria-label={editingMessage ? 'Save edit' : 'Send message'}
               title={editingMessage ? 'Save edit (Ctrl+Enter)' : 'Send message (Ctrl+Enter)'}
@@ -2910,7 +2963,7 @@
 
     {#if currentUser && (currentUser.id === activeContextMsg.userId || currentUser.isStaff)}
       <div class="context-divider"></div>
-      {#if currentUser.id === activeContextMsg.userId || currentUser.isStaff}
+      {#if currentUser.id === activeContextMsg.userId}
         <button class="context-menu-item" onclick={() => activeContextMsg && startEditing(activeContextMsg)}>
           <span class="item-icon">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -3007,7 +3060,7 @@
         </button>
 
         {#if currentUser && (currentUser.id === activeContextMsg.userId || currentUser.isStaff)}
-          {#if currentUser.id === activeContextMsg.userId || currentUser.isStaff}
+          {#if currentUser.id === activeContextMsg.userId}
             <button class="sheet-item" onclick={() => activeContextMsg && startEditing(activeContextMsg)}>
               <span class="sheet-icon">
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -3760,6 +3813,17 @@
     }
   }
 
+  .mobile-channels-toggle-btn {
+    display: none;
+  }
+
+  .desktop-header-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+  }
+
   .chan-meta {
     display: flex;
     align-items: center;
@@ -4056,31 +4120,149 @@
   .message-text {
     font-size: 14px;
     line-height: 1.5;
-    color: var(--text-secondary, #d4d4d8);
+    color: var(--text-primary, #f4f4f5);
     word-break: break-word;
-    white-space: pre-wrap;
   }
 
-  .chat-inline-media-wrap {
+  .discord-text-content {
+    display: block;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-primary, #f4f4f5);
+  }
+
+  .discord-subtext {
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: var(--text-muted, #9ca3af);
+    margin-top: 2px;
+  }
+
+  .discord-blockquote {
+    border-left: 3px solid var(--accent-gold, #f59e0b);
+    padding-left: 8px;
+    margin: 4px 0;
+    color: var(--text-secondary, #d4d4d8);
+    font-style: italic;
+  }
+
+  .discord-code-block {
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 6px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 13px;
+    overflow-x: auto;
+  }
+
+  .discord-inline-code {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12.5px;
+  }
+
+  .discord-spoiler {
+    background: #2b2d31;
+    color: transparent;
+    border-radius: 4px;
+    padding: 0 4px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.15s ease;
+  }
+
+  .discord-spoiler.revealed {
+    background: rgba(255, 255, 255, 0.1);
+    color: inherit;
+    user-select: auto;
+  }
+
+  .chat-media-attachments-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     margin-top: 6px;
-    margin-bottom: 4px;
-    display: inline-block;
     max-width: 100%;
   }
 
-  .chat-inline-media {
-    max-width: min(100%, 380px);
-    max-height: 280px;
-    border-radius: 8px;
+  .chat-image-attachment-card,
+  .chat-video-attachment-card {
+    max-width: min(100%, 460px);
+    border-radius: 10px;
+    overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.12);
-    object-fit: cover;
-    background: #111;
-    display: block;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    background: #090a0b;
   }
-  .chat-inline-media:hover {
-    transform: scale(1.015);
+
+  .chat-media-img {
+    display: block;
+    max-width: 100%;
+    max-height: 380px;
+    object-fit: contain;
+    background: #0d0e10;
+    transition: transform 0.2s ease;
+  }
+
+  .chat-media-img:hover {
+    transform: scale(1.01);
+  }
+
+  .chat-video-player {
+    display: block;
+    max-width: 100%;
+    max-height: 380px;
+    background: #000;
+  }
+
+  .pending-attachments-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 14px 4px 14px;
+    max-height: 140px;
+    overflow-y: auto;
+  }
+
+  .scroll-bottom-floating-btn {
+    position: absolute;
+    bottom: 84px;
+    right: 28px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #18191c;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: var(--text-primary, #fff);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    z-index: 30;
+    transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  }
+
+  .scroll-bottom-floating-btn:hover {
+    transform: translateY(-2px);
+    background: #232428;
+    border-color: rgba(255, 255, 255, 0.3);
+    color: var(--accent-gold, #f59e0b);
+  }
+
+  .scroll-unread-dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 10px;
+    height: 10px;
+    background: #ef4444;
+    border-radius: 50%;
+    border: 2px solid #18191c;
   }
 
   .mention-chip {
@@ -5695,6 +5877,41 @@
      Mobile Responsiveness (< 768px)
      ───────────────────────────────────────────────────────────── */
   @media (max-width: 768px) {
+    .channel-header-bar {
+      padding: 0 12px;
+    }
+
+    .mobile-channels-toggle-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .mobile-channels-toggle-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .desktop-header-meta {
+      display: none !important;
+    }
+
+    .scroll-bottom-floating-btn {
+      bottom: 74px;
+      right: 16px;
+      width: 36px;
+      height: 36px;
+    }
+
     .chat-mobile-bar {
       display: flex;
     }

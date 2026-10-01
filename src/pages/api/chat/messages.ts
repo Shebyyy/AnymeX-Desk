@@ -497,9 +497,8 @@ export const PATCH: APIRoute = async (ctx) => {
       });
     }
 
-    const isStaff = atLeast(await levelOf(user.id), 'mod');
-    if (msg.userId !== user.id && !isStaff) {
-      return new Response(JSON.stringify({ ok: false, error: 'You cannot edit this message' }), {
+    if (msg.userId !== user.id) {
+      return new Response(JSON.stringify({ ok: false, error: 'Only the author can edit their own message' }), {
         status: 403,
         headers: { 'Content-Type': 'application/json' },
       });
