@@ -1,4 +1,4 @@
-﻿import crypto from 'crypto';
+import crypto from 'crypto';
 import { db } from './db/client';
 import { pushSubscriptions, users } from './db/schema';
 import { eq, sql } from 'drizzle-orm';
@@ -82,14 +82,16 @@ export function encryptPayload(
 }
 
 /**
- * Create a signed VAPID JWT (RFC 8292) using Web Crypto / Node crypto.
+/**
+ * Create a signed VAPID JWT (RFC 8292) using native Web Crypto API.
+ * 100% compatible with Cloudflare Workers runtime and Node.js.
  */
-export function createVapidJwt(
+export async function createVapidJwt(
   audience: string,
   subject: string,
   publicKeyBase64Url: string,
   privateKeyBase64Url: string,
-): string {
+): Promise<string> {
   const header = { alg: 'ES256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
   const claims = {
@@ -102,78 +104,37 @@ export function createVapidJwt(
   const claimsB64 = toBase64Url(Buffer.from(JSON.stringify(claims)));
   const unsignedToken = `${headerB64}.${claimsB64}`;
 
-  // Import EC private key in PKCS8 or raw form
   const rawPrivate = toBuffer(privateKeyBase64Url);
   const rawPublic = toBuffer(publicKeyBase64Url);
 
-  // Construct PKCS8 EC private key DER wrapper:
-  // SEQUENCE (30) {
-  //   version INTEGER 0 (02 01 00)
-  //   privateKeyAlgorithm SEQUENCE (30 13) {
-  //     algorithm OID ecPublicKey 1.2.840.10045.2.1 (06 07 2A 86 48 CE 3D 02 01)
-  //     namedCurve OID secp256r1 1.2.840.10045.3.1.7 (06 08 2A 86 48 CE 3D 03 01 07)
-  //   }
-  //   privateKey OCTET STRING (04 ...) {
-  //     ECPrivateKey SEQUENCE (30 ...) {
-  //       version INTEGER 1 (02 01 01)
-  //       privateKey OCTET STRING (04 20 [32-byte key])
-  //       parameters [0] (A0 ...) omitted
-  //       publicKey [1] BIT STRING (A1 44 03 42 00 [65-byte public key])
-  //     }
-  //   }
-  // }
-  const ecPrivSeq = Buffer.concat([
-    Buffer.from('30770201010420', 'hex'),
-    rawPrivate,
-    Buffer.from('a144034200', 'hex'),
-    rawPublic,
-  ]);
-  const pkcs8Der = Buffer.concat([
-    Buffer.from('308187020100301306072a8648ce3d020106082a8648ce3d030107046d', 'hex'),
-    ecPrivSeq,
-  ]);
+  const xBuf = rawPublic.length === 65 ? rawPublic.subarray(1, 33) : rawPublic.subarray(0, 32);
+  const yBuf = rawPublic.length === 65 ? rawPublic.subarray(33, 65) : rawPublic.subarray(32, 64);
 
-  const keyObject = crypto.createPrivateKey({
-    key: pkcs8Der,
-    format: 'der',
-    type: 'pkcs8',
-  });
+  const jwk: JsonWebKey = {
+    kty: 'EC',
+    crv: 'P-256',
+    x: toBase64Url(xBuf),
+    y: toBase64Url(yBuf),
+    d: toBase64Url(rawPrivate),
+    ext: true,
+  };
 
-  const sign = crypto.createSign('SHA256');
-  sign.update(unsignedToken);
-  const derSignature = sign.sign(keyObject);
+  const cryptoKey = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
+  );
 
-  // Convert DER ECDSA signature (SEQUENCE of two INTEGERs r and s) to 64-byte raw (r || s)
-  const rawSig = derToRawSignature(derSignature);
-  const sigB64 = toBase64Url(rawSig);
+  const sig = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: { name: 'SHA-256' } },
+    cryptoKey,
+    new TextEncoder().encode(unsignedToken),
+  );
 
+  const sigB64 = toBase64Url(Buffer.from(sig));
   return `${unsignedToken}.${sigB64}`;
-}
-
-function derToRawSignature(der: Buffer): Buffer {
-  let offset = 2; // Skip 0x30, length
-  // First integer: r
-  offset += 1; // skip 0x02
-  const rLen = der[offset++];
-  let r = der.subarray(offset, offset + rLen);
-  offset += rLen;
-  if (r.length > 32) r = r.subarray(r.length - 32);
-  else if (r.length < 32) {
-    const pad = Buffer.alloc(32 - r.length);
-    r = Buffer.concat([pad, r]);
-  }
-
-  // Second integer: s
-  offset += 1; // skip 0x02
-  const sLen = der[offset++];
-  let s = der.subarray(offset, offset + sLen);
-  if (s.length > 32) s = s.subarray(s.length - 32);
-  else if (s.length < 32) {
-    const pad = Buffer.alloc(32 - s.length);
-    s = Buffer.concat([pad, s]);
-  }
-
-  return Buffer.concat([r, s]);
 }
 
 /** Default VAPID keys for development (can be overridden via env vars / secrets) */
@@ -205,7 +166,7 @@ export async function sendWebPush(
       subscription.auth,
     );
 
-    const jwt = createVapidJwt(audience, subject, pubKey, privKey);
+    const jwt = await createVapidJwt(audience, subject, pubKey, privKey);
 
     const response = await fetch(subscription.endpoint, {
       method: 'POST',
@@ -222,7 +183,7 @@ export async function sendWebPush(
     const isExpired = response.status === 404 || response.status === 410;
     return { ok: response.ok, status: response.status, expired: isExpired };
   } catch (err) {
-    console.error('sendWebPush error:', err);
+    console.warn('sendWebPush non-fatal error:', err);
     return { ok: false, status: 500 };
   }
 }

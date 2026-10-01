@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { db } from '../../../lib/db/client';
-import { chatMessages, chatChannels, users, chatModerationLogs } from '../../../lib/db/schema';
+import { chatMessages, chatChannels, users, chatModerationLogs, chatMessageReactions } from '../../../lib/db/schema';
 import { currentUser } from '../../../lib/auth';
 import { levelOf, atLeast } from '../../../lib/staff';
 import { inIds } from '../../../lib/db/sql';
@@ -78,17 +78,28 @@ export const POST: APIRoute = async (ctx) => {
 
     const idsToDelete = messagesToPurge.map((m) => m.id);
 
-    // Delete messages (reactions cascade delete)
+    // Delete reactions first to avoid foreign key issues
+    try {
+      await db().delete(chatMessageReactions).where(inIds(chatMessageReactions.messageId, idsToDelete));
+    } catch (e) {
+      console.warn('[chat:purge] Non-fatal reaction delete error:', e);
+    }
+
+    // Delete messages
     await db().delete(chatMessages).where(inIds(chatMessages.id, idsToDelete));
 
-    // Log moderation action
-    await db().insert(chatModerationLogs).values({
-      targetUserId: targetUserId || null,
-      actorUserId: staff.id,
-      action: 'purge',
-      reason: `Purged ${idsToDelete.length} message(s)${targetUsername ? ` from @${targetUsername.replace(/^@/, '')}` : ''} in #${channelId}`,
-      durationSeconds: null,
-    });
+    // Log moderation action (targetUserId must not be null in D1 schema)
+    try {
+      await db().insert(chatModerationLogs).values({
+        targetUserId: targetUserId || `channel:${channelId}`,
+        actorUserId: staff.id,
+        action: 'purge',
+        reason: `Purged ${idsToDelete.length} message(s)${targetUsername ? ` from @${targetUsername.replace(/^@/, '')}` : ''} in #${channelId}`,
+        durationSeconds: null,
+      });
+    } catch (logErr) {
+      console.warn('[chat:purge] Non-fatal audit log insert error:', logErr);
+    }
 
     return new Response(
       JSON.stringify({

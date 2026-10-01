@@ -1,9 +1,9 @@
 import type { APIRoute } from 'astro';
 import { db } from '../../../lib/db/client';
-import { chatChannels } from '../../../lib/db/schema';
+import { asc, sql } from 'drizzle-orm';
+import { chatChannels, chatMessages } from '../../../lib/db/schema';
 import { currentUser } from '../../../lib/auth';
 import { levelOf, atLeast } from '../../../lib/staff';
-import { asc } from 'drizzle-orm';
 
 export const prerender = false;
 
@@ -45,10 +45,38 @@ export const GET: APIRoute = async (ctx) => {
       channels = channels.filter((c) => !c.isStaffOnly);
     }
 
-    return new Response(JSON.stringify({ ok: true, channels }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    // Attach latest message ID per channel for unread tracking
+    try {
+      const stats = await db()
+        .select({
+          channelId: chatMessages.channelId,
+          latestMessageId: sql<number>`max(${chatMessages.id})`,
+        })
+        .from(chatMessages)
+        .groupBy(chatMessages.channelId);
+
+      const statsMap = new Map<string, number>();
+      for (const s of stats) {
+        if (s.channelId && s.latestMessageId) {
+          statsMap.set(s.channelId, s.latestMessageId);
+        }
+      }
+
+      const enhanced = channels.map((c) => ({
+        ...c,
+        latestMessageId: statsMap.get(c.id) || null,
+      }));
+
+      return new Response(JSON.stringify({ ok: true, channels: enhanced }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch {
+      return new Response(JSON.stringify({ ok: true, channels }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
   } catch (err) {
     console.error('[chat:channels] Error loading channels:', err);
     // Graceful fallback to default channels filtered by staff status

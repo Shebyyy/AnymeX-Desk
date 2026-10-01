@@ -15,6 +15,7 @@
     description: string | null;
     icon: string;
     isStaffOnly: boolean;
+    latestMessageId?: number | null;
   }
 
   interface ReplyInfo {
@@ -56,6 +57,8 @@
     replyTo: ReplyInfo | null;
     taggedReports?: TaggedReport[];
     reactions: ReactionItem[];
+    sendState?: 'sending' | 'sent' | 'failed';
+    clientTempId?: number;
   }
 
   interface MentionUser {
@@ -119,13 +122,19 @@
     createdAt?: number;
   }
 
-  interface SlashWizardState {
-    command: string;
-    targetUsername: string;
-    duration: string;
-    reason: string;
-    count: number;
-    slowmode: number;
+  let readVersion = $state<number>(0);
+
+  function getChannelLastRead(chanId: string): number {
+    if (typeof window === 'undefined') return 0;
+    return parseInt(localStorage.getItem(`anymex_chat_read_${chanId}`) || '0', 10);
+  }
+
+  function isChannelUnread(chan: Channel): boolean {
+    void readVersion;
+    if (chan.id === activeChannelId) return false;
+    if (!chan.latestMessageId) return false;
+    const lastRead = getChannelLastRead(chan.id);
+    return chan.latestMessageId > lastRead;
   }
 
   let channels = $state<Channel[]>(
@@ -159,9 +168,6 @@
   // Editing state using main bottom input box (Discord / Telegram style)
   let editingMessage = $state<ChatMessage | null>(null);
   let isSavingEdit = $state<boolean>(false);
-
-  // Interactive Slash Command Runner State (Interactive UI instead of raw text)
-  let activeSlashWizard = $state<SlashWizardState | null>(null);
 
   // Forwarding Message State
   let forwardTargetMsg = $state<ChatMessage | null>(null);
@@ -202,49 +208,38 @@
     }
   }
 
-  function startSlashWizard(cmdName: string, initialUser = '') {
-    const canonical = (cmdName === 'mute' ? 'timeout' : cmdName === 'clear' ? 'purge' : cmdName === 'unmute' ? 'untimeout' : cmdName);
-    activeSlashWizard = {
-      command: canonical,
-      targetUsername: initialUser.replace(/^@/, ''),
-      duration: '10m',
-      reason: 'Rule violation',
-      count: 10,
-      slowmode: 10,
-    };
-    showCommandPicker = false;
-    inputText = '';
-  }
+  // Media upload state
+  let pendingAttachment = $state<{ file: File; previewUrl: string; isUploading: boolean } | null>(null);
 
-  async function executeWizardCommand() {
-    if (!activeSlashWizard) return;
-    const { command, targetUsername, duration, reason, count, slowmode } = activeSlashWizard;
-    const cleanUser = targetUsername.trim().replace(/^@/, '');
+  // New message indicator tracking (Discord-style unread divider line)
+  let firstUnreadMessageId = $state<number | null>(null);
 
-    if (['timeout', 'ban', 'warn', 'unban', 'untimeout', 'user'].includes(command) && !cleanUser) {
-      showToast('Please select or enter a target user', 'error');
+  // Swipe to reply state (Mobile touch gesture)
+  let swipingMsgId = $state<number | null>(null);
+  let swipeOffset = $state<number>(0);
+  let isSwiping = $state<boolean>(false);
+  let swipeTriggered = $state<boolean>(false);
+  let currentTouchMsg = $state<ChatMessage | null>(null);
+
+  function handleFileAttach(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0) return;
+    const file = input.files[0];
+    if (file.size > 25 * 1024 * 1024) {
+      showToast('File too large (max 25MB)', 'error');
+      input.value = '';
       return;
     }
+    const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : '';
+    pendingAttachment = { file, previewUrl, isUploading: false };
+    input.value = '';
+  }
 
-    if (command === 'timeout') {
-      await executeDirectSlashMod('timeout', cleanUser, reason || 'Rule violation', duration);
-    } else if (command === 'ban') {
-      await executeDirectSlashMod('ban', cleanUser, reason || 'Banned by staff');
-    } else if (command === 'warn') {
-      await executeDirectSlashMod('warn', cleanUser, reason || 'Staff warning');
-    } else if (command === 'unban') {
-      await executeDirectSlashMod('unban', cleanUser, reason || 'Staff pardon');
-    } else if (command === 'untimeout') {
-      await executeDirectSlashMod('untimeout', cleanUser, reason || 'Timeout removed');
-    } else if (command === 'purge') {
-      await executeDirectPurge(count, cleanUser ? `@${cleanUser}` : undefined);
-    } else if (command === 'slowmode') {
-      showToast(`⏱️ Desk Bot: Channel slowmode cooldown set to ${slowmode}s.`, 'info');
-    } else if (command === 'user') {
-      await openUserProfile({ username: cleanUser });
+  function removeAttachment() {
+    if (pendingAttachment?.previewUrl) {
+      URL.revokeObjectURL(pendingAttachment.previewUrl);
     }
-
-    activeSlashWizard = null;
+    pendingAttachment = null;
   }
 
   function openForwardModal(msg: ChatMessage) {
@@ -739,6 +734,30 @@
   }
 
   async function executeDirectPurge(count: number, targetUsername?: string) {
+    const purgeMsgId = -Date.now();
+    const chanName = channels.find((c) => c.id === activeChannelId)?.name || activeChannelId;
+    const targetLabel = targetUsername ? `from @${targetUsername.replace(/^@/, '')}` : '';
+
+    // Instantly append a live bot status message in chat
+    const botProgressMsg: ChatMessage = {
+      id: purgeMsgId,
+      channelId: activeChannelId,
+      userId: 'desk-bot',
+      authorName: 'Desk Bot',
+      authorAvatar: null,
+      authorRole: 'bot',
+      body: `⏳ Running /purge command (${count} message${count > 1 ? 's' : ''} ${targetLabel} in #${chanName})...`,
+      createdAt: Math.floor(Date.now() / 1000),
+      updatedAt: Math.floor(Date.now() / 1000),
+      replyToId: null,
+      replyTo: null,
+      reactions: [],
+      sendState: 'sending',
+    };
+
+    messages = [...messages, botProgressMsg];
+    scrollToBottom();
+
     try {
       const res = await fetch('/api/chat/purge', {
         method: 'POST',
@@ -752,17 +771,40 @@
 
       const data = await res.json();
       if (data.ok) {
-        showToast(`🧹 Desk Bot: ${data.message || `Purged ${data.deletedCount} messages`}`, 'success');
-        if (Array.isArray(data.deletedIds) && data.deletedIds.length > 0) {
-          const idSet = new Set(data.deletedIds);
-          messages = messages.filter((m) => !idSet.has(m.id));
-        } else {
-          await loadMessages(false);
-        }
+        const deletedCount = data.deletedCount || 0;
+        const resultText = targetUsername
+          ? `🧹 Purged ${deletedCount} message(s) from @${targetUsername.replace(/^@/, '')} in #${chanName}.`
+          : `🧹 Purged ${deletedCount} message(s) in #${chanName}.`;
+
+        const deletedIdSet = new Set(data.deletedIds || []);
+        // Remove purged message rows and update the bot message with final count
+        messages = messages
+          .filter((m) => !deletedIdSet.has(m.id))
+          .map((m) =>
+            m.id === purgeMsgId
+              ? {
+                  ...m,
+                  body: resultText,
+                  sendState: 'sent',
+                }
+              : m
+          );
+
+        showToast(resultText, 'success');
       } else {
+        messages = messages.map((m) =>
+          m.id === purgeMsgId
+            ? { ...m, body: `❌ /purge failed: ${data.error || 'Server error'}`, sendState: 'failed' }
+            : m
+        );
         showToast(data.error || 'Failed to purge messages', 'error');
       }
     } catch {
+      messages = messages.map((m) =>
+        m.id === purgeMsgId
+          ? { ...m, body: `❌ /purge failed: Network error`, sendState: 'failed' }
+          : m
+      );
       showToast('Network error executing purge', 'error');
     }
   }
@@ -1002,6 +1044,7 @@
   let userReqSeq = 0;
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let channelPollTimer: ReturnType<typeof setInterval> | null = null;
 
   async function loadChannels() {
     try {
@@ -1024,7 +1067,32 @@
       const data = await res.json();
       if (data.ok && data.messages) {
         const prevCount = messages.length;
-        messages = data.messages;
+        const serverMessages: ChatMessage[] = data.messages;
+        // Preserve locally pending or failed optimistic messages
+        const localPending = messages.filter((m) => m.id < 0 && (m.sendState === 'sending' || m.sendState === 'failed'));
+        messages = [...serverMessages, ...localPending];
+
+        // Track last read message in localStorage for Discord-style new message indicator line
+        if (typeof window !== 'undefined' && serverMessages.length > 0) {
+          const lastRead = parseInt(localStorage.getItem(`anymex_chat_read_${activeChannelId}`) || '0', 10);
+          if (lastRead > 0) {
+            const firstUnread = serverMessages.find((m) => m.id > lastRead);
+            if (firstUnread && firstUnread.id !== serverMessages[0].id) {
+              firstUnreadMessageId = firstUnread.id;
+            } else {
+              firstUnreadMessageId = null;
+            }
+          } else {
+            firstUnreadMessageId = null;
+          }
+
+          // Mark current channel as read
+          const latestMsg = serverMessages[serverMessages.length - 1];
+          localStorage.setItem(`anymex_chat_read_${activeChannelId}`, String(latestMsg.id));
+          unreadCounts[activeChannelId] = 0;
+          readVersion++;
+        }
+
         if (scrollBottom || prevCount === 0 || prevCount < messages.length) {
           scrollToBottom();
         }
@@ -1193,14 +1261,6 @@
 
   function selectCommand(cmd: SlashCommandDef) {
     showCommandPicker = false;
-    inputText = '';
-
-    // If it's an interactive command with arguments, launch the interactive wizard!
-    const interactiveCmds = ['timeout', 'mute', 'ban', 'unban', 'untimeout', 'unmute', 'warn', 'purge', 'clear', 'slowmode', 'user'];
-    if (interactiveCmds.includes(cmd.name)) {
-      startSlashWizard(cmd.name);
-      return;
-    }
 
     // If it's an instant fun/utility command, execute directly!
     if (['ping', 'flip', 'coin', 'shrug', 'tableflip', 'unflip'].includes(cmd.name)) {
@@ -1235,19 +1295,6 @@
   }
 
   function handleKeyDown(e: KeyboardEvent) {
-    if (activeSlashWizard) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        activeSlashWizard = null;
-        return;
-      }
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        executeWizardCommand();
-        return;
-      }
-    }
-
     if (showCommandPicker && filteredCommands.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -1336,8 +1383,26 @@
       }
     }
 
-    // Ctrl+Enter or Cmd+Enter sends the message; regular Enter adds a new line
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    // Enter key handling:
+    // On mobile devices/touch keyboards: Enter adds a newline naturally.
+    // On desktop: plain Enter sends immediately, Shift+Enter adds a newline!
+    if (e.key === 'Enter') {
+      const isMobile =
+        typeof window !== 'undefined' &&
+        (window.matchMedia('(max-width: 768px)').matches ||
+          ('ontouchstart' in window && navigator.maxTouchPoints > 0));
+
+      if (isMobile && !e.ctrlKey && !e.metaKey) {
+        // Mobile soft keyboard: Enter adds newline
+        return;
+      }
+
+      if (e.shiftKey) {
+        // Desktop Shift+Enter adds newline
+        return;
+      }
+
+      // Desktop plain Enter (or Ctrl/Cmd+Enter) sends or saves!
       e.preventDefault();
       handleSendOrSave();
       return;
@@ -1362,14 +1427,85 @@
     sendMessage();
   }
 
-  async function sendMessage() {
+  async function sendMessage(retryMsg?: ChatMessage) {
     if (!currentUser) return;
-    const body = inputText.trim();
-    if (!body || isSending) return;
+    const body = retryMsg ? retryMsg.body : inputText.trim();
+    if (!body && !pendingAttachment) return;
 
-    isSending = true;
-    showReportPicker = false;
-    showUserPicker = false;
+    let attachmentUrl = '';
+    if (pendingAttachment && !retryMsg) {
+      pendingAttachment.isUploading = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', pendingAttachment.file);
+        const upRes = await fetch('/api/chat/upload', { method: 'POST', body: fd });
+        const upData = await upRes.json();
+        if (upData.ok && upData.url) {
+          attachmentUrl = upData.url;
+        } else {
+          showToast(upData.error || 'Failed to upload file', 'error');
+        }
+      } catch (upErr) {
+        console.warn('Attachment upload failed:', upErr);
+        showToast('Network error uploading attachment', 'error');
+      } finally {
+        removeAttachment();
+      }
+    }
+
+    let finalBody = body;
+    if (attachmentUrl) {
+      finalBody = finalBody ? `${finalBody}\n${attachmentUrl}` : attachmentUrl;
+    }
+    if (!finalBody) return;
+
+    const tempId = retryMsg ? retryMsg.id : -Date.now();
+    const replyTarget = retryMsg
+      ? retryMsg.replyTo
+      : replyingTo
+        ? {
+            id: replyingTo.id,
+            body: replyingTo.body,
+            authorName: replyingTo.authorName,
+            authorAvatar: replyingTo.authorAvatar,
+          }
+        : null;
+    const replyId = retryMsg ? retryMsg.replyToId : replyingTo?.id || null;
+
+    if (!retryMsg) {
+      // Clear input immediately for instant, snappy user feedback
+      inputText = '';
+      replyingTo = null;
+      if (textareaRef) {
+        textareaRef.style.height = 'auto';
+      }
+      showReportPicker = false;
+      showUserPicker = false;
+
+      // Add optimistic message to the stream immediately
+      const optimisticMsg: ChatMessage = {
+        id: tempId,
+        clientTempId: tempId,
+        channelId: activeChannelId,
+        userId: currentUser.id,
+        body: finalBody,
+        replyToId: replyId,
+        createdAt: Math.floor(Date.now() / 1000),
+        updatedAt: Math.floor(Date.now() / 1000),
+        authorName: currentUser.username,
+        authorAvatar: currentUser.avatarHash,
+        authorRole: currentUser.isStaff ? 'Staff' : null,
+        replyTo: replyTarget,
+        reactions: [],
+        sendState: 'sending',
+      };
+
+      messages = [...messages, optimisticMsg];
+      scrollToBottom();
+    } else {
+      // Mark existing failed message as sending again
+      messages = messages.map((m) => (m.id === tempId ? { ...m, sendState: 'sending' } : m));
+    }
 
     try {
       const res = await fetch('/api/chat/messages', {
@@ -1377,27 +1513,23 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           channelId: activeChannelId,
-          body,
-          replyToId: replyingTo?.id || null,
+          body: finalBody,
+          replyToId: replyId,
         }),
       });
 
       const data = await res.json();
-      if (data.ok) {
-        inputText = '';
-        replyingTo = null;
-        if (textareaRef) {
-          textareaRef.style.height = 'auto';
-        }
-        await loadMessages(true);
+      if (data.ok && data.message) {
+        // Confirmed by server: replace optimistic message with verified server record
+        messages = messages.map((m) => (m.id === tempId ? { ...data.message, sendState: 'sent' } : m));
       } else {
+        messages = messages.map((m) => (m.id === tempId ? { ...m, sendState: 'failed' } : m));
         showToast(data.error || 'Failed to send message', 'error');
       }
     } catch (err) {
       console.error('Failed sending message:', err);
-      showToast('Network error sending message', 'error');
-    } finally {
-      isSending = false;
+      messages = messages.map((m) => (m.id === tempId ? { ...m, sendState: 'failed' } : m));
+      showToast('Network error: Message failed to send. Tap to retry.', 'error');
     }
   }
 
@@ -1410,17 +1542,50 @@
     const touch = e.touches[0];
     touchStartX = touch.clientX;
     touchStartY = touch.clientY;
+    currentTouchMsg = msg;
+    swipingMsgId = msg.id;
+    swipeOffset = 0;
+    isSwiping = false;
+    swipeTriggered = false;
+
     longPressTimer = setTimeout(() => {
-      openContextMenu(msg, touch.clientX, touch.clientY);
-    }, 400);
+      if (!isSwiping) {
+        openContextMenu(msg, touch.clientX, touch.clientY);
+      }
+    }, 450);
   }
 
   function handleTouchMove(e: TouchEvent) {
-    if (!longPressTimer) return;
     const touch = e.touches[0];
-    if (Math.abs(touch.clientX - touchStartX) > 10 || Math.abs(touch.clientY - touchStartY) > 10) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
+    const diffX = touch.clientX - touchStartX;
+    const diffY = touch.clientY - touchStartY;
+
+    if (!isSwiping && Math.abs(diffX) > 8 && Math.abs(diffX) > Math.abs(diffY)) {
+      isSwiping = true;
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    }
+
+    if (isSwiping && swipingMsgId) {
+      if (diffX < 0) {
+        // Swiping left reveals reply action
+        const dampened = diffX < -60 ? -60 + (diffX + 60) * 0.25 : diffX;
+        swipeOffset = Math.max(-85, dampened);
+
+        if (swipeOffset <= -45 && !swipeTriggered) {
+          swipeTriggered = true;
+          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+            navigator.vibrate?.(12);
+          }
+        } else if (swipeOffset > -45 && swipeTriggered) {
+          swipeTriggered = false;
+        }
+      } else {
+        swipeOffset = 0;
+        swipeTriggered = false;
+      }
     }
   }
 
@@ -1429,6 +1594,20 @@
       clearTimeout(longPressTimer);
       longPressTimer = null;
     }
+
+    if (isSwiping && swipeTriggered && currentTouchMsg) {
+      triggerReply(currentTouchMsg);
+    }
+
+    isSwiping = false;
+    swipeOffset = 0;
+    swipeTriggered = false;
+    setTimeout(() => {
+      if (!isSwiping) {
+        swipingMsgId = null;
+        currentTouchMsg = null;
+      }
+    }, 250);
   }
 
   function handleContextMenu(e: MouseEvent, msg: ChatMessage) {
@@ -1687,6 +1866,10 @@
     pollTimer = setInterval(() => {
       loadMessages(false);
     }, 4000);
+
+    channelPollTimer = setInterval(() => {
+      loadChannels();
+    }, 10000);
   });
 
   onDestroy(() => {
@@ -1694,6 +1877,7 @@
       window.removeEventListener('popstate', handlePopState);
     }
     if (pollTimer) clearInterval(pollTimer);
+    if (channelPollTimer) clearInterval(channelPollTimer);
     if (reportDebounceTimer) clearTimeout(reportDebounceTimer);
     if (userDebounceTimer) clearTimeout(userDebounceTimer);
     if (toastTimer) clearTimeout(toastTimer);
@@ -1706,51 +1890,18 @@
 }} />
 
 <div class="chat-wrapper">
-  <!-- Mobile Header Bar: Visible outside channel pills (never hidden under 3 lines) -->
-  <div class="chat-mobile-bar">
-    <div class="mobile-channels-strip">
-      {#each channels as ch (ch.id)}
-        <button
-          type="button"
-          class="mobile-channel-pill"
-          class:active={ch.id === activeChannelId}
-          onclick={() => handleSelectChannel(ch.id)}
-        >
-          <span class="hash">#</span>{ch.name}
-          {#if unreadCounts[ch.id]}
-            <span class="unread-dot"></span>
-          {/if}
-        </button>
-      {/each}
-    </div>
-    <div class="chat-mobile-actions">
-      {#if pushSupported}
-        <button
-          class="push-toggle-btn-small"
-          class:active={pushActive}
-          onclick={togglePush}
-          title={pushActive ? 'Disable Push' : 'Enable Push'}
-        >
-          {#if pushActive}
-            <svg class="ui-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-            </svg>
-          {:else}
-            <svg class="ui-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-              <path d="M18.63 13A17.89 17.89 0 0 1 18 8"></path>
-              <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"></path>
-              <path d="M18 8a6 6 0 0 0-9.33-5"></path>
-              <line x1="1" y1="1" x2="23" y2="23"></line>
-            </svg>
-          {/if}
-        </button>
-      {/if}
-    </div>
-  </div>
-
   <div class="chat-body-container">
+    {#if mobileSidebarOpen}
+      <div
+        class="mobile-backdrop"
+        onclick={() => (mobileSidebarOpen = false)}
+        role="button"
+        tabindex="0"
+        aria-label="Close channels drawer"
+        onkeydown={(e) => { if (e.key === 'Escape') mobileSidebarOpen = false; }}
+      ></div>
+    {/if}
+
     <!-- Channel Sidebar / Mobile Drawer -->
     <aside class="chat-sidebar" class:mobile-open={mobileSidebarOpen}>
       <div class="sidebar-header">
@@ -1760,42 +1911,62 @@
           </svg>
           <span class="title-text">CHANNELS</span>
         </div>
-        {#if pushSupported}
+        <div class="sidebar-header-right">
+          {#if pushSupported}
+            <button
+              class="push-toggle-btn"
+              class:active={pushActive}
+              onclick={togglePush}
+              title={pushActive ? 'Push Notifications Active' : 'Enable Push Notifications'}
+            >
+              {#if pushActive}
+                <svg class="ui-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                </svg>
+                <span>Push On</span>
+              {:else}
+                <svg class="ui-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                  <path d="M18.63 13A17.89 17.89 0 0 1 18 8"></path>
+                  <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"></path>
+                  <path d="M18 8a6 6 0 0 0-9.33-5"></path>
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                </svg>
+                <span>Push Off</span>
+              {/if}
+            </button>
+          {/if}
           <button
-            class="push-toggle-btn"
-            class:active={pushActive}
-            onclick={togglePush}
-            title={pushActive ? 'Push Notifications Active' : 'Enable Push Notifications'}
+            type="button"
+            class="mobile-close-sidebar-btn"
+            onclick={() => (mobileSidebarOpen = false)}
+            aria-label="Close channels sidebar"
           >
-            {#if pushActive}
-              <svg class="ui-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-              </svg>
-              <span>Push On</span>
-            {:else}
-              <svg class="ui-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-                <path d="M18.63 13A17.89 17.89 0 0 1 18 8"></path>
-                <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"></path>
-                <path d="M18 8a6 6 0 0 0-9.33-5"></path>
-                <line x1="1" y1="1" x2="23" y2="23"></line>
-              </svg>
-              <span>Push Off</span>
-            {/if}
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
           </button>
-        {/if}
+        </div>
       </div>
 
       <div class="channels-list">
         {#each channels as channel (channel.id)}
+          {@const hasUnread = isChannelUnread(channel)}
+          {@const isActive = activeChannelId === channel.id}
           <button
             class="channel-item"
-            class:active={activeChannelId === channel.id}
+            class:active={isActive}
+            class:unread={hasUnread}
+            class:read={!hasUnread && !isActive}
             onclick={() => handleSelectChannel(channel.id)}
           >
             <span class="chan-hash-icon">#</span>
             <span class="chan-name">{channel.name}</span>
+            {#if hasUnread}
+              <span class="chan-unread-dot" title="New unread messages"></span>
+            {/if}
             {#if channel.isStaffOnly}
               <span class="staff-badge">STAFF</span>
             {/if}
@@ -1827,7 +1998,26 @@
     <main class="chat-main">
       <!-- Active Channel Banner -->
       <div class="channel-header-bar">
-        <div class="chan-meta">
+        <!-- Mobile Trigger Button to open channels drawer -->
+        <button
+          type="button"
+          class="mobile-channels-toggle-btn"
+          onclick={() => (mobileSidebarOpen = !mobileSidebarOpen)}
+          aria-label="Toggle channels menu"
+        >
+          <svg class="hamburger-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+          <span class="mobile-chan-hash">#</span>
+          <span class="mobile-chan-name">{channels.find((c) => c.id === activeChannelId)?.name || activeChannelId}</span>
+          <svg class="mobile-chan-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+
+        <div class="chan-meta desktop-only">
           <span class="chan-hash">#</span>
           <span class="chan-title">{channels.find((c) => c.id === activeChannelId)?.name || activeChannelId}</span>
           {#if channels.find((c) => c.id === activeChannelId)?.description}
@@ -1870,16 +2060,40 @@
         {:else}
           {#each messages as msg (msg.id)}
             {@const parsed = parseForwardedMessage(msg.body)}
+            {#if msg.id === firstUnreadMessageId}
+              <div class="new-messages-divider" role="separator" aria-label="New messages">
+                <span class="new-messages-line"></span>
+                <span class="new-messages-badge">NEW MESSAGES</span>
+                <span class="new-messages-line"></span>
+              </div>
+            {/if}
             <div
               id="chat-msg-{msg.id}"
               class="message-row"
               class:highlighted={highlightedMessageId === msg.id}
               class:is-me={currentUser && msg.userId === currentUser.id}
+              class:is-pending={msg.sendState === 'sending'}
+              class:is-failed={msg.sendState === 'failed'}
+              class:is-swiping={swipingMsgId === msg.id && isSwiping}
               oncontextmenu={(e) => handleContextMenu(e, msg)}
               ontouchstart={(e) => handleTouchStart(e, msg)}
               ontouchmove={handleTouchMove}
               ontouchend={handleTouchEnd}
+              style={swipingMsgId === msg.id ? `transform: translateX(${swipeOffset}px); transition: ${isSwiping ? 'none' : 'transform 0.25s cubic-bezier(0.2, 0, 0, 1)'};` : ''}
             >
+              <!-- Mobile Swipe-to-Reply Floating Pill -->
+              {#if swipingMsgId === msg.id && swipeOffset < -8}
+                <div
+                  class="swipe-reply-pill"
+                  class:ready={swipeTriggered}
+                  style="opacity: {Math.min(1, Math.abs(swipeOffset) / 35)}; transform: translateY(-50%) scale({Math.min(1.15, Math.max(0.7, Math.abs(swipeOffset) / 45))});"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="9 17 4 12 9 7"></polyline>
+                    <path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>
+                  </svg>
+                </div>
+              {/if}
               <!-- Reply Spine Connector -->
               {#if msg.replyTo}
                 <div class="reply-spine" onclick={() => msg.replyTo && scrollToMessage(msg.replyTo.id)}>
@@ -1929,6 +2143,28 @@
                     <span class="message-time">{formatTime(msg.createdAt)}</span>
                     {#if msg.isEdited}
                       <span class="edited-tag">(edited)</span>
+                    {/if}
+                    {#if msg.sendState === 'sending'}
+                      <span class="send-status-pending" title="Sending message...">
+                        <svg class="send-spinner" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5">
+                          <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.2)"></circle>
+                          <path d="M12 2a10 10 0 0 1 10 10" stroke="#f59e0b"></path>
+                        </svg>
+                      </span>
+                    {:else if msg.sendState === 'failed'}
+                      <button
+                        type="button"
+                        class="resend-failed-btn"
+                        onclick={() => sendMessage(msg)}
+                        title="Failed to send. Click to retry"
+                      >
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="8" x2="12" y2="12"></line>
+                          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                        </svg>
+                        <span>Failed · Retry</span>
+                      </button>
                     {/if}
                   </div>
 
@@ -2075,6 +2311,12 @@
                                   <line x1="10" y1="14" x2="21" y2="3"></line>
                                 </svg>
                               </button>
+                            {:else if (part.match(/\.(png|jpg|jpeg|gif|webp|avif)(\?[^\s]*)?$/i) || part.includes('/uploads/chat-'))}
+                              <div class="chat-inline-media-wrap">
+                                <a href={part} target="_blank" rel="noopener noreferrer">
+                                  <img src={part} alt="Attached image" class="chat-inline-media" loading="lazy" />
+                                </a>
+                              </div>
                             {:else}
                               <a href={part} target="_blank" rel="noopener noreferrer" class="chat-external-link">{part}</a>
                             {/if}
@@ -2347,212 +2589,76 @@
           </div>
         {/if}
 
-        <!-- Quick Parameter Assistance Pills (for /timeout or /mute) -->
-        {#if inputText.trim().startsWith('/timeout') || inputText.trim().startsWith('/mute')}
-          <div class="quick-param-bar">
-            <span class="quick-param-label">Quick duration:</span>
+        <!-- Media Attachment Preview Card -->
+        {#if pendingAttachment}
+          <div class="pending-attachment-card">
+            <div class="attach-preview-thumb-wrap">
+              {#if pendingAttachment.previewUrl}
+                <img src={pendingAttachment.previewUrl} alt="Preview" class="attach-preview-thumb" />
+              {:else}
+                <div class="attach-preview-file-icon">📎</div>
+              {/if}
+            </div>
+            <div class="attach-info">
+              <span class="attach-name">{pendingAttachment.file.name}</span>
+              <span class="attach-size">{(pendingAttachment.file.size / 1024).toFixed(1)} KB</span>
+            </div>
+            <button
+              type="button"
+              class="attach-remove-btn"
+              onclick={removeAttachment}
+              title="Remove attachment"
+              aria-label="Remove attachment"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+        {/if}
+
+        <!-- Inline Parameter Helper Pills (Discord Style directly above input) -->
+        {#if inputText.trim().startsWith('/purge') || inputText.trim().startsWith('/clear')}
+          <div class="inline-command-bar">
+            <span class="inline-cmd-badge">/purge</span>
+            <span class="inline-hint-text">Quick count:</span>
+            {#each ['5', '10', '25', '50', '100'] as cnt}
+              <button type="button" class="inline-arg-pill" onclick={() => appendParam(cnt)}>
+                {cnt} msgs
+              </button>
+            {/each}
+          </div>
+        {:else if inputText.trim().startsWith('/timeout') || inputText.trim().startsWith('/mute')}
+          <div class="inline-command-bar">
+            <span class="inline-cmd-badge">/timeout</span>
+            <span class="inline-hint-text">Duration:</span>
             {#each ['5m', '15m', '1h', '24h', '7d'] as d}
-              <button
-                type="button"
-                class="param-pill"
-                onclick={() => appendParam(d)}
-              >
+              <button type="button" class="inline-arg-pill" onclick={() => appendParam(d)}>
                 {d}
               </button>
             {/each}
           </div>
-        {/if}
-
-        <!-- Interactive Slash Command Runner Wizard (Discord Style) -->
-        {#if activeSlashWizard}
-          <div class="slash-wizard-panel">
-            <div class="wizard-header">
-              <div class="wizard-header-left">
-                <span class="wizard-badge">/{activeSlashWizard.command}</span>
-                <span class="wizard-subtitle">
-                  {#if activeSlashWizard.command === 'timeout'}
-                    Temporarily mute/timeout a member in this chat
-                  {:else if activeSlashWizard.command === 'ban'}
-                    Permanently ban a user from chat
-                  {:else if activeSlashWizard.command === 'warn'}
-                    Issue an official staff warning to a member
-                  {:else if activeSlashWizard.command === 'unban'}
-                    Revoke ban and restore chat access
-                  {:else if activeSlashWizard.command === 'untimeout'}
-                    Remove active timeout and restore chat permissions
-                  {:else if activeSlashWizard.command === 'purge'}
-                    Bulk purge recent messages from this channel
-                  {:else if activeSlashWizard.command === 'slowmode'}
-                    Set slowmode cooldown interval between messages
-                  {:else if activeSlashWizard.command === 'user'}
-                    Inspect member profile and chat moderation record
-                  {:else}
-                    Interactive slash command assistant
-                  {/if}
-                </span>
-              </div>
-              <button
-                type="button"
-                class="wizard-close-btn"
-                onclick={() => (activeSlashWizard = null)}
-                title="Cancel (Esc)"
-                aria-label="Cancel"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18"></line>
-                  <line x1="6" y1="6" x2="18" y2="18"></line>
-                </svg>
-              </button>
+        {:else if inputText.trim().startsWith('/user') || inputText.trim().startsWith('/warn') || inputText.trim().startsWith('/ban')}
+          {#if recentChatUsers.length > 0}
+            <div class="inline-command-bar">
+              <span class="inline-cmd-badge">Recent in chat:</span>
+              {#each recentChatUsers.slice(0, 5) as u}
+                <button type="button" class="inline-arg-pill user-pill" onclick={() => appendParam('@' + u.username)}>
+                  @{u.username}
+                </button>
+              {/each}
             </div>
-
-            <div class="wizard-steps-grid">
-              <!-- Step 1: User selector (for timeout, ban, warn, unban, untimeout, user) -->
-              {#if ['timeout', 'ban', 'warn', 'unban', 'untimeout', 'user'].includes(activeSlashWizard.command)}
-                <div class="wizard-field">
-                  <label class="wizard-label">Target User:</label>
-                  <div class="wizard-input-wrap">
-                    <input
-                      type="text"
-                      class="wizard-text-input"
-                      placeholder="Search or enter @username..."
-                      bind:value={activeSlashWizard.targetUsername}
-                    />
-                  </div>
-                  {#if recentChatUsers.length > 0}
-                    <div class="wizard-user-chips">
-                      <span class="chips-label">Recent in chat:</span>
-                      {#each recentChatUsers as u}
-                        <button
-                          type="button"
-                          class="user-quick-chip"
-                          class:active={activeSlashWizard.targetUsername === u.username || activeSlashWizard.targetUsername === '@' + u.username}
-                          onclick={() => (activeSlashWizard.targetUsername = u.username)}
-                        >
-                          {#if u.avatarUrl}
-                            <img src={u.avatarUrl} alt="" class="chip-avatar" />
-                          {/if}
-                          <span>@{u.username}</span>
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-
-              <!-- Step 2: Duration pills (for timeout) -->
-              {#if activeSlashWizard.command === 'timeout'}
-                <div class="wizard-field">
-                  <label class="wizard-label">Duration:</label>
-                  <div class="wizard-pill-row">
-                    {#each ['60s', '5m', '10m', '1h', '24h', '7d'] as dur}
-                      <button
-                        type="button"
-                        class="wizard-pill-btn"
-                        class:active={activeSlashWizard.duration === dur}
-                        onclick={() => (activeSlashWizard.duration = dur)}
-                      >
-                        {dur}
-                      </button>
-                    {/each}
-                    <input
-                      type="text"
-                      class="wizard-pill-custom"
-                      placeholder="custom (e.g. 3d)"
-                      bind:value={activeSlashWizard.duration}
-                    />
-                  </div>
-                </div>
-              {/if}
-
-              <!-- Step 3: Count selector (for purge) -->
-              {#if activeSlashWizard.command === 'purge'}
-                <div class="wizard-field">
-                  <label class="wizard-label">Number of messages to purge:</label>
-                  <div class="wizard-pill-row">
-                    {#each [5, 10, 25, 50, 100] as cnt}
-                      <button
-                        type="button"
-                        class="wizard-pill-btn"
-                        class:active={activeSlashWizard.count === cnt}
-                        onclick={() => (activeSlashWizard.count = cnt)}
-                      >
-                        {cnt} msgs
-                      </button>
-                    {/each}
-                  </div>
-                  <div class="wizard-input-wrap" style="margin-top: 8px;">
-                    <label class="wizard-label" style="font-size: 11px;">Filter by specific user (optional):</label>
-                    <input
-                      type="text"
-                      class="wizard-text-input"
-                      placeholder="Leave empty for all users, or enter @username"
-                      bind:value={activeSlashWizard.targetUsername}
-                    />
-                  </div>
-                </div>
-              {/if}
-
-              <!-- Step 4: Slowmode selector (for slowmode) -->
-              {#if activeSlashWizard.command === 'slowmode'}
-                <div class="wizard-field">
-                  <label class="wizard-label">Cooldown interval:</label>
-                  <div class="wizard-pill-row">
-                    {#each [{ val: 0, label: 'Off' }, { val: 5, label: '5s' }, { val: 10, label: '10s' }, { val: 30, label: '30s' }, { val: 60, label: '1m' }, { val: 120, label: '2m' }, { val: 300, label: '5m' }] as opt}
-                      <button
-                        type="button"
-                        class="wizard-pill-btn"
-                        class:active={activeSlashWizard.slowmode === opt.val}
-                        onclick={() => (activeSlashWizard.slowmode = opt.val)}
-                      >
-                        {opt.label}
-                      </button>
-                    {/each}
-                  </div>
-                </div>
-              {/if}
-
-              <!-- Step 5: Reason input & presets (for timeout, ban, warn, unban, untimeout) -->
-              {#if ['timeout', 'ban', 'warn', 'unban', 'untimeout'].includes(activeSlashWizard.command)}
-                <div class="wizard-field">
-                  <label class="wizard-label">Reason:</label>
-                  <div class="wizard-pill-row">
-                    {#each ['Spamming / Flooding', 'Harassment / Disrespect', 'Inappropriate Content', 'Rule Violation', 'Self-promotion'] as r}
-                      <button
-                        type="button"
-                        class="wizard-reason-pill"
-                        class:active={activeSlashWizard.reason === r}
-                        onclick={() => (activeSlashWizard.reason = r)}
-                      >
-                        {r}
-                      </button>
-                    {/each}
-                  </div>
-                  <input
-                    type="text"
-                    class="wizard-text-input"
-                    style="margin-top: 8px;"
-                    placeholder="Custom reason..."
-                    bind:value={activeSlashWizard.reason}
-                  />
-                </div>
-              {/if}
-            </div>
-
-            <div class="wizard-footer">
-              <button type="button" class="wizard-btn-cancel" onclick={() => (activeSlashWizard = null)}>
-                Cancel
+          {/if}
+        {:else if inputText.trim().startsWith('/slowmode')}
+          <div class="inline-command-bar">
+            <span class="inline-cmd-badge">/slowmode</span>
+            <span class="inline-hint-text">Cooldown:</span>
+            {#each [{ s: '0', l: 'Off' }, { s: '5', l: '5s' }, { s: '10', l: '10s' }, { s: '30', l: '30s' }, { s: '60', l: '1m' }] as opt}
+              <button type="button" class="inline-arg-pill" onclick={() => appendParam(opt.s)}>
+                {opt.l}
               </button>
-              <button
-                type="button"
-                class="wizard-btn-execute"
-                onclick={executeWizardCommand}
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                </svg>
-                <span>Run /{activeSlashWizard.command}</span>
-              </button>
-            </div>
+            {/each}
           </div>
         {/if}
 
@@ -2605,6 +2711,20 @@
         <!-- Input Box (Always Visible) -->
         {#if currentUser}
           <div class="composer-box" class:is-editing={!!editingMessage}>
+            {#if !editingMessage}
+              <label class="media-attach-btn" title="Attach image or file" aria-label="Attach file">
+                <input
+                  type="file"
+                  accept="image/*"
+                  class="hidden-file-input"
+                  onchange={handleFileAttach}
+                />
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+              </label>
+            {/if}
             <textarea
               bind:this={textareaRef}
               class="composer-textarea"
@@ -2619,7 +2739,7 @@
             <button
               class="send-btn"
               class:save-btn={!!editingMessage}
-              disabled={!inputText.trim() || isSending || isSavingEdit}
+              disabled={(!inputText.trim() && !pendingAttachment) || isSending || isSavingEdit}
               onclick={handleSendOrSave}
               aria-label={editingMessage ? 'Save edit' : 'Send message'}
               title={editingMessage ? 'Save edit (Ctrl+Enter)' : 'Send message (Ctrl+Enter)'}
@@ -3434,19 +3554,44 @@
     font-weight: 500;
     text-align: left;
     cursor: pointer;
-    transition: background 0.12s, color 0.12s;
+    transition: background 0.12s, color 0.12s, opacity 0.12s;
     width: 100%;
+    position: relative;
+  }
+
+  .channel-item.read {
+    color: var(--text-muted, #71717a);
+    opacity: 0.65;
+    font-weight: 400;
+  }
+
+  .channel-item.unread {
+    color: #ffffff;
+    opacity: 1;
+    font-weight: 600;
   }
 
   .channel-item:hover {
     background: rgba(255, 255, 255, 0.05);
     color: var(--text-primary, #fff);
+    opacity: 1;
   }
 
   .channel-item.active {
     background: rgba(255, 255, 255, 0.1);
     color: var(--text-primary, #fff);
     font-weight: 600;
+    opacity: 1;
+  }
+
+  .chan-unread-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.85);
+    flex-shrink: 0;
+    margin-left: auto;
   }
 
   .chan-hash-icon {
@@ -3629,6 +3774,35 @@
     margin-bottom: 10px;
   }
 
+  /* Discord-style New Messages Divider Line */
+  .new-messages-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px 6px 14px;
+    margin: 6px 0;
+    user-select: none;
+  }
+  .new-messages-line {
+    flex: 1;
+    height: 1px;
+    background: #ef4444;
+    opacity: 0.85;
+  }
+  .new-messages-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: #fff;
+    background: #ef4444;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
+  }
+
   /* Message Row */
   .message-row {
     position: relative;
@@ -3638,6 +3812,31 @@
     border-radius: 8px;
     transition: background 0.12s ease;
     user-select: text;
+    will-change: transform;
+    touch-action: pan-y;
+  }
+
+  /* Mobile Swipe-to-Reply Pill */
+  .swipe-reply-pill {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--text-muted, #a1a1aa);
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .swipe-reply-pill.ready {
+    background: #6366f1;
+    color: #ffffff;
+    box-shadow: 0 0 14px rgba(99, 102, 241, 0.65);
   }
 
   .message-row:hover {
@@ -3795,6 +3994,28 @@
     color: var(--text-secondary, #d4d4d8);
     word-break: break-word;
     white-space: pre-wrap;
+  }
+
+  .chat-inline-media-wrap {
+    margin-top: 6px;
+    margin-bottom: 4px;
+    display: inline-block;
+    max-width: 100%;
+  }
+
+  .chat-inline-media {
+    max-width: min(100%, 380px);
+    max-height: 280px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    object-fit: cover;
+    background: #111;
+    display: block;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .chat-inline-media:hover {
+    transform: scale(1.015);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
   }
 
   .mention-chip {
@@ -5119,6 +5340,145 @@
   }
   .edit-cancel-btn:hover {
     color: #fff;
+  }
+
+  /* Pending Attachment Preview Card */
+  .pending-attachment-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    margin-bottom: 6px;
+  }
+  .attach-preview-thumb-wrap {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #18181b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .attach-preview-thumb {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .attach-preview-file-icon {
+    font-size: 18px;
+  }
+  .attach-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+  .attach-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .attach-size {
+    font-size: 10px;
+    color: var(--text-muted, #71717a);
+  }
+  .attach-remove-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted, #71717a);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .attach-remove-btn:hover {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.12);
+  }
+
+  /* Inline Command Bar & Helper Pills (Discord Style) */
+  .inline-command-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    margin-bottom: 6px;
+  }
+  .inline-cmd-badge {
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--font-mono, monospace);
+    color: var(--accent-gold, #f59e0b);
+    background: rgba(245, 158, 11, 0.12);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .inline-hint-text {
+    font-size: 11px;
+    color: var(--text-muted, #71717a);
+  }
+  .inline-arg-pill {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-secondary, #d4d4d8);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+  .inline-arg-pill:hover {
+    background: rgba(245, 158, 11, 0.2);
+    border-color: rgba(245, 158, 11, 0.4);
+    color: #fff;
+  }
+  .inline-arg-pill.user-pill {
+    background: rgba(99, 102, 241, 0.12);
+    border-color: rgba(99, 102, 241, 0.25);
+    color: #a5b4fc;
+  }
+  .inline-arg-pill.user-pill:hover {
+    background: rgba(99, 102, 241, 0.25);
+    border-color: rgba(99, 102, 241, 0.5);
+    color: #fff;
+  }
+
+  /* Media Attachment Button */
+  .media-attach-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    color: var(--text-muted, #71717a);
+    background: rgba(255, 255, 255, 0.05);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+    margin-bottom: 2px;
+  }
+  .media-attach-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.12);
+  }
+  .hidden-file-input {
+    display: none;
   }
 
   /* Composer Input Box */
