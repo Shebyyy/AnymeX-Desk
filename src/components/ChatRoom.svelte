@@ -108,6 +108,26 @@
     return 'general';
   }
 
+  interface ForwardData {
+    channelId: string;
+    channelName: string;
+    messageId: number;
+    authorName: string;
+    authorAvatar: string | null;
+    authorRole: string | null;
+    body: string;
+    createdAt?: number;
+  }
+
+  interface SlashWizardState {
+    command: string;
+    targetUsername: string;
+    duration: string;
+    reason: string;
+    count: number;
+    slowmode: number;
+  }
+
   let channels = $state<Channel[]>(
     DEFAULT_FRONTEND_CHANNELS.filter((c) => currentUser?.isStaff || !c.isStaffOnly)
   );
@@ -139,6 +159,197 @@
   // Editing state using main bottom input box (Discord / Telegram style)
   let editingMessage = $state<ChatMessage | null>(null);
   let isSavingEdit = $state<boolean>(false);
+
+  // Interactive Slash Command Runner State (Interactive UI instead of raw text)
+  let activeSlashWizard = $state<SlashWizardState | null>(null);
+
+  // Forwarding Message State
+  let forwardTargetMsg = $state<ChatMessage | null>(null);
+  let forwardTargetChannelId = $state<string>('');
+  let forwardComment = $state<string>('');
+  let isForwarding = $state<boolean>(false);
+
+  let currentChannelName = $derived.by(() => {
+    const ch = channels.find((c) => c.id === activeChannelId);
+    return ch ? ch.name : activeChannelId;
+  });
+
+  let recentChatUsers = $derived.by(() => {
+    const map = new Map<string, { id: string; username: string; avatarUrl: string | null; role: string | null }>();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.userId !== currentUser?.id && !map.has(m.userId)) {
+        map.set(m.userId, {
+          id: m.userId,
+          username: m.authorName,
+          avatarUrl: m.authorAvatar ? `https://cdn.discordapp.com/avatars/${m.userId}/${m.authorAvatar}.png?size=32` : null,
+          role: m.authorRole,
+        });
+      }
+      if (map.size >= 12) break;
+    }
+    return Array.from(map.values());
+  });
+
+  function parseForwardedMessage(body: string): { forward: ForwardData | null; text: string } {
+    const match = body.match(/^:::forward\s*([\s\S]*?)\s*:::\s*([\s\S]*)$/);
+    if (!match) return { forward: null, text: body };
+    try {
+      const data = JSON.parse(match[1]) as ForwardData;
+      return { forward: data, text: match[2].trim() };
+    } catch {
+      return { forward: null, text: body };
+    }
+  }
+
+  function startSlashWizard(cmdName: string, initialUser = '') {
+    const canonical = (cmdName === 'mute' ? 'timeout' : cmdName === 'clear' ? 'purge' : cmdName === 'unmute' ? 'untimeout' : cmdName);
+    activeSlashWizard = {
+      command: canonical,
+      targetUsername: initialUser.replace(/^@/, ''),
+      duration: '10m',
+      reason: 'Rule violation',
+      count: 10,
+      slowmode: 10,
+    };
+    showCommandPicker = false;
+    inputText = '';
+  }
+
+  async function executeWizardCommand() {
+    if (!activeSlashWizard) return;
+    const { command, targetUsername, duration, reason, count, slowmode } = activeSlashWizard;
+    const cleanUser = targetUsername.trim().replace(/^@/, '');
+
+    if (['timeout', 'ban', 'warn', 'unban', 'untimeout', 'user'].includes(command) && !cleanUser) {
+      showToast('Please select or enter a target user', 'error');
+      return;
+    }
+
+    if (command === 'timeout') {
+      await executeDirectSlashMod('timeout', cleanUser, reason || 'Rule violation', duration);
+    } else if (command === 'ban') {
+      await executeDirectSlashMod('ban', cleanUser, reason || 'Banned by staff');
+    } else if (command === 'warn') {
+      await executeDirectSlashMod('warn', cleanUser, reason || 'Staff warning');
+    } else if (command === 'unban') {
+      await executeDirectSlashMod('unban', cleanUser, reason || 'Staff pardon');
+    } else if (command === 'untimeout') {
+      await executeDirectSlashMod('untimeout', cleanUser, reason || 'Timeout removed');
+    } else if (command === 'purge') {
+      await executeDirectPurge(count, cleanUser ? `@${cleanUser}` : undefined);
+    } else if (command === 'slowmode') {
+      showToast(`⏱️ Desk Bot: Channel slowmode cooldown set to ${slowmode}s.`, 'info');
+    } else if (command === 'user') {
+      await openUserProfile({ username: cleanUser });
+    }
+
+    activeSlashWizard = null;
+  }
+
+  function openForwardModal(msg: ChatMessage) {
+    closeContextMenu();
+    forwardTargetMsg = msg;
+    forwardComment = '';
+    const available = channels.filter((c) => !c.isStaffOnly || currentUser?.isStaff);
+    const other = available.find((c) => c.id !== activeChannelId);
+    forwardTargetChannelId = other ? other.id : activeChannelId;
+  }
+
+  function closeForwardModal() {
+    forwardTargetMsg = null;
+    isForwarding = false;
+  }
+
+  async function submitForwardMessage() {
+    if (!forwardTargetMsg || isForwarding) return;
+    if (!currentUser) {
+      showToast('You must be signed in to forward messages', 'error');
+      return;
+    }
+    isForwarding = true;
+    const destChannelId = forwardTargetChannelId || activeChannelId;
+    const destChannel = channels.find((c) => c.id === destChannelId);
+
+    const payload: ForwardData = {
+      channelId: forwardTargetMsg.channelId || activeChannelId,
+      channelName: currentChannelName,
+      messageId: forwardTargetMsg.id,
+      authorName: forwardTargetMsg.authorName,
+      authorAvatar: forwardTargetMsg.authorAvatar,
+      authorRole: forwardTargetMsg.authorRole,
+      body: forwardTargetMsg.body,
+      createdAt: forwardTargetMsg.createdAt,
+    };
+
+    const finalBody = `:::forward\n${JSON.stringify(payload)}\n:::\n${forwardComment.trim()}`;
+
+    try {
+      const res = await fetch('/api/chat/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelId: destChannelId,
+          body: finalBody,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        const destName = destChannel ? destChannel.name : destChannelId;
+        showToast(`✓ Forwarded to #${destName}`, 'success');
+        closeForwardModal();
+        if (destChannelId === activeChannelId) {
+          await loadMessages(false);
+          scrollToBottom();
+        }
+      } else {
+        showToast(data.error || 'Failed to forward message', 'error');
+        isForwarding = false;
+      }
+    } catch (err) {
+      console.error('Failed forwarding:', err);
+      showToast('Network error forwarding message', 'error');
+      isForwarding = false;
+    }
+  }
+
+  function copyMessageLink(msg: ChatMessage) {
+    if (typeof window === 'undefined') return;
+    const chan = msg.channelId || activeChannelId;
+    const url = `${window.location.origin}/support?channel=${encodeURIComponent(chan)}&message=${msg.id}`;
+    navigator.clipboard.writeText(url);
+    closeContextMenu();
+    showToast('✓ Message link copied to clipboard', 'success');
+  }
+
+  async function navigateToMessage(targetChannelId: string, messageId?: number) {
+    if (targetChannelId && targetChannelId !== activeChannelId) {
+      handleSelectChannel(targetChannelId);
+    }
+    if (messageId) {
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.set('channel', targetChannelId || activeChannelId);
+        url.searchParams.set('message', String(messageId));
+        window.history.replaceState({}, '', url.pathname + url.search);
+      }
+      setTimeout(() => {
+        scrollToMessage(messageId);
+      }, 300);
+    }
+  }
+
+  function scrollOptionIntoView(popoverType: 'command' | 'user' | 'report', index: number) {
+    setTimeout(() => {
+      const container = document.querySelector(`.${popoverType}-popover .popover-scrollable`);
+      if (!container) return;
+      const items = container.querySelectorAll('.command-suggestion-item, .user-suggestion-item, .report-suggestion-item');
+      const item = items[index] as HTMLElement | undefined;
+      if (item) {
+        item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }, 0);
+  }
 
   // ─────────────────────────────────────────────────────────────
   // Custom Toast Notification System (NO browser alert())
@@ -981,8 +1192,28 @@
   }
 
   function selectCommand(cmd: SlashCommandDef) {
-    inputText = `/${cmd.name} `;
     showCommandPicker = false;
+    inputText = '';
+
+    // If it's an interactive command with arguments, launch the interactive wizard!
+    const interactiveCmds = ['timeout', 'mute', 'ban', 'unban', 'untimeout', 'unmute', 'warn', 'purge', 'clear', 'slowmode', 'user'];
+    if (interactiveCmds.includes(cmd.name)) {
+      startSlashWizard(cmd.name);
+      return;
+    }
+
+    // If it's an instant fun/utility command, execute directly!
+    if (['ping', 'flip', 'coin', 'shrug', 'tableflip', 'unflip'].includes(cmd.name)) {
+      handleSlashCommand(`/${cmd.name}`);
+      return;
+    }
+
+    if (cmd.name === 'help' || cmd.name === 'commands') {
+      showHelpModal = true;
+      return;
+    }
+
+    inputText = `/${cmd.name} `;
     setTimeout(() => {
       if (textareaRef) {
         textareaRef.focus();
@@ -1004,15 +1235,30 @@
   }
 
   function handleKeyDown(e: KeyboardEvent) {
+    if (activeSlashWizard) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        activeSlashWizard = null;
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        executeWizardCommand();
+        return;
+      }
+    }
+
     if (showCommandPicker && filteredCommands.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         selectedCommandIndex = (selectedCommandIndex + 1) % filteredCommands.length;
+        scrollOptionIntoView('command', selectedCommandIndex);
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         selectedCommandIndex = (selectedCommandIndex - 1 + filteredCommands.length) % filteredCommands.length;
+        scrollOptionIntoView('command', selectedCommandIndex);
         return;
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
@@ -1031,11 +1277,13 @@
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         selectedUserIndex = (selectedUserIndex + 1) % userSearchResults.length;
+        scrollOptionIntoView('user', selectedUserIndex);
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         selectedUserIndex = (selectedUserIndex - 1 + userSearchResults.length) % userSearchResults.length;
+        scrollOptionIntoView('user', selectedUserIndex);
         return;
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
@@ -1055,11 +1303,13 @@
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         selectedReportIndex = (selectedReportIndex + 1) % flattenedReports.length;
+        scrollOptionIntoView('report', selectedReportIndex);
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         selectedReportIndex = (selectedReportIndex - 1 + flattenedReports.length) % flattenedReports.length;
+        scrollOptionIntoView('report', selectedReportIndex);
         return;
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
@@ -1399,10 +1649,16 @@
   }
 
   onMount(async () => {
+    let targetMessageId: number | null = null;
     // Check URL query param or hash on mount
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const urlChan = params.get('channel') || params.get('c') || window.location.hash.replace(/^#/, '');
+      const urlMsg = params.get('message') || params.get('m');
+      if (urlMsg) {
+        const parsedId = parseInt(urlMsg, 10);
+        if (!isNaN(parsedId)) targetMessageId = parsedId;
+      }
       if (urlChan) {
         const clean = urlChan.toLowerCase().trim();
         const found = channels.find((c) => c.id === clean || c.name === clean);
@@ -1415,6 +1671,12 @@
 
     await loadChannels();
     await loadMessages(true);
+
+    if (targetMessageId) {
+      setTimeout(() => {
+        if (targetMessageId) scrollToMessage(targetMessageId);
+      }, 350);
+    }
 
     if (isPushSupported()) {
       pushSupported = true;
@@ -1607,6 +1869,7 @@
           </div>
         {:else}
           {#each messages as msg (msg.id)}
+            {@const parsed = parseForwardedMessage(msg.body)}
             <div
               id="chat-msg-{msg.id}"
               class="message-row"
@@ -1669,45 +1932,158 @@
                     {/if}
                   </div>
 
-                  <!-- Message Text Body -->
+                  <!-- Message Text Body & Forwarded Embed -->
                   <div class="message-text">
-                    {#each msg.body.split(/(@[a-zA-Z0-9_.-]+|#\d+)/g) as part}
-                      {#if part.startsWith('@')}
-                        {@const cleanMention = part.slice(1).toLowerCase()}
-                        {#if cleanMention === 'everyone' || cleanMention === 'here'}
-                          <span class="mention-chip mention-broadcast" title="Broadcast notification to everyone in this channel">
-                            <svg class="chip-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-                              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-                            </svg>
+                    {#if parsed.forward}
+                      <div class="forward-header-badge">
+                        <svg class="forward-icon-svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                          <polyline points="15 14 20 9 15 4"></polyline>
+                          <path d="M4 20v-7a4 4 0 0 1 4-4h12"></path>
+                        </svg>
+                        <span class="forward-label">Forwarded from</span>
+                        <button
+                          type="button"
+                          class="forward-source-channel-btn"
+                          onclick={() => navigateToMessage(parsed.forward.channelId, parsed.forward.messageId)}
+                          title="Switch to #{parsed.forward.channelName}"
+                        >
+                          <svg class="channel-hash-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="4" y1="9" x2="20" y2="9"></line>
+                            <line x1="4" y1="15" x2="20" y2="15"></line>
+                            <line x1="10" y1="3" x2="8" y2="21"></line>
+                            <line x1="16" y1="3" x2="14" y2="21"></line>
+                          </svg>
+                          <span>{parsed.forward.channelName}</span>
+                        </button>
+                        <button
+                          type="button"
+                          class="forward-jump-btn"
+                          onclick={() => navigateToMessage(parsed.forward.channelId, parsed.forward.messageId)}
+                          title="Jump to original message"
+                        >
+                          <span>Jump</span>
+                          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                            <polyline points="15 3 21 3 21 9"></polyline>
+                            <line x1="10" y1="14" x2="21" y2="3"></line>
+                          </svg>
+                        </button>
+                      </div>
+
+                      <div class="forwarded-embed-card">
+                        <div class="forwarded-author-bar">
+                          {#if parsed.forward.authorAvatar}
+                            <img
+                              src="https://cdn.discordapp.com/avatars/{parsed.forward.authorAvatar.includes('/') ? '' : ''}{parsed.forward.authorAvatar}.png?size=32"
+                              alt=""
+                              class="forwarded-mini-avatar"
+                            />
+                          {:else}
+                            <div class="forwarded-mini-fallback">{parsed.forward.authorName.slice(0, 2).toUpperCase()}</div>
+                          {/if}
+                          <span class="forwarded-author-name role-{parsed.forward.authorRole || 'member'}">@{parsed.forward.authorName}</span>
+                          {#if parsed.forward.authorRole && parsed.forward.authorRole !== 'member'}
+                            <span class="role-tag role-{parsed.forward.authorRole}">{parsed.forward.authorRole}</span>
+                          {/if}
+                          {#if parsed.forward.createdAt}
+                            <span class="forwarded-time">{formatTime(parsed.forward.createdAt)}</span>
+                          {/if}
+                        </div>
+                        <div class="forwarded-body-text">
+                          {parsed.forward.body}
+                        </div>
+                      </div>
+                    {/if}
+
+                    {#if parsed.text}
+                      <div class="forward-commentary-text">
+                        {#each parsed.text.split(/(@[a-zA-Z0-9_.-]+|#[a-zA-Z0-9_\-]+|https?:\/\/[^\s]+|\/support\?[^\s]+)/g) as part}
+                          {#if part.startsWith('@')}
+                            {@const cleanMention = part.slice(1).toLowerCase()}
+                            {#if cleanMention === 'everyone' || cleanMention === 'here'}
+                              <span class="mention-chip mention-broadcast" title="Broadcast notification to everyone in this channel">
+                                <svg class="chip-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                                  <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                                </svg>
+                                {part}
+                              </span>
+                            {:else if cleanMention === 'staff' || cleanMention === 'admin' || cleanMention === 'mod'}
+                              <span class="mention-chip mention-role-chip role-{cleanMention}" title="Role notification for {cleanMention}">
+                                <svg class="chip-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                                </svg>
+                                {part}
+                              </span>
+                            {:else}
+                              <button
+                                type="button"
+                                class="mention-chip mention-user-chip"
+                                class:mention-me={currentUser && cleanMention === currentUser.username.toLowerCase()}
+                                onclick={() => openUserProfile({ username: part.slice(1) })}
+                                title="Click to view @{part.slice(1)}'s profile"
+                              >
+                                {part}
+                              </button>
+                            {/if}
+                          {:else if part.startsWith('#') && /#\d+$/.test(part)}
+                            <a href="/report/{part.slice(1)}" class="report-link-chip" target="_blank">
+                              {part}
+                            </a>
+                          {:else if part.startsWith('#') && channels.some((c) => '#' + c.name.toLowerCase() === part.toLowerCase() || '#' + c.id.toLowerCase() === part.toLowerCase())}
+                            {@const targetCh = channels.find((c) => '#' + c.name.toLowerCase() === part.toLowerCase() || '#' + c.id.toLowerCase() === part.toLowerCase())}
+                            {#if targetCh}
+                              <button
+                                type="button"
+                                class="channel-link-chip"
+                                onclick={() => handleSelectChannel(targetCh.id)}
+                                title="Switch to #{targetCh.name}"
+                              >
+                                <svg class="chip-hash-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                  <line x1="4" y1="9" x2="20" y2="9"></line>
+                                  <line x1="4" y1="15" x2="20" y2="15"></line>
+                                  <line x1="10" y1="3" x2="8" y2="21"></line>
+                                  <line x1="16" y1="3" x2="14" y2="21"></line>
+                                </svg>
+                                <span>{targetCh.name}</span>
+                              </button>
+                            {/if}
+                          {:else if (part.includes('/support?') && part.includes('channel='))}
+                            {@const linkMatch = part.match(/[?&]channel=([a-zA-Z0-9_-]+)(?:&(?:amp;)?message=(\d+))?/)}
+                            {#if linkMatch}
+                              {@const lChan = linkMatch[1]}
+                              {@const lMsg = linkMatch[2] ? parseInt(linkMatch[2], 10) : null}
+                              <button
+                                type="button"
+                                class="message-link-chip"
+                                onclick={() => navigateToMessage(lChan, lMsg || undefined)}
+                                title="Jump to #{lChan}{lMsg ? ` message #${lMsg}` : ''}"
+                              >
+                                <svg class="chip-hash-svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                  <line x1="4" y1="9" x2="20" y2="9"></line>
+                                  <line x1="4" y1="15" x2="20" y2="15"></line>
+                                  <line x1="10" y1="3" x2="8" y2="21"></line>
+                                  <line x1="16" y1="3" x2="14" y2="21"></line>
+                                </svg>
+                                <span>#{lChan}</span>
+                                {#if lMsg}
+                                  <span class="msg-num-badge">› msg #{lMsg}</span>
+                                {/if}
+                                <svg class="chip-jump-svg" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                                  <polyline points="15 3 21 3 21 9"></polyline>
+                                  <line x1="10" y1="14" x2="21" y2="3"></line>
+                                </svg>
+                              </button>
+                            {:else}
+                              <a href={part} target="_blank" rel="noopener noreferrer" class="chat-external-link">{part}</a>
+                            {/if}
+                          {:else}
                             {part}
-                          </span>
-                        {:else if cleanMention === 'staff' || cleanMention === 'admin' || cleanMention === 'mod'}
-                          <span class="mention-chip mention-role-chip role-{cleanMention}" title="Role notification for {cleanMention}">
-                            <svg class="chip-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                            </svg>
-                            {part}
-                          </span>
-                        {:else}
-                          <button
-                            type="button"
-                            class="mention-chip mention-user-chip"
-                            class:mention-me={currentUser && cleanMention === currentUser.username.toLowerCase()}
-                            onclick={() => openUserProfile({ username: part.slice(1) })}
-                            title="Click to view @{part.slice(1)}'s profile"
-                          >
-                            {part}
-                          </button>
-                        {/if}
-                      {:else if part.startsWith('#') && /#\d+$/.test(part)}
-                        <a href="/report/{part.slice(1)}" class="report-link-chip" target="_blank">
-                          {part}
-                        </a>
-                      {:else}
-                        {part}
-                      {/if}
-                    {/each}
+                          {/if}
+                        {/each}
+                      </div>
+                    {/if}
                   </div>
 
                   <!-- Embedded Report Cards -->
@@ -1749,7 +2125,7 @@
                   {/if}
                 </div>
 
-                <!-- Clean Discord-Style Hover Bar (Only 3 crisp SVG icons on Desktop) -->
+                <!-- Clean Discord-Style Hover Bar (Only 4 crisp SVG icons on Desktop) -->
                 <div class="desktop-hover-bar">
                   <!-- Quick Reaction Picker Toggle -->
                   <div class="reaction-trigger-wrap">
@@ -1785,6 +2161,14 @@
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <polyline points="9 17 4 12 9 7"></polyline>
                       <path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>
+                    </svg>
+                  </button>
+
+                  <!-- Forward Message -->
+                  <button class="hover-icon-btn" onclick={() => openForwardModal(msg)} title="Forward Message" aria-label="Forward Message">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="15 14 20 9 15 4"></polyline>
+                      <path d="M4 20v-7a4 4 0 0 1 4-4h12"></path>
                     </svg>
                   </button>
 
@@ -1979,6 +2363,199 @@
           </div>
         {/if}
 
+        <!-- Interactive Slash Command Runner Wizard (Discord Style) -->
+        {#if activeSlashWizard}
+          <div class="slash-wizard-panel">
+            <div class="wizard-header">
+              <div class="wizard-header-left">
+                <span class="wizard-badge">/{activeSlashWizard.command}</span>
+                <span class="wizard-subtitle">
+                  {#if activeSlashWizard.command === 'timeout'}
+                    Temporarily mute/timeout a member in this chat
+                  {:else if activeSlashWizard.command === 'ban'}
+                    Permanently ban a user from chat
+                  {:else if activeSlashWizard.command === 'warn'}
+                    Issue an official staff warning to a member
+                  {:else if activeSlashWizard.command === 'unban'}
+                    Revoke ban and restore chat access
+                  {:else if activeSlashWizard.command === 'untimeout'}
+                    Remove active timeout and restore chat permissions
+                  {:else if activeSlashWizard.command === 'purge'}
+                    Bulk purge recent messages from this channel
+                  {:else if activeSlashWizard.command === 'slowmode'}
+                    Set slowmode cooldown interval between messages
+                  {:else if activeSlashWizard.command === 'user'}
+                    Inspect member profile and chat moderation record
+                  {:else}
+                    Interactive slash command assistant
+                  {/if}
+                </span>
+              </div>
+              <button
+                type="button"
+                class="wizard-close-btn"
+                onclick={() => (activeSlashWizard = null)}
+                title="Cancel (Esc)"
+                aria-label="Cancel"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+
+            <div class="wizard-steps-grid">
+              <!-- Step 1: User selector (for timeout, ban, warn, unban, untimeout, user) -->
+              {#if ['timeout', 'ban', 'warn', 'unban', 'untimeout', 'user'].includes(activeSlashWizard.command)}
+                <div class="wizard-field">
+                  <label class="wizard-label">Target User:</label>
+                  <div class="wizard-input-wrap">
+                    <input
+                      type="text"
+                      class="wizard-text-input"
+                      placeholder="Search or enter @username..."
+                      bind:value={activeSlashWizard.targetUsername}
+                    />
+                  </div>
+                  {#if recentChatUsers.length > 0}
+                    <div class="wizard-user-chips">
+                      <span class="chips-label">Recent in chat:</span>
+                      {#each recentChatUsers as u}
+                        <button
+                          type="button"
+                          class="user-quick-chip"
+                          class:active={activeSlashWizard.targetUsername === u.username || activeSlashWizard.targetUsername === '@' + u.username}
+                          onclick={() => (activeSlashWizard.targetUsername = u.username)}
+                        >
+                          {#if u.avatarUrl}
+                            <img src={u.avatarUrl} alt="" class="chip-avatar" />
+                          {/if}
+                          <span>@{u.username}</span>
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+
+              <!-- Step 2: Duration pills (for timeout) -->
+              {#if activeSlashWizard.command === 'timeout'}
+                <div class="wizard-field">
+                  <label class="wizard-label">Duration:</label>
+                  <div class="wizard-pill-row">
+                    {#each ['60s', '5m', '10m', '1h', '24h', '7d'] as dur}
+                      <button
+                        type="button"
+                        class="wizard-pill-btn"
+                        class:active={activeSlashWizard.duration === dur}
+                        onclick={() => (activeSlashWizard.duration = dur)}
+                      >
+                        {dur}
+                      </button>
+                    {/each}
+                    <input
+                      type="text"
+                      class="wizard-pill-custom"
+                      placeholder="custom (e.g. 3d)"
+                      bind:value={activeSlashWizard.duration}
+                    />
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Step 3: Count selector (for purge) -->
+              {#if activeSlashWizard.command === 'purge'}
+                <div class="wizard-field">
+                  <label class="wizard-label">Number of messages to purge:</label>
+                  <div class="wizard-pill-row">
+                    {#each [5, 10, 25, 50, 100] as cnt}
+                      <button
+                        type="button"
+                        class="wizard-pill-btn"
+                        class:active={activeSlashWizard.count === cnt}
+                        onclick={() => (activeSlashWizard.count = cnt)}
+                      >
+                        {cnt} msgs
+                      </button>
+                    {/each}
+                  </div>
+                  <div class="wizard-input-wrap" style="margin-top: 8px;">
+                    <label class="wizard-label" style="font-size: 11px;">Filter by specific user (optional):</label>
+                    <input
+                      type="text"
+                      class="wizard-text-input"
+                      placeholder="Leave empty for all users, or enter @username"
+                      bind:value={activeSlashWizard.targetUsername}
+                    />
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Step 4: Slowmode selector (for slowmode) -->
+              {#if activeSlashWizard.command === 'slowmode'}
+                <div class="wizard-field">
+                  <label class="wizard-label">Cooldown interval:</label>
+                  <div class="wizard-pill-row">
+                    {#each [{ val: 0, label: 'Off' }, { val: 5, label: '5s' }, { val: 10, label: '10s' }, { val: 30, label: '30s' }, { val: 60, label: '1m' }, { val: 120, label: '2m' }, { val: 300, label: '5m' }] as opt}
+                      <button
+                        type="button"
+                        class="wizard-pill-btn"
+                        class:active={activeSlashWizard.slowmode === opt.val}
+                        onclick={() => (activeSlashWizard.slowmode = opt.val)}
+                      >
+                        {opt.label}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Step 5: Reason input & presets (for timeout, ban, warn, unban, untimeout) -->
+              {#if ['timeout', 'ban', 'warn', 'unban', 'untimeout'].includes(activeSlashWizard.command)}
+                <div class="wizard-field">
+                  <label class="wizard-label">Reason:</label>
+                  <div class="wizard-pill-row">
+                    {#each ['Spamming / Flooding', 'Harassment / Disrespect', 'Inappropriate Content', 'Rule Violation', 'Self-promotion'] as r}
+                      <button
+                        type="button"
+                        class="wizard-reason-pill"
+                        class:active={activeSlashWizard.reason === r}
+                        onclick={() => (activeSlashWizard.reason = r)}
+                      >
+                        {r}
+                      </button>
+                    {/each}
+                  </div>
+                  <input
+                    type="text"
+                    class="wizard-text-input"
+                    style="margin-top: 8px;"
+                    placeholder="Custom reason..."
+                    bind:value={activeSlashWizard.reason}
+                  />
+                </div>
+              {/if}
+            </div>
+
+            <div class="wizard-footer">
+              <button type="button" class="wizard-btn-cancel" onclick={() => (activeSlashWizard = null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                class="wizard-btn-execute"
+                onclick={executeWizardCommand}
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+                <span>Run /{activeSlashWizard.command}</span>
+              </button>
+            </div>
+          </div>
+        {/if}
+
         <!-- Active Reply Quoting Bar -->
         {#if replyingTo && !editingMessage}
           <div class="active-reply-bar">
@@ -2105,6 +2682,26 @@
       <span class="item-label">Reply</span>
     </button>
 
+    <button class="context-menu-item" onclick={() => activeContextMsg && openForwardModal(activeContextMsg)}>
+      <span class="item-icon">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 14 20 9 15 4"></polyline>
+          <path d="M4 20v-7a4 4 0 0 1 4-4h12"></path>
+        </svg>
+      </span>
+      <span class="item-label">Forward to Channel...</span>
+    </button>
+
+    <button class="context-menu-item" onclick={() => activeContextMsg && copyMessageLink(activeContextMsg)}>
+      <span class="item-icon">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+        </svg>
+      </span>
+      <span class="item-label">Copy Message Link</span>
+    </button>
+
     <button class="context-menu-item" onclick={() => activeContextMsg && copyMessageText(activeContextMsg)}>
       <span class="item-icon">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2182,6 +2779,26 @@
             </svg>
           </span>
           <span class="sheet-label">Reply</span>
+        </button>
+
+        <button class="sheet-item" onclick={() => activeContextMsg && openForwardModal(activeContextMsg)}>
+          <span class="sheet-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 14 20 9 15 4"></polyline>
+              <path d="M4 20v-7a4 4 0 0 1 4-4h12"></path>
+            </svg>
+          </span>
+          <span class="sheet-label">Forward to Channel...</span>
+        </button>
+
+        <button class="sheet-item" onclick={() => activeContextMsg && copyMessageLink(activeContextMsg)}>
+          <span class="sheet-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+          </span>
+          <span class="sheet-label">Copy Message Link</span>
         </button>
 
         <button class="sheet-item" onclick={() => activeContextMsg && copyMessageText(activeContextMsg)}>
@@ -2527,6 +3144,142 @@
             {/each}
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- ─────────────────────────────────────────────────────────────
+     Discord-Style Custom Forward Message Modal Dialog
+     ───────────────────────────────────────────────────────────── -->
+{#if forwardTargetMsg}
+  <div class="custom-modal-backdrop" onclick={closeForwardModal}>
+    <div class="custom-modal-card forward-modal-card" onclick={(e) => e.stopPropagation()}>
+      <div class="forward-modal-header">
+        <div class="forward-header-icon-circle">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 14 20 9 15 4"></polyline>
+            <path d="M4 20v-7a4 4 0 0 1 4-4h12"></path>
+          </svg>
+        </div>
+        <div class="forward-header-text">
+          <h3 class="modal-title">Forward Message</h3>
+          <span class="modal-subtitle">Share this message with another channel</span>
+        </div>
+        <button class="forward-close-btn" onclick={closeForwardModal} aria-label="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Preview of message being forwarded -->
+      <div class="forward-preview-panel">
+        <div class="preview-origin-badge">
+          <svg class="hash-icon-svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="9" x2="20" y2="9"></line>
+            <line x1="4" y1="15" x2="20" y2="15"></line>
+            <line x1="10" y1="3" x2="8" y2="21"></line>
+            <line x1="16" y1="3" x2="14" y2="21"></line>
+          </svg>
+          <span>From #{currentChannelName}</span>
+        </div>
+        <div class="preview-body-card">
+          <div class="preview-author-row">
+            {#if forwardTargetMsg.authorAvatar}
+              <img
+                src="https://cdn.discordapp.com/avatars/{forwardTargetMsg.userId}/{forwardTargetMsg.authorAvatar}.png?size=32"
+                alt=""
+                class="preview-avatar"
+              />
+            {:else}
+              <div class="preview-avatar-fallback">{forwardTargetMsg.authorName.slice(0, 2).toUpperCase()}</div>
+            {/if}
+            <span class="preview-author-name">@{forwardTargetMsg.authorName}</span>
+            <span class="preview-time">{formatTime(forwardTargetMsg.createdAt)}</span>
+          </div>
+          <div class="preview-text-snippet">
+            {forwardTargetMsg.body.slice(0, 200)}{forwardTargetMsg.body.length > 200 ? '...' : ''}
+          </div>
+        </div>
+      </div>
+
+      <!-- Target Channel Selection -->
+      <div class="forward-dest-section">
+        <label class="section-label">Select Destination Channel:</label>
+        <div class="channel-picker-grid">
+          {#each channels.filter((c) => !c.isStaffOnly || currentUser?.isStaff) as ch (ch.id)}
+            <button
+              type="button"
+              class="channel-select-card"
+              class:selected={forwardTargetChannelId === ch.id}
+              onclick={() => (forwardTargetChannelId = ch.id)}
+            >
+              <div class="channel-card-left">
+                <svg class="channel-svg-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  {#if ch.isStaffOnly}
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                  {:else}
+                    <line x1="4" y1="9" x2="20" y2="9"></line>
+                    <line x1="4" y1="15" x2="20" y2="15"></line>
+                    <line x1="10" y1="3" x2="8" y2="21"></line>
+                    <line x1="16" y1="3" x2="14" y2="21"></line>
+                  {/if}
+                </svg>
+                <div class="channel-name-col">
+                  <span class="chan-name">#{ch.name}</span>
+                  {#if ch.description}
+                    <span class="chan-desc">{ch.description}</span>
+                  {/if}
+                </div>
+              </div>
+              {#if forwardTargetChannelId === ch.id}
+                <div class="chan-check-badge">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </div>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      </div>
+
+      <!-- Optional Comment Section -->
+      <div class="forward-comment-section">
+        <label class="section-label">Add a comment (optional):</label>
+        <textarea
+          class="forward-comment-input"
+          placeholder="Add your thoughts or note..."
+          rows="2"
+          bind:value={forwardComment}
+        ></textarea>
+      </div>
+
+      <!-- Action Footer -->
+      <div class="forward-modal-footer">
+        <button type="button" class="btn-cancel" onclick={closeForwardModal} disabled={isForwarding}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="btn-confirm-forward"
+          disabled={isForwarding || !forwardTargetChannelId}
+          onclick={submitForwardMessage}
+        >
+          {#if isForwarding}
+            <span class="sending-spinner"></span>
+            <span>Forwarding...</span>
+          {:else}
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 14 20 9 15 4"></polyline>
+              <path d="M4 20v-7a4 4 0 0 1 4-4h12"></path>
+            </svg>
+            <span>Forward Message</span>
+          {/if}
+        </button>
       </div>
     </div>
   </div>
@@ -4703,6 +5456,645 @@
     height: 6px;
     border-radius: 50%;
     background: var(--signal, #f59e0b);
+  }
+
+  /* ─────────────────────────────────────────────────────────────
+     Interactive Slash Command Wizard HUD Panel
+     ───────────────────────────────────────────────────────────── */
+  .slash-wizard-panel {
+    background: #141518;
+    border: 1px solid rgba(88, 101, 242, 0.4);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5), 0 0 16px rgba(88, 101, 242, 0.15);
+    animation: fadeInDown 0.18s ease-out;
+    margin-bottom: 4px;
+  }
+  @keyframes fadeInDown {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .wizard-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .wizard-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .wizard-badge {
+    background: #5865F2;
+    color: #fff;
+    font-weight: 800;
+    font-size: 13px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    letter-spacing: 0.02em;
+  }
+  .wizard-subtitle {
+    font-size: 12px;
+    color: var(--text-secondary, #aaa);
+  }
+  .wizard-close-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-tertiary, #777);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, background 0.15s;
+  }
+  .wizard-close-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+  }
+  .wizard-steps-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .wizard-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .wizard-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary, #aaa);
+  }
+  .wizard-input-wrap {
+    display: flex;
+    align-items: center;
+  }
+  .wizard-text-input {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: #fff;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .wizard-text-input:focus {
+    border-color: #5865F2;
+    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.2);
+  }
+  .wizard-user-chips {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  .chips-label {
+    font-size: 11px;
+    color: var(--text-tertiary, #777);
+  }
+  .user-quick-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    color: #ddd;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .user-quick-chip:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+  }
+  .user-quick-chip.active {
+    background: rgba(88, 101, 242, 0.35);
+    border-color: #5865F2;
+    color: #fff;
+  }
+  .chip-avatar {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    object-fit: cover;
+  }
+  .wizard-pill-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .wizard-pill-btn {
+    padding: 5px 10px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: #ddd;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .wizard-pill-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+  }
+  .wizard-pill-btn.active {
+    background: #5865F2;
+    border-color: #5865F2;
+    color: #fff;
+  }
+  .wizard-pill-custom {
+    padding: 5px 8px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 11px;
+    width: 105px;
+    outline: none;
+    box-sizing: border-box;
+  }
+  .wizard-pill-custom:focus {
+    border-color: #5865F2;
+  }
+  .wizard-reason-pill {
+    padding: 4px 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: #ccc;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .wizard-reason-pill:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+  .wizard-reason-pill.active {
+    background: rgba(245, 158, 11, 0.25);
+    border-color: #f59e0b;
+    color: #fcd34d;
+  }
+  .wizard-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .wizard-btn-cancel {
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #bbb;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .wizard-btn-cancel:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+  }
+  .wizard-btn-execute {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    background: #5865F2;
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(88, 101, 242, 0.4);
+    transition: all 0.15s ease;
+  }
+  .wizard-btn-execute:hover {
+    background: #4752c4;
+    transform: translateY(-1px);
+  }
+
+  /* ─────────────────────────────────────────────────────────────
+     Forwarded Message Badges and Embed Cards (Discord Style)
+     ───────────────────────────────────────────────────────────── */
+  .forward-header-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--text-tertiary, #999);
+  }
+  .forward-icon-svg {
+    color: #5865F2;
+    flex-shrink: 0;
+  }
+  .forward-label {
+    font-weight: 500;
+    color: var(--text-secondary, #aaa);
+  }
+  .forward-source-channel-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    background: rgba(88, 101, 242, 0.15);
+    border: 1px solid rgba(88, 101, 242, 0.3);
+    border-radius: 5px;
+    color: #93a0ff;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .forward-source-channel-btn:hover {
+    background: rgba(88, 101, 242, 0.3);
+    color: #fff;
+  }
+  .channel-hash-svg {
+    color: #7289da;
+  }
+  .forward-jump-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 6px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    color: var(--text-secondary, #aaa);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    cursor: pointer;
+    margin-left: 2px;
+    transition: all 0.15s ease;
+  }
+  .forward-jump-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+  }
+  .forwarded-embed-card {
+    background: rgba(0, 0, 0, 0.28);
+    border-left: 3px solid #5865F2;
+    border-radius: 0 8px 8px 0;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .forwarded-author-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+  }
+  .forwarded-mini-avatar {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    object-fit: cover;
+  }
+  .forwarded-mini-fallback {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #3f3f46;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .forwarded-author-name {
+    font-weight: 700;
+  }
+  .forwarded-time {
+    color: var(--text-tertiary, #666);
+    font-size: 10px;
+  }
+  .forwarded-body-text {
+    font-size: 13px;
+    color: #e4e4e7;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .forward-commentary-text {
+    font-size: 14px;
+    color: var(--text-primary, #fff);
+  }
+
+  /* ─────────────────────────────────────────────────────────────
+     Channel & Message Link Chips (Crisp SVG Icons, NO Emojis!)
+     ───────────────────────────────────────────────────────────── */
+  .channel-link-chip,
+  .message-link-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: rgba(88, 101, 242, 0.14);
+    border: 1px solid rgba(88, 101, 242, 0.28);
+    color: #93a0ff;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: all 0.15s ease;
+    margin: 0 2px;
+  }
+  .channel-link-chip:hover,
+  .message-link-chip:hover {
+    background: rgba(88, 101, 242, 0.3);
+    border-color: #5865F2;
+    color: #fff;
+    transform: translateY(-1px);
+  }
+  .chip-hash-svg {
+    color: #7289da;
+    flex-shrink: 0;
+  }
+  .msg-num-badge {
+    color: var(--text-secondary, #aaa);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .chip-jump-svg {
+    color: #aaa;
+    margin-left: 2px;
+    flex-shrink: 0;
+  }
+  .chat-external-link {
+    color: #60a5fa;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    word-break: break-all;
+  }
+  .chat-external-link:hover {
+    color: #93c5fd;
+  }
+
+  /* ─────────────────────────────────────────────────────────────
+     Forward Message Modal Styles
+     ───────────────────────────────────────────────────────────── */
+  .forward-modal-card {
+    max-width: 520px;
+    width: 92%;
+    background: #18191c;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .forward-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: relative;
+  }
+  .forward-header-icon-circle {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(88, 101, 242, 0.15);
+    color: #5865F2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .forward-header-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .forward-close-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-tertiary, #777);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s;
+  }
+  .forward-close-btn:hover {
+    color: #fff;
+  }
+  .forward-preview-panel {
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .preview-origin-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text-secondary, #aaa);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .preview-body-card {
+    border-left: 2px solid #5865F2;
+    padding-left: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .preview-author-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .preview-avatar {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    object-fit: cover;
+  }
+  .preview-avatar-fallback {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #3f3f46;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .preview-author-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+  }
+  .preview-time {
+    font-size: 10px;
+    color: var(--text-tertiary, #666);
+  }
+  .preview-text-snippet {
+    font-size: 12px;
+    color: #ccc;
+    line-height: 1.4;
+  }
+  .forward-dest-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .channel-picker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 8px;
+    max-height: 160px;
+    overflow-y: auto;
+  }
+  .channel-select-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s ease;
+  }
+  .channel-select-card:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+  .channel-select-card.selected {
+    background: rgba(88, 101, 242, 0.2);
+    border-color: #5865F2;
+  }
+  .channel-card-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+  }
+  .channel-svg-icon {
+    color: #7289da;
+    flex-shrink: 0;
+  }
+  .channel-name-col {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .chan-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chan-desc {
+    font-size: 10px;
+    color: var(--text-tertiary, #777);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chan-check-badge {
+    color: #5865F2;
+    display: flex;
+    align-items: center;
+  }
+  .forward-comment-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .forward-comment-input {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: #fff;
+    outline: none;
+    resize: vertical;
+    box-sizing: border-box;
+    font-family: inherit;
+  }
+  .forward-comment-input:focus {
+    border-color: #5865F2;
+  }
+  .forward-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .btn-confirm-forward {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 18px;
+    background: #5865F2;
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgba(88, 101, 242, 0.4);
+    transition: all 0.15s ease;
+  }
+  .btn-confirm-forward:hover {
+    background: #4752c4;
+    transform: translateY(-1px);
+  }
+  .btn-confirm-forward:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
   }
 
 </style>
