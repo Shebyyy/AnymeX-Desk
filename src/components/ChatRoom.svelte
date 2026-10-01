@@ -1902,18 +1902,21 @@
     if (!pushSupported) return;
     if (pushActive) {
       const ok = await unsubscribeFromPush();
-      if (ok) {
+      if (ok.success) {
         pushActive = false;
         showToast('Push notifications disabled', 'info');
       }
     } else {
       const sub = await subscribeToPush();
-      if (sub) {
+      if (sub.success) {
         pushActive = true;
         showToast('🔔 Push notifications enabled!', 'success');
+      } else {
+        showToast(sub.error || 'Failed to enable push notifications', 'error');
       }
     }
   }
+
 
   function handleSelectChannel(id: string, updateUrl = true) {
     if (activeChannelId === id) return;
@@ -6997,4 +7000,288 @@
     transform: none;
   }
 
+  /* ─────────────────────────────────────────────────────────────
+     Discord Markdown Rendered HTML Styles
+     (classes emitted by parseDiscordMarkdown / discord-markdown.ts)
+     ───────────────────────────────────────────────────────────── */
+
+  /* Code block */
+  :global(.discord-text-content .discord-code-block),
+  :global(.discord-text-content pre.md-codeblock) {
+    display: block;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    padding: 10px 13px;
+    margin: 4px 0;
+    font-family: 'Fira Mono', 'Consolas', 'Courier New', monospace;
+    font-size: 12.5px;
+    color: #c9d1d9;
+    overflow-x: auto;
+    white-space: pre;
+    line-height: 1.6;
+  }
+
+  /* Inline code */
+  :global(.discord-text-content .discord-inline-code),
+  :global(.discord-text-content code.md-code) {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: 'Fira Mono', 'Consolas', 'Courier New', monospace;
+    font-size: 12px;
+    color: #c9d1d9;
+    white-space: nowrap;
+  }
+
+  /* Blockquote */
+  :global(.discord-text-content .discord-blockquote),
+  :global(.discord-text-content blockquote.md-quote) {
+    border-left: 3px solid rgba(255, 255, 255, 0.25);
+    margin: 3px 0;
+    padding: 2px 0 2px 12px;
+    color: var(--text-secondary, #a1a1aa);
+    font-style: italic;
+  }
+
+  /* Headers */
+  :global(.discord-text-content .discord-h1),
+  :global(.discord-text-content .md-heading.md-h1) {
+    font-size: 1.3em;
+    font-weight: 700;
+    color: #fff;
+    margin: 6px 0 2px;
+    line-height: 1.3;
+  }
+  :global(.discord-text-content .discord-h2),
+  :global(.discord-text-content .md-heading.md-h2) {
+    font-size: 1.15em;
+    font-weight: 700;
+    color: #f4f4f5;
+    margin: 5px 0 2px;
+    line-height: 1.3;
+  }
+  :global(.discord-text-content .discord-h3),
+  :global(.discord-text-content .md-heading.md-h3) {
+    font-size: 1.05em;
+    font-weight: 600;
+    color: #e4e4e7;
+    margin: 4px 0 2px;
+    line-height: 1.3;
+  }
+
+  /* Subtext (-# text) */
+  :global(.discord-text-content .discord-subtext),
+  :global(.discord-text-content .md-subtext) {
+    font-size: 11px;
+    color: var(--text-muted, #71717a);
+    margin: 1px 0;
+  }
+
+  /* Spoiler */
+  :global(.discord-text-content .discord-spoiler),
+  :global(.discord-text-content .md-spoiler) {
+    background: rgba(255, 255, 255, 0.12);
+    color: transparent;
+    border-radius: 3px;
+    padding: 0 4px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    user-select: none;
+  }
+  :global(.discord-text-content .discord-spoiler.revealed),
+  :global(.discord-text-content .md-spoiler.is-revealed) {
+    background: rgba(255, 255, 255, 0.08);
+    color: inherit;
+  }
+
+  /* ─────────────────────────────────────────────────────────────
+     Mention Chips (@user, @role, @everyone)
+     ───────────────────────────────────────────────────────────── */
+
+  :global(.discord-text-content .mention-chip) {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    font-weight: 600;
+    cursor: default;
+    background: rgba(88, 101, 242, 0.18);
+    color: #8b9cf8;
+    border: none;
+    font-family: inherit;
+    line-height: inherit;
+    vertical-align: baseline;
+    transition: background 0.12s;
+  }
+  :global(.discord-text-content .mention-chip:hover) {
+    background: rgba(88, 101, 242, 0.3);
+  }
+
+  /* @everyone / @here — gold broadcast */
+  :global(.discord-text-content .mention-broadcast) {
+    background: rgba(250, 204, 21, 0.15);
+    color: #facc15;
+  }
+  :global(.discord-text-content .mention-broadcast:hover) {
+    background: rgba(250, 204, 21, 0.27);
+  }
+
+  /* Role mentions */
+  :global(.discord-text-content .mention-role-chip) {
+    cursor: default;
+  }
+  :global(.discord-text-content .role-staff) {
+    background: rgba(34, 197, 94, 0.15);
+    color: #4ade80;
+  }
+  :global(.discord-text-content .role-staff:hover) {
+    background: rgba(34, 197, 94, 0.27);
+  }
+  :global(.discord-text-content .role-admin) {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+  }
+  :global(.discord-text-content .role-admin:hover) {
+    background: rgba(239, 68, 68, 0.27);
+  }
+  :global(.discord-text-content .role-mod) {
+    background: rgba(251, 146, 60, 0.15);
+    color: #fb923c;
+  }
+  :global(.discord-text-content .role-mod:hover) {
+    background: rgba(251, 146, 60, 0.27);
+  }
+
+  /* User mention — clickable */
+  :global(.discord-text-content .mention-user-chip) {
+    cursor: pointer;
+  }
+  :global(.discord-text-content .mention-user-chip:hover) {
+    background: rgba(88, 101, 242, 0.3);
+    text-decoration: none;
+  }
+
+  /* Self-mention (you were mentioned) — highlighted */
+  :global(.discord-text-content .mention-me) {
+    background: rgba(250, 204, 21, 0.18);
+    color: #fde68a;
+    box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.3);
+  }
+  :global(.discord-text-content .mention-me:hover) {
+    background: rgba(250, 204, 21, 0.3);
+  }
+
+  /* ─────────────────────────────────────────────────────────────
+     Report / Channel / Message Link Chips  (#123, #general)
+     ───────────────────────────────────────────────────────────── */
+
+  :global(.discord-text-content .report-link-chip) {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-size: 0.88em;
+    font-weight: 600;
+    background: rgba(99, 102, 241, 0.15);
+    color: #a5b4fc;
+    text-decoration: none;
+    transition: background 0.12s;
+    vertical-align: baseline;
+    border: 1px solid rgba(99, 102, 241, 0.25);
+  }
+  :global(.discord-text-content .report-link-chip:hover) {
+    background: rgba(99, 102, 241, 0.28);
+    color: #c7d2fe;
+    text-decoration: none;
+  }
+
+  :global(.discord-text-content .channel-link-chip),
+  :global(.discord-text-content .message-link-chip) {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.88em;
+    font-weight: 600;
+    background: rgba(56, 189, 248, 0.1);
+    color: #7dd3fc;
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.12s;
+    vertical-align: baseline;
+  }
+  :global(.discord-text-content .channel-link-chip:hover),
+  :global(.discord-text-content .message-link-chip:hover) {
+    background: rgba(56, 189, 248, 0.2);
+    color: #bae6fd;
+  }
+  :global(.discord-text-content .chip-hash) {
+    opacity: 0.65;
+    font-weight: 400;
+  }
+
+  /* External links in chat */
+  :global(.discord-text-content .chat-external-link) {
+    color: #93c5fd;
+    text-decoration: underline;
+    text-decoration-color: rgba(147, 197, 253, 0.4);
+    text-underline-offset: 2px;
+    transition: color 0.12s;
+  }
+  :global(.discord-text-content .chat-external-link:hover) {
+    color: #bfdbfe;
+    text-decoration-color: rgba(191, 219, 254, 0.6);
+  }
+
+  /* Paragraph / line spacing inside rendered markdown */
+  :global(.discord-text-content p) {
+    margin: 0;
+    line-height: 1.55;
+  }
+  :global(.discord-text-content p + p) {
+    margin-top: 4px;
+  }
+  :global(.discord-text-content ul.md-list),
+  :global(.discord-text-content ol.md-list) {
+    margin: 4px 0;
+    padding-left: 20px;
+  }
+  :global(.discord-text-content li) {
+    line-height: 1.5;
+  }
+  :global(.discord-text-content strong) {
+    color: #fff;
+    font-weight: 700;
+  }
+  :global(.discord-text-content em) {
+    font-style: italic;
+  }
+  :global(.discord-text-content del) {
+    text-decoration: line-through;
+    opacity: 0.65;
+  }
+  :global(.discord-text-content u) {
+    text-decoration: underline;
+  }
+  :global(.discord-text-content .md-emoji) {
+    width: 20px;
+    height: 20px;
+    vertical-align: middle;
+    display: inline-block;
+  }
+  :global(.discord-text-content time.md-timestamp) {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.9em;
+    cursor: help;
+  }
+
 </style>
+

@@ -1,4 +1,4 @@
-﻿const CACHE_NAME = 'anymex-desk-v2';
+const CACHE_NAME = 'anymex-desk-v2';
 
 const STATIC_PRECACHE = [
   '/offline',
@@ -132,7 +132,7 @@ self.addEventListener('push', (event) => {
   const options = {
     body: payload.body || 'You have a new update.',
     icon: payload.icon || '/icons/icon-192.png',
-    badge: payload.badge || '/icons/icon-192.png',
+    badge: payload.badge || '/icons/icon-maskable-192.png',
     data: {
       url: payload.url || '/',
       ...(payload.data || {}),
