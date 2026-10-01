@@ -233,6 +233,17 @@
   let showScrollBottomBtn = $state<boolean>(false);
   let messagesStreamRef = $state<HTMLDivElement | null>(null);
 
+  // Lightbox state – click image to view in-place
+  let lightboxUrl = $state<string | null>(null);
+
+  function openLightbox(url: string) {
+    lightboxUrl = url;
+  }
+
+  function closeLightbox() {
+    lightboxUrl = null;
+  }
+
   function handleStreamScroll() {
     if (!messagesStreamRef) return;
     const { scrollTop, scrollHeight, clientHeight } = messagesStreamRef;
@@ -2398,9 +2409,15 @@
                             </div>
                           {:else}
                             <div class="chat-image-attachment-card">
-                              <a href={m.url} target="_blank" rel="noopener noreferrer" class="chat-image-lightbox-link">
+                              <button
+                                type="button"
+                                class="chat-image-lightbox-btn"
+                                onclick={() => openLightbox(m.url)}
+                                title="Click to view image"
+                              >
                                 <img src={m.url} alt="Attached media" class="chat-media-img" loading="lazy" />
-                              </a>
+                                <span class="chat-img-expand-hint">🔍</span>
+                              </button>
                             </div>
                           {/if}
                         {/each}
@@ -2885,6 +2902,24 @@
     </main>
   </div>
 </div>
+
+<!-- ── Lightbox Modal ── -->
+{#if lightboxUrl}
+  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+  <div
+    class="lightbox-overlay"
+    onclick={closeLightbox}
+    role="dialog"
+    aria-modal="true"
+    aria-label="Image viewer"
+  >
+    <div class="lightbox-inner" onclick={(e) => e.stopPropagation()}>
+      <button type="button" class="lightbox-close-btn" onclick={closeLightbox} aria-label="Close">×</button>
+      <a href={lightboxUrl} target="_blank" rel="noopener noreferrer" class="lightbox-open-link" title="Open original">↗</a>
+      <img src={lightboxUrl} alt="Full-size view" class="lightbox-img" />
+    </div>
+  </div>
+{/if}
 
 <!-- ─────────────────────────────────────────────────────────────
      Discord Context Menu (Desktop Right Click / "..." Menu)
@@ -3614,11 +3649,14 @@
   }
 
   .sidebar-header {
-    padding: 16px;
+    height: 48px;
+    padding: 0 16px;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 10px;
     border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+    flex-shrink: 0;
   }
 
   .sidebar-title {
@@ -3631,6 +3669,17 @@
     color: var(--text-muted, #71717a);
   }
 
+  .sidebar-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Desktop: sidebar is permanent, hide close cross button */
+  .mobile-close-sidebar-btn {
+    display: none;
+  }
+
   .push-toggle-btn {
     font-size: 11px;
     font-weight: 600;
@@ -3641,9 +3690,11 @@
     color: var(--text-secondary, #a1a1aa);
     cursor: pointer;
     transition: all 0.15s ease;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 5px;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .push-toggle-btn.active {
     background: rgba(16, 185, 129, 0.15);
@@ -4023,6 +4074,7 @@
     padding: 0;
     cursor: pointer;
     flex-shrink: 0;
+    align-self: flex-start;
   }
 
   .author-avatar-wrap {
@@ -4184,39 +4236,172 @@
 
   .chat-media-attachments-grid {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
     margin-top: 6px;
     max-width: 100%;
   }
 
-  .chat-image-attachment-card,
-  .chat-video-attachment-card {
-    max-width: min(100%, 460px);
-    border-radius: 10px;
+  .chat-image-attachment-card {
+    border-radius: 8px;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.10);
     background: #090a0b;
+    display: inline-block;
+    /* Fixed compact size so multiple images tile in a row */
+    width: 160px;
+    height: 120px;
+  }
+
+  .chat-video-attachment-card {
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: #000;
+    max-width: min(100%, 320px);
+  }
+
+  /* Lightbox trigger button wrapping the image */
+  .chat-image-lightbox-btn {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: zoom-in;
+    position: relative;
+    line-height: 0;
+  }
+
+  .chat-image-lightbox-btn:focus-visible {
+    outline: 2px solid var(--accent, #818cf8);
+    outline-offset: 2px;
+    border-radius: 8px;
+  }
+
+  .chat-img-expand-hint {
+    position: absolute;
+    bottom: 5px;
+    right: 6px;
+    font-size: 12px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));
+  }
+
+  .chat-image-lightbox-btn:hover .chat-img-expand-hint {
+    opacity: 1;
   }
 
   .chat-media-img {
     display: block;
-    max-width: 100%;
-    max-height: 380px;
-    object-fit: contain;
-    background: #0d0e10;
-    transition: transform 0.2s ease;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: brightness 0.15s ease;
   }
 
-  .chat-media-img:hover {
-    transform: scale(1.01);
+  .chat-image-lightbox-btn:hover .chat-media-img {
+    brightness: 1.05;
   }
 
   .chat-video-player {
     display: block;
     max-width: 100%;
-    max-height: 380px;
+    max-height: 240px;
     background: #000;
+  }
+
+  /* ── Lightbox Modal ── */
+  .lightbox-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(0, 0, 0, 0.88);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: lb-fadein 0.15s ease;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+
+  @keyframes lb-fadein {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .lightbox-inner {
+    position: relative;
+    max-width: calc(100vw - 40px);
+    max-height: calc(100vh - 60px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .lightbox-img {
+    max-width: 100%;
+    max-height: calc(100vh - 80px);
+    border-radius: 8px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+    object-fit: contain;
+    animation: lb-scalein 0.15s ease;
+  }
+
+  @keyframes lb-scalein {
+    from { transform: scale(0.92); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
+  .lightbox-close-btn {
+    position: absolute;
+    top: -44px;
+    right: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #fff;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease;
+    line-height: 1;
+  }
+
+  .lightbox-close-btn:hover {
+    background: rgba(255, 255, 255, 0.22);
+  }
+
+  .lightbox-open-link {
+    position: absolute;
+    top: -44px;
+    right: 44px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    transition: background 0.15s ease;
+  }
+
+  .lightbox-open-link:hover {
+    background: rgba(255, 255, 255, 0.20);
   }
 
   .pending-attachments-list {
@@ -5910,6 +6095,28 @@
       right: 16px;
       width: 36px;
       height: 36px;
+    }
+
+    .mobile-close-sidebar-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-muted, #71717a);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      padding: 0;
+      flex-shrink: 0;
+    }
+
+    .mobile-close-sidebar-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.2);
     }
 
     .chat-mobile-bar {
