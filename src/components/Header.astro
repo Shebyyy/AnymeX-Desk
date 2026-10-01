@@ -251,24 +251,6 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     </div>
   </div>
 
-  <!-- Mobile Board Switcher (Row 2 on small screens, shown when navigating sub-pages) -->
-  {
-  // Mobile pills always visible on small screens for instant board/support switching
-  true && (
-    <div class="mobile-subnav">
-      <div class="shell mobile-subnav-inner">
-        <div class="mobile-pills">
-          {
-            primaryTabs.map((t) => (
-              <a href={t.href} class="mobile-pill" aria-current={t.match(path) ? 'page' : undefined}>
-                {t.label}
-              </a>
-            ))
-          }
-        </div>
-      </div>
-    </div>
-  )}
 </header>
 
 <script is:inline>
@@ -672,48 +654,4 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     justify-content: space-between;
   }
 
-  /* Mobile Subnav (Row 2 on small screens) */
-  .mobile-subnav {
-    display: block;
-    border-block-start: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.05));
-    background: color-mix(in oklab, var(--surface-canvas, #141518) 95%, transparent);
-  }
-  @media (min-width: 820px) {
-    .mobile-subnav {
-      display: none;
-    }
-  }
-  .mobile-subnav-inner {
-    padding-block: 6px;
-  }
-  .mobile-pills {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 4px;
-    background: var(--surface-inset, rgba(0, 0, 0, 0.25));
-    padding: 3px;
-    border-radius: var(--radius-lg, 10px);
-    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
-  }
-  .mobile-pill {
-    text-align: center;
-    padding: 6px 4px;
-    font-size: var(--text-xs);
-    font-weight: 500;
-    color: var(--text-secondary, #aaa);
-    text-decoration: none;
-    border-radius: var(--radius-md, 7px);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    transition: color 0.12s, background 0.12s;
-  }
-  .mobile-pill:hover {
-    color: var(--text-primary, #fff);
-  }
-  .mobile-pill[aria-current='page'] {
-    background: var(--surface-active, rgba(255, 255, 255, 0.14));
-    color: var(--text-primary, #fff);
-    font-weight: 600;
-  }
 </style>

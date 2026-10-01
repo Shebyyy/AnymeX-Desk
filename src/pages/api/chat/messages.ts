@@ -1,4 +1,4 @@
-﻿import type { APIRoute } from 'astro';
+import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { db } from '../../../lib/db/client';
 import { chatMessages, chatChannels, users, reports, chatMessageReactions } from '../../../lib/db/schema';
@@ -7,6 +7,7 @@ import { levelOf, atLeast, isOwner } from '../../../lib/staff';
 import { sendPushToUser, sendPushToAll, sendPushToStaff } from '../../../lib/webpush';
 import { inIds } from '../../../lib/db/sql';
 import { eq, desc, and, lt, sql } from 'drizzle-orm';
+import { DEFAULT_CHANNELS } from './channels';
 
 export const prerender = false;
 
@@ -21,11 +22,27 @@ export const GET: APIRoute = async (ctx) => {
     const isStaff = user ? atLeast(await levelOf(user.id), 'mod') : false;
 
     // Check channel existence and permissions
-    const [channel] = await db()
+    let [channel] = await db()
       .select()
       .from(chatChannels)
       .where(eq(chatChannels.id, channelId))
       .limit(1);
+
+    if (!channel) {
+      const defaultMatch = DEFAULT_CHANNELS.find((c) => c.id === channelId);
+      if (defaultMatch) {
+        try {
+          await db().insert(chatChannels).values(defaultMatch).onConflictDoNothing();
+          [channel] = await db()
+            .select()
+            .from(chatChannels)
+            .where(eq(chatChannels.id, channelId))
+            .limit(1);
+        } catch (e) {
+          channel = defaultMatch as any;
+        }
+      }
+    }
 
     if (!channel) {
       return new Response(JSON.stringify({ ok: false, error: 'Channel not found' }), {
@@ -261,11 +278,27 @@ export const POST: APIRoute = async (ctx) => {
       );
     }
 
-    const [channel] = await db()
+    let [channel] = await db()
       .select()
       .from(chatChannels)
       .where(eq(chatChannels.id, channelId))
       .limit(1);
+
+    if (!channel) {
+      const defaultMatch = DEFAULT_CHANNELS.find((c) => c.id === channelId);
+      if (defaultMatch) {
+        try {
+          await db().insert(chatChannels).values(defaultMatch).onConflictDoNothing();
+          [channel] = await db()
+            .select()
+            .from(chatChannels)
+            .where(eq(chatChannels.id, channelId))
+            .limit(1);
+        } catch (e) {
+          channel = defaultMatch as any;
+        }
+      }
+    }
 
     if (!channel) {
       return new Response(JSON.stringify({ ok: false, error: 'Channel does not exist' }), {

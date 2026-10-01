@@ -1,4 +1,4 @@
-﻿---
+---
 import Base from '../layouts/Base.astro';
 import ChatRoom from '../components/ChatRoom.svelte';
 import { currentUser } from '../lib/auth';
@@ -17,6 +17,7 @@ const currentUserProp = user
       isStaff,
     }
   : null;
+const rawChannel = Astro.url.searchParams.get('channel') || Astro.url.searchParams.get('c') || '';
 ---
 
 <Base
@@ -25,5 +26,5 @@ const currentUserProp = user
   fullWidth={true}
   noFooter={true}
 >
-  <ChatRoom client:load currentUser={currentUserProp} />
+  <ChatRoom client:load currentUser={currentUserProp} initialChannel={rawChannel} />
 </Base>

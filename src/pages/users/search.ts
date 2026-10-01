@@ -1,4 +1,4 @@
-﻿import type { APIRoute } from 'astro';
+import type { APIRoute } from 'astro';
 import { sql } from 'drizzle-orm';
 import { currentUser, avatarUrl } from '../../lib/auth';
 import { db } from '../../lib/db/client';
@@ -20,8 +20,6 @@ function json(data: unknown, status = 200) {
  */
 export const GET: APIRoute = async (ctx) => {
   const user = await currentUser(ctx);
-  if (!user) return json({ error: 'sign-in' }, 401);
-
   const q = (ctx.url.searchParams.get('q') ?? '').trim().toLowerCase();
 
   // Special role mentions
@@ -34,11 +32,11 @@ export const GET: APIRoute = async (ctx) => {
   ];
 
   const matchedSpecial = SPECIAL_MENTIONS.filter(
-    (s) => !q || s.username.startsWith(q) || 'everyone'.startsWith(q),
+    (s) => !q || s.username.toLowerCase().includes(q) || (s.subtitle && s.subtitle.toLowerCase().includes(q)),
   );
 
   const whereClause = q
-    ? sql`lower(${users.username}) LIKE ${q + '%'} AND ${users.banned} = 0`
+    ? sql`(lower(${users.username}) LIKE ${'%' + q + '%'}) AND ${users.banned} = 0`
     : sql`${users.banned} = 0`;
 
   const rows = await db()
@@ -51,11 +49,15 @@ export const GET: APIRoute = async (ctx) => {
     })
     .from(users)
     .where(whereClause)
-    .orderBy(sql`length(${users.username}) asc`)
-    .limit(10);
+    .orderBy(
+      q
+        ? sql`CASE WHEN lower(${users.username}) = ${q} THEN 0 WHEN lower(${users.username}) LIKE ${q + '%'} THEN 1 ELSE 2 END, length(${users.username}) asc`
+        : sql`length(${users.username}) asc`
+    )
+    .limit(50);
 
   const userItems = rows
-    .filter((r) => r.id !== user.id)
+    .filter((r) => !user || r.id !== user.id)
     .map((r) => {
       const role = isOwner(r.id) ? 'owner' : r.manualLevel || r.discordLevel || 'member';
       return {

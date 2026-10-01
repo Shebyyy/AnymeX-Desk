@@ -1,4 +1,4 @@
-﻿import type { APIRoute } from 'astro';
+import type { APIRoute } from 'astro';
 import { db } from '../../../lib/db/client';
 import { sql } from 'drizzle-orm';
 import { KIND_LABELS, STATUS_LABELS } from '../../../lib/db/schema';
@@ -14,7 +14,16 @@ export const GET: APIRoute = async (ctx) => {
     const isNum = /^\d+$/.test(q);
     const numVal = isNum ? parseInt(q, 10) : -1;
     const pattern = `%${q.toLowerCase()}%`;
-    const numPrefix = isNum ? `${q}%` : '%';
+    const prefixPattern = `${q.toLowerCase()}%`;
+
+    let whereClause = sql`1=1`;
+    if (q) {
+      if (isNum) {
+        whereClause = sql`id = ${numVal} OR cast(id as text) LIKE ${q + '%'}`;
+      } else {
+        whereClause = sql`lower(title) LIKE ${pattern} OR lower(category) LIKE ${pattern} OR lower(kind) LIKE ${pattern}`;
+      }
+    }
 
     const rows = await db().all<{
       id: number;
@@ -26,12 +35,12 @@ export const GET: APIRoute = async (ctx) => {
     }>(sql`
       SELECT id, kind, category, title, votes, status
       FROM reports
-      WHERE ${q ? sql`id = ${numVal} OR cast(id as text) LIKE ${numPrefix} OR lower(title) LIKE ${pattern}` : sql`1=1`}
+      WHERE ${whereClause}
       ORDER BY 
-        CASE WHEN id = ${numVal} THEN 0 ELSE 1 END,
+        ${isNum ? sql`CASE WHEN id = ${numVal} THEN 0 ELSE 1 END,` : sql`CASE WHEN lower(title) LIKE ${prefixPattern} THEN 0 ELSE 1 END,`}
         votes DESC,
         id DESC
-      LIMIT 18
+      LIMIT 60
     `);
 
     // Group kind-wise: bugs, suggestions, extensions

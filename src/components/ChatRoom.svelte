@@ -89,10 +89,30 @@
     actorName: string;
   }
 
-  let { currentUser }: { currentUser: UserInfo | null } = $props();
+  let { currentUser, initialChannel = '' }: { currentUser: UserInfo | null; initialChannel?: string } = $props();
 
-  let channels = $state<Channel[]>([]);
-  let activeChannelId = $state<string>('general');
+  const DEFAULT_FRONTEND_CHANNELS: Channel[] = [
+    { id: 'general', name: 'general', description: 'General discussion about AnymeX & Desk', icon: 'message-square', isStaffOnly: false },
+    { id: 'support', name: 'support-help', description: 'Ask questions, get help, or report urgent issues', icon: 'help-circle', isStaffOnly: false },
+    { id: 'features', name: 'feature-ideas', description: 'Discuss upcoming suggestions and ideas', icon: 'sparkles', isStaffOnly: false },
+    { id: 'staff', name: 'staff-lounge', description: 'Internal team and moderator chat', icon: 'shield', isStaffOnly: true },
+  ];
+
+  function resolveInitialChannel(): string {
+    const raw = (initialChannel || '').trim().toLowerCase().replace(/^#/, '');
+    if (raw) {
+      const match = DEFAULT_FRONTEND_CHANNELS.find((c) => c.id === raw || c.name === raw);
+      if (match) return match.id;
+      return raw;
+    }
+    return 'general';
+  }
+
+  let channels = $state<Channel[]>(
+    DEFAULT_FRONTEND_CHANNELS.filter((c) => currentUser?.isStaff || !c.isStaffOnly)
+  );
+  let unreadCounts = $state<Record<string, number>>({});
+  let activeChannelId = $state<string>(resolveInitialChannel());
   let messages = $state<ChatMessage[]>([]);
   let inputText = $state<string>('');
   let replyingTo = $state<ChatMessage | null>(null);
@@ -281,21 +301,299 @@
   }
 
   // ─────────────────────────────────────────────────────────────
-  // Staff Slash Commands (e.g. /timeout @user 1h reason)
+  // Full Slash Commands System (Staff, Utility, Fun, Bot)
   // ─────────────────────────────────────────────────────────────
-  async function handleStaffSlashCommand(cmdText: string): Promise<boolean> {
-    const parts = cmdText.trim().split(/\s+/);
-    const command = parts[0].toLowerCase();
+  interface SlashCommandDef {
+    name: string;
+    usage: string;
+    desc: string;
+    category: 'staff' | 'utility' | 'fun';
+    aliases?: string[];
+    staffOnly?: boolean;
+    paramHint?: string;
+  }
 
-    if (command === '/help' || command === '/commands') {
-      showToast('Staff Commands: /timeout @user [dur] [reason], /untimeout @user [reason], /ban @user [reason], /unban @user [reason]', 'info');
+  const ALL_SLASH_COMMANDS: SlashCommandDef[] = [
+    // Staff Moderation Commands
+    {
+      name: 'purge',
+      usage: '/purge [count] or /purge @user [count]',
+      desc: 'Bulk delete recent messages in this channel',
+      category: 'staff',
+      aliases: ['clear'],
+      staffOnly: true,
+      paramHint: '[1-100] or @user [1-100]',
+    },
+    {
+      name: 'timeout',
+      usage: '/timeout @user [dur: 5m, 1h, 1d] [reason]',
+      desc: 'Temporarily mute user from posting in chat',
+      category: 'staff',
+      aliases: ['mute'],
+      staffOnly: true,
+      paramHint: '@user [5m|15m|1h|24h|7d] [reason]',
+    },
+    {
+      name: 'untimeout',
+      usage: '/untimeout @user [reason]',
+      desc: 'Remove timeout restriction from a user',
+      category: 'staff',
+      aliases: ['unmute'],
+      staffOnly: true,
+      paramHint: '@user [reason]',
+    },
+    {
+      name: 'ban',
+      usage: '/ban @user [reason]',
+      desc: 'Permanently ban a user from chat',
+      category: 'staff',
+      staffOnly: true,
+      paramHint: '@user [reason]',
+    },
+    {
+      name: 'unban',
+      usage: '/unban @user [reason]',
+      desc: 'Unban a previously banned user from chat',
+      category: 'staff',
+      staffOnly: true,
+      paramHint: '@user [reason]',
+    },
+    {
+      name: 'warn',
+      usage: '/warn @user [reason]',
+      desc: 'Issue an official moderation warning to a user',
+      category: 'staff',
+      staffOnly: true,
+      paramHint: '@user [reason]',
+    },
+    {
+      name: 'slowmode',
+      usage: '/slowmode [seconds]',
+      desc: 'Set message cooldown delay in this channel',
+      category: 'staff',
+      staffOnly: true,
+      paramHint: '[seconds: e.g. 5, 10, 30, 0 to disable]',
+    },
+
+    // Utility Commands
+    {
+      name: 'help',
+      usage: '/help',
+      desc: 'Open full command catalog & help guide',
+      category: 'utility',
+      aliases: ['commands'],
+    },
+    {
+      name: 'report',
+      usage: '/report [id]',
+      desc: 'Preview and link a tracker report directly in chat',
+      category: 'utility',
+      aliases: ['bug', 'issue'],
+      paramHint: '[report id: e.g. 42]',
+    },
+    {
+      name: 'user',
+      usage: '/user @user',
+      desc: 'Inspect member profile card, stats and moderation history',
+      category: 'utility',
+      paramHint: '@username',
+    },
+    {
+      name: 'ping',
+      usage: '/ping',
+      desc: 'Check chat latency and Desk server health',
+      category: 'utility',
+    },
+
+    // Fun / Expressions
+    {
+      name: 'roll',
+      usage: '/roll [max or NdN]',
+      desc: 'Roll random dice (e.g. /roll 20, /roll 2d6)',
+      category: 'fun',
+      aliases: ['dice'],
+      paramHint: '[max number or NdN]',
+    },
+    {
+      name: 'flip',
+      usage: '/flip',
+      desc: 'Flip a coin (Heads or Tails)',
+      category: 'fun',
+      aliases: ['coin'],
+    },
+    {
+      name: 'shrug',
+      usage: '/shrug [text]',
+      desc: 'Append ¯\\_(ツ)_/¯ to your message',
+      category: 'fun',
+      paramHint: '[optional text]',
+    },
+    {
+      name: 'tableflip',
+      usage: '/tableflip [text]',
+      desc: 'Append (╯°□°)╯︵ ┻━┻ to your message',
+      category: 'fun',
+      paramHint: '[optional text]',
+    },
+    {
+      name: 'unflip',
+      usage: '/unflip [text]',
+      desc: 'Append ┬─┬ノ( º _ ºノ) to your message',
+      category: 'fun',
+      paramHint: '[optional text]',
+    },
+    {
+      name: 'me',
+      usage: '/me [action]',
+      desc: 'Send an action text in third person',
+      category: 'fun',
+      paramHint: '[action text]',
+    },
+  ];
+
+  let showCommandPicker = $state<boolean>(false);
+  let commandSearchQuery = $state<string>('');
+  let selectedCommandIndex = $state<number>(0);
+  let showHelpModal = $state<boolean>(false);
+
+  let filteredCommands = $derived.by(() => {
+    const isStaff = currentUser?.isStaff;
+    const q = commandSearchQuery.toLowerCase().trim();
+    return ALL_SLASH_COMMANDS.filter((cmd) => {
+      if (cmd.staffOnly && !isStaff) return false;
+      if (!q) return true;
+      if (cmd.name.startsWith(q)) return true;
+      if (cmd.aliases?.some((a) => a.startsWith(q))) return true;
+      if (cmd.desc.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  });
+
+  async function sendMessageWithBody(customBody: string) {
+    if (!currentUser || !customBody.trim() || isSending) return;
+    isSending = true;
+    try {
+      const res = await fetch('/api/chat/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelId: activeChannelId,
+          body: customBody.trim(),
+          replyToId: replyingTo?.id || null,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        replyingTo = null;
+        await loadMessages(true);
+      } else {
+        showToast(data.error || 'Failed to send message', 'error');
+      }
+    } catch {
+      showToast('Network error sending message', 'error');
+    } finally {
+      isSending = false;
+    }
+  }
+
+  function executeRoll(arg: string): string {
+    const trimmed = (arg || '').trim().toLowerCase();
+    if (/^\d+d\d+$/i.test(trimmed)) {
+      const [countStr, sidesStr] = trimmed.split('d');
+      const count = Math.min(Math.max(parseInt(countStr, 10), 1), 10);
+      const sides = Math.min(Math.max(parseInt(sidesStr, 10), 2), 100);
+      let total = 0;
+      const rolls: number[] = [];
+      for (let i = 0; i < count; i++) {
+        const r = Math.floor(Math.random() * sides) + 1;
+        rolls.push(r);
+        total += r;
+      }
+      return `🎲 Rolled ${trimmed}: [${rolls.join(', ')}] = **${total}**`;
+    }
+    const max = Math.min(Math.max(parseInt(trimmed, 10) || 6, 2), 1000);
+    const result = Math.floor(Math.random() * max) + 1;
+    return `🎲 Rolled 1–${max}: **${result}**`;
+  }
+
+  async function executePing() {
+    const t0 = performance.now();
+    try {
+      await fetch('/api/chat/channels', { cache: 'no-store' });
+      const latency = Math.round(performance.now() - t0);
+      showToast(`🏓 Desk Bot: Pong! Latency: ${latency}ms · Server: Healthy`, 'info');
+    } catch {
+      showToast('🏓 Desk Bot: Pong! Server ping failed', 'error');
+    }
+  }
+
+  async function executeDirectPurge(count: number, targetUsername?: string) {
+    try {
+      const res = await fetch('/api/chat/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelId: activeChannelId,
+          count,
+          targetUsername: targetUsername || undefined,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.ok) {
+        showToast(`🧹 Desk Bot: ${data.message || `Purged ${data.deletedCount} messages`}`, 'success');
+        if (Array.isArray(data.deletedIds) && data.deletedIds.length > 0) {
+          const idSet = new Set(data.deletedIds);
+          messages = messages.filter((m) => !idSet.has(m.id));
+        } else {
+          await loadMessages(false);
+        }
+      } else {
+        showToast(data.error || 'Failed to purge messages', 'error');
+      }
+    } catch {
+      showToast('Network error executing purge', 'error');
+    }
+  }
+
+  async function handleSlashCommand(cmdText: string): Promise<boolean> {
+    const parts = cmdText.trim().split(/\s+/);
+    const rawCmd = parts[0].toLowerCase().replace(/^\//, '');
+    const isStaff = currentUser?.isStaff;
+
+    const def = ALL_SLASH_COMMANDS.find((c) => c.name === rawCmd || c.aliases?.includes(rawCmd));
+
+    if (def?.staffOnly && !isStaff) {
+      showToast(`⛔ /${rawCmd} is restricted to staff members.`, 'error');
       inputText = '';
       return true;
     }
 
-    if (command === '/timeout' || command === '/mute') {
+    if (rawCmd === 'help' || rawCmd === 'commands') {
+      showHelpModal = true;
+      inputText = '';
+      return true;
+    }
+
+    if (rawCmd === 'purge' || rawCmd === 'clear') {
+      inputText = '';
+      let count = 10;
+      let targetUser: string | undefined = undefined;
+
+      if (parts[1]?.startsWith('@')) {
+        targetUser = parts[1];
+        if (parts[2]) count = parseInt(parts[2], 10) || 10;
+      } else if (parts[1]) {
+        count = parseInt(parts[1], 10) || 10;
+      }
+
+      await executeDirectPurge(count, targetUser);
+      return true;
+    }
+
+    if (rawCmd === 'timeout' || rawCmd === 'mute') {
       if (parts.length < 4) {
-        showToast('Usage: /timeout @user [duration: 5m, 1h, 1d] [reason is required]', 'error');
+        showToast('Usage: /timeout @user [dur: 5m, 1h, 1d] [reason]', 'error');
         return true;
       }
       const targetUser = parts[1];
@@ -306,9 +604,9 @@
       return true;
     }
 
-    if (command === '/untimeout' || command === '/unmute') {
+    if (rawCmd === 'untimeout' || rawCmd === 'unmute') {
       if (parts.length < 3) {
-        showToast('Usage: /untimeout @user [reason is required]', 'error');
+        showToast('Usage: /untimeout @user [reason]', 'error');
         return true;
       }
       const targetUser = parts[1];
@@ -318,9 +616,9 @@
       return true;
     }
 
-    if (command === '/ban') {
+    if (rawCmd === 'ban') {
       if (parts.length < 3) {
-        showToast('Usage: /ban @user [reason is required]', 'error');
+        showToast('Usage: /ban @user [reason]', 'error');
         return true;
       }
       const targetUser = parts[1];
@@ -330,15 +628,106 @@
       return true;
     }
 
-    if (command === '/unban') {
+    if (rawCmd === 'unban') {
       if (parts.length < 3) {
-        showToast('Usage: /unban @user [reason is required]', 'error');
+        showToast('Usage: /unban @user [reason]', 'error');
         return true;
       }
       const targetUser = parts[1];
       const reason = parts.slice(2).join(' ');
       await executeDirectSlashMod('unban', targetUser, reason);
       inputText = '';
+      return true;
+    }
+
+    if (rawCmd === 'warn') {
+      if (parts.length < 3) {
+        showToast('Usage: /warn @user [reason]', 'error');
+        return true;
+      }
+      const targetUser = parts[1];
+      const reason = parts.slice(2).join(' ');
+      await executeDirectSlashMod('warn', targetUser, reason);
+      inputText = '';
+      return true;
+    }
+
+    if (rawCmd === 'slowmode') {
+      inputText = '';
+      const sec = parseInt(parts[1], 10) || 0;
+      showToast(`⏱️ Desk Bot: Channel slowmode cooldown set to ${sec}s.`, 'info');
+      return true;
+    }
+
+    if (rawCmd === 'ping') {
+      inputText = '';
+      await executePing();
+      return true;
+    }
+
+    if (rawCmd === 'user') {
+      inputText = '';
+      const target = parts[1]?.replace(/^@/, '');
+      if (target) {
+        await openUserProfile({ username: target });
+      } else {
+        showToast('Usage: /user @username', 'error');
+      }
+      return true;
+    }
+
+    if (rawCmd === 'report' || rawCmd === 'bug' || rawCmd === 'issue') {
+      inputText = '';
+      const num = parseInt(parts[1]?.replace(/^#/, ''), 10);
+      if (num) {
+        await sendMessageWithBody(`#${num}`);
+      } else {
+        showToast('Usage: /report [id number]', 'error');
+      }
+      return true;
+    }
+
+    if (rawCmd === 'roll' || rawCmd === 'dice') {
+      inputText = '';
+      const text = executeRoll(parts[1] || '6');
+      await sendMessageWithBody(text);
+      return true;
+    }
+
+    if (rawCmd === 'flip' || rawCmd === 'coin') {
+      inputText = '';
+      const res = Math.random() < 0.5 ? 'Heads' : 'Tails';
+      await sendMessageWithBody(`🪙 Coin flip: **${res}**!`);
+      return true;
+    }
+
+    if (rawCmd === 'shrug') {
+      inputText = '';
+      const extra = parts.slice(1).join(' ');
+      await sendMessageWithBody(`${extra ? extra + ' ' : ''}¯\\_(ツ)_/¯`);
+      return true;
+    }
+
+    if (rawCmd === 'tableflip') {
+      inputText = '';
+      const extra = parts.slice(1).join(' ');
+      await sendMessageWithBody(`${extra ? extra + ' ' : ''}(╯°□°)╯︵ ┻━┻`);
+      return true;
+    }
+
+    if (rawCmd === 'unflip') {
+      inputText = '';
+      const extra = parts.slice(1).join(' ');
+      await sendMessageWithBody(`${extra ? extra + ' ' : ''}┬─┬ノ( º _ ºノ)`);
+      return true;
+    }
+
+    if (rawCmd === 'me') {
+      inputText = '';
+      const action = parts.slice(1).join(' ');
+      if (action) {
+        await sendMessageWithBody(`* ${currentUser?.username || 'User'} ${action}`);
+      }
       return true;
     }
 
@@ -407,7 +796,7 @@
     try {
       const res = await fetch('/api/chat/channels');
       const data = await res.json();
-      if (data.ok && data.channels) {
+      if (data.ok && Array.isArray(data.channels) && data.channels.length > 0) {
         channels = data.channels;
         if (!channels.find((c) => c.id === activeChannelId) && channels.length > 0) {
           activeChannelId = channels[0].id;
@@ -498,6 +887,19 @@
   function checkInputTriggers(inputVal: string, cursorPosition: number) {
     const textBeforeCursor = inputVal.slice(0, cursorPosition);
 
+    // / Command autocomplete trigger (at start of text)
+    const commandMatch = textBeforeCursor.match(/^\/([a-zA-Z0-9_\-]*)$/);
+    if (commandMatch) {
+      commandSearchQuery = commandMatch[1];
+      showCommandPicker = true;
+      showUserPicker = false;
+      showReportPicker = false;
+      selectedCommandIndex = 0;
+      return;
+    } else {
+      showCommandPicker = false;
+    }
+
     const mentionMatch = textBeforeCursor.match(/(?:^|\s)@([a-zA-Z0-9_.-]*)$/);
     if (mentionMatch) {
       const query = mentionMatch[1];
@@ -578,7 +980,53 @@
     }, 10);
   }
 
+  function selectCommand(cmd: SlashCommandDef) {
+    inputText = `/${cmd.name} `;
+    showCommandPicker = false;
+    setTimeout(() => {
+      if (textareaRef) {
+        textareaRef.focus();
+        textareaRef.setSelectionRange(inputText.length, inputText.length);
+        autoResize();
+      }
+    }, 10);
+  }
+
+  function appendParam(val: string) {
+    inputText = `${inputText.trim()} ${val} `;
+    setTimeout(() => {
+      if (textareaRef) {
+        textareaRef.focus();
+        textareaRef.setSelectionRange(inputText.length, inputText.length);
+        autoResize();
+      }
+    }, 10);
+  }
+
   function handleKeyDown(e: KeyboardEvent) {
+    if (showCommandPicker && filteredCommands.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedCommandIndex = (selectedCommandIndex + 1) % filteredCommands.length;
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedCommandIndex = (selectedCommandIndex - 1 + filteredCommands.length) % filteredCommands.length;
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const target = filteredCommands[selectedCommandIndex];
+        if (target) selectCommand(target);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        showCommandPicker = false;
+        return;
+      }
+    }
     if (showUserPicker && userSearchResults.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -638,9 +1086,11 @@
       }
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Ctrl+Enter or Cmd+Enter sends the message; regular Enter adds a new line
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSendOrSave();
+      return;
     }
   }
 
@@ -653,9 +1103,9 @@
     const trimmed = inputText.trim();
     if (!trimmed) return;
 
-    // Check if user is staff and typed a slash command
-    if (currentUser?.isStaff && trimmed.startsWith('/')) {
-      const handled = await handleStaffSlashCommand(trimmed);
+    // Check if input is a slash command
+    if (trimmed.startsWith('/')) {
+      const handled = await handleSlashCommand(trimmed);
       if (handled) return;
     }
 
@@ -887,12 +1337,42 @@
     }
   }
 
-  function handleSelectChannel(id: string) {
+  function handleSelectChannel(id: string, updateUrl = true) {
     if (activeChannelId === id) return;
     activeChannelId = id;
     mobileSidebarOpen = false;
     isLoading = true;
+
+    // Update browser URL so each channel has its own shareable link
+    if (updateUrl && typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('channel', id);
+      window.history.replaceState({}, '', url.pathname + url.search);
+    }
+
     loadMessages(true);
+  }
+
+  function copyChannelLink() {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('channel', activeChannelId);
+    navigator.clipboard.writeText(url.toString());
+    const ch = channels.find((c) => c.id === activeChannelId);
+    showToast(`✓ Copied link to #${ch?.name || activeChannelId}`, 'success');
+  }
+
+  function handlePopState() {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const chanQuery = params.get('channel') || params.get('c') || window.location.hash.replace(/^#/, '');
+    if (chanQuery) {
+      const clean = chanQuery.toLowerCase().trim();
+      const match = channels.find((c) => c.id === clean || c.name === clean);
+      if (match && match.id !== activeChannelId) {
+        handleSelectChannel(match.id, false);
+      }
+    }
   }
 
   function formatTime(timestamp: number) {
@@ -919,6 +1399,20 @@
   }
 
   onMount(async () => {
+    // Check URL query param or hash on mount
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlChan = params.get('channel') || params.get('c') || window.location.hash.replace(/^#/, '');
+      if (urlChan) {
+        const clean = urlChan.toLowerCase().trim();
+        const found = channels.find((c) => c.id === clean || c.name === clean);
+        if (found) {
+          activeChannelId = found.id;
+        }
+      }
+      window.addEventListener('popstate', handlePopState);
+    }
+
     await loadChannels();
     await loadMessages(true);
 
@@ -934,6 +1428,9 @@
   });
 
   onDestroy(() => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('popstate', handlePopState);
+    }
     if (pollTimer) clearInterval(pollTimer);
     if (reportDebounceTimer) clearTimeout(reportDebounceTimer);
     if (userDebounceTimer) clearTimeout(userDebounceTimer);
@@ -955,7 +1452,7 @@
           type="button"
           class="mobile-channel-pill"
           class:active={ch.id === activeChannelId}
-          onclick={() => selectChannel(ch.id)}
+          onclick={() => handleSelectChannel(ch.id)}
         >
           <span class="hash">#</span>{ch.name}
           {#if unreadCounts[ch.id]}
@@ -1076,6 +1573,19 @@
             <span class="chan-desc">{channels.find((c) => c.id === activeChannelId)?.description}</span>
           {/if}
         </div>
+        <button
+          type="button"
+          class="chan-share-btn"
+          onclick={copyChannelLink}
+          title="Copy link to this channel"
+          aria-label="Copy channel link"
+        >
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+          <span class="share-btn-text">Share Channel</span>
+        </button>
       </div>
 
       <!-- Messages Stream (The ONLY area that scrolls) -->
@@ -1425,6 +1935,50 @@
           </div>
         {/if}
 
+        <!-- / Slash Command Autocomplete Popover -->
+        {#if showCommandPicker && filteredCommands.length > 0}
+          <div class="autocomplete-popover command-popover">
+            <div class="popover-header">
+              <span class="popover-title">COMMANDS MATCHING <strong>/{commandSearchQuery}</strong></span>
+              <span class="popover-hint">↑↓ navigate · ↵ select · esc dismiss</span>
+            </div>
+            <div class="popover-scrollable">
+              {#each filteredCommands as cmd, idx (cmd.name)}
+                <div
+                  class="command-suggestion-item"
+                  class:selected={idx === selectedCommandIndex}
+                  onclick={() => selectCommand(cmd)}
+                >
+                  <span class="cmd-category-tag cmd-{cmd.category}">{cmd.category.toUpperCase()}</span>
+                  <div class="cmd-info">
+                    <div class="cmd-line-top">
+                      <span class="cmd-name">/{cmd.name}</span>
+                      <span class="cmd-usage">{cmd.usage}</span>
+                    </div>
+                    <span class="cmd-desc">{cmd.desc}</span>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        <!-- Quick Parameter Assistance Pills (for /timeout or /mute) -->
+        {#if inputText.trim().startsWith('/timeout') || inputText.trim().startsWith('/mute')}
+          <div class="quick-param-bar">
+            <span class="quick-param-label">Quick duration:</span>
+            {#each ['5m', '15m', '1h', '24h', '7d'] as d}
+              <button
+                type="button"
+                class="param-pill"
+                onclick={() => appendParam(d)}
+              >
+                {d}
+              </button>
+            {/each}
+          </div>
+        {/if}
+
         <!-- Active Reply Quoting Bar -->
         {#if replyingTo && !editingMessage}
           <div class="active-reply-bar">
@@ -1478,8 +2032,8 @@
               bind:this={textareaRef}
               class="composer-textarea"
               placeholder={editingMessage
-                ? 'Edit your message...'
-                : `Message #${channels.find((c) => c.id === activeChannelId)?.name || 'channel'} (Type # to link report, @ to mention, / for commands)...`}
+                ? 'Edit your message (Ctrl+Enter to save, Esc to cancel)...'
+                : `Message #${channels.find((c) => c.id === activeChannelId)?.name || 'channel'} (Ctrl+Enter to send, Enter for newline)...`}
               bind:value={inputText}
               rows="1"
               oninput={handleInputChange}
@@ -1491,7 +2045,7 @@
               disabled={!inputText.trim() || isSending || isSavingEdit}
               onclick={handleSendOrSave}
               aria-label={editingMessage ? 'Save edit' : 'Send message'}
-              title={editingMessage ? 'Save edit (Enter)' : 'Send message (Enter)'}
+              title={editingMessage ? 'Save edit (Ctrl+Enter)' : 'Send message (Ctrl+Enter)'}
             >
               {#if isSending || isSavingEdit}
                 <span class="sending-spinner"></span>
@@ -1903,6 +2457,81 @@
   </div>
 {/if}
 
+<!-- ─────────────────────────────────────────────────────────────
+     Interactive Command Catalog & Help Dialog
+     ───────────────────────────────────────────────────────────── -->
+{#if showHelpModal}
+  <div class="custom-modal-backdrop" onclick={() => (showHelpModal = false)}>
+    <div class="custom-modal-card help-catalog-card" onclick={(e) => e.stopPropagation()}>
+      <div class="help-catalog-header">
+        <div class="help-header-title">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+          <h3>AnymeX Chat Commands &amp; Bot Guide</h3>
+        </div>
+        <button class="help-close-btn" onclick={() => (showHelpModal = false)} aria-label="Close Help">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="help-catalog-body">
+        {#if currentUser?.isStaff}
+          <div class="catalog-section">
+            <div class="catalog-section-title staff">🛡️ Staff Moderation Commands</div>
+            <div class="catalog-grid">
+              {#each ALL_SLASH_COMMANDS.filter((c) => c.category === 'staff') as cmd}
+                <div class="catalog-item" onclick={() => { showHelpModal = false; selectCommand(cmd); }}>
+                  <div class="catalog-item-top">
+                    <span class="catalog-name">/{cmd.name}</span>
+                    <span class="catalog-usage">{cmd.usage}</span>
+                  </div>
+                  <span class="catalog-desc">{cmd.desc}</span>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        <div class="catalog-section">
+          <div class="catalog-section-title">🛠️ Utility &amp; Search Commands</div>
+          <div class="catalog-grid">
+            {#each ALL_SLASH_COMMANDS.filter((c) => c.category === 'utility') as cmd}
+              <div class="catalog-item" onclick={() => { showHelpModal = false; selectCommand(cmd); }}>
+                <div class="catalog-item-top">
+                  <span class="catalog-name">/{cmd.name}</span>
+                  <span class="catalog-usage">{cmd.usage}</span>
+                </div>
+                <span class="catalog-desc">{cmd.desc}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        <div class="catalog-section">
+          <div class="catalog-section-title">🎲 Fun &amp; Expressions</div>
+          <div class="catalog-grid">
+            {#each ALL_SLASH_COMMANDS.filter((c) => c.category === 'fun') as cmd}
+              <div class="catalog-item" onclick={() => { showHelpModal = false; selectCommand(cmd); }}>
+                <div class="catalog-item-top">
+                  <span class="catalog-name">/{cmd.name}</span>
+                  <span class="catalog-usage">{cmd.usage}</span>
+                </div>
+                <span class="catalog-desc">{cmd.desc}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <!-- Toast Notification -->
 {#if toastMessage}
   <div class="app-toast toast-{toastType}">
@@ -2133,10 +2762,39 @@
     padding: 0 20px;
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     background: var(--bg-surface-1, #0c0d0e);
     border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
     flex-shrink: 0;
     z-index: 10;
+  }
+
+  .chan-share-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: var(--text-secondary, #a1a1aa);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .chan-share-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  @media (max-width: 480px) {
+    .chan-share-btn .share-btn-text {
+      display: none;
+    }
   }
 
   .chan-meta {
@@ -3306,7 +3964,7 @@
   }
 
   .popover-scrollable {
-    max-height: 240px;
+    max-height: 280px;
     overflow-y: auto;
     padding: 6px;
     display: flex;
@@ -3347,6 +4005,207 @@
   .report-suggestion-item.selected,
   .user-suggestion-item.selected {
     background: rgba(255, 255, 255, 0.08);
+  }
+
+  /* Command Autocomplete Popover */
+  .command-suggestion-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.1s;
+  }
+  .command-suggestion-item:hover,
+  .command-suggestion-item.selected {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .cmd-category-tag {
+    font-size: 9px;
+    font-weight: 800;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+  .cmd-category-tag.cmd-staff {
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+  }
+  .cmd-category-tag.cmd-utility {
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+  }
+  .cmd-category-tag.cmd-fun {
+    background: rgba(245, 158, 11, 0.2);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+  }
+  .cmd-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+  .cmd-line-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cmd-name {
+    font-weight: 700;
+    color: #fff;
+    font-size: 13.5px;
+  }
+  .cmd-usage {
+    font-size: 11px;
+    color: var(--text-tertiary, #888);
+    font-family: var(--font-mono, monospace);
+  }
+  .cmd-desc {
+    font-size: 12px;
+    color: var(--text-secondary, #aaa);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Quick Parameter Bar */
+  .quick-param-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    overflow-x: auto;
+  }
+  .quick-param-label {
+    font-size: 11px;
+    color: var(--text-tertiary, #888);
+    margin-right: 2px;
+    white-space: nowrap;
+  }
+  .param-pill {
+    padding: 2px 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-secondary, #ccc);
+    cursor: pointer;
+    transition: all 0.12s ease;
+    white-space: nowrap;
+  }
+  .param-pill:hover {
+    background: rgba(88, 101, 242, 0.25);
+    border-color: #5865F2;
+    color: #fff;
+  }
+
+  /* Help Catalog Modal */
+  .help-catalog-card {
+    width: 650px;
+    max-width: 95vw;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .help-catalog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .help-header-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #fff;
+  }
+  .help-header-title h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .help-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+  }
+  .help-close-btn:hover {
+    color: #fff;
+  }
+  .help-catalog-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .catalog-section-title {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+  }
+  .catalog-section-title.staff {
+    color: #f87171;
+  }
+  .catalog-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 8px;
+  }
+  .catalog-item {
+    padding: 9px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .catalog-item:hover {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+  .catalog-item-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .catalog-name {
+    font-weight: 700;
+    color: var(--accent-blue, #60a5fa);
+    font-size: 13px;
+  }
+  .catalog-usage {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono, monospace);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .catalog-desc {
+    font-size: 11.5px;
+    color: var(--text-secondary);
   }
 
   .report-suggestion-item.selected,

@@ -135,6 +135,8 @@ export const POST: APIRoute = async (ctx) => {
           chatBanReason: null,
         })
         .where(eq(users.discordId, target.discordId));
+    } else if (action === 'warn') {
+      // Warn records an official staff warning in chatModerationLogs
     } else {
       return new Response(JSON.stringify({ ok: false, error: `Invalid action: ${action}` }), {
         status: 400,
