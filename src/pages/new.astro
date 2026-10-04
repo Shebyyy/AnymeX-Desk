@@ -158,8 +158,13 @@ if (Astro.request.method === 'POST') {
   };
 
   if (!user) {
-    if (isAjax) return json({ error: 'Please sign in to submit a report.' }, 401);
-    Astro.session?.set('pending_report', submitted);
+    await Astro.session?.set('pending_report', submitted);
+    if (isAjax) {
+      return json({
+        error: 'Please sign in to submit a report.',
+        redirect: '/auth/login?next=/new',
+      }, 401);
+    }
     return Astro.redirect('/auth/login?next=/new', 302);
   }
   const blockReason = await writeBlockReason(user);
@@ -456,7 +461,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
   {
     !user && (
       <p class="note">
-        You'll be asked to sign in with Discord when you submit. Your draft is kept.
+        You'll be asked to sign in when you submit. Your draft is kept.
       </p>
     )
   }
@@ -1329,6 +1334,31 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     updatePluginVersionAdvisory();
     updatePlatformVisibility();
 
+    // Restore client draft backup if returning from login
+    try {
+      const rawDraft = sessionStorage.getItem('anymex_pending_draft');
+      if (rawDraft) {
+        const draft = JSON.parse(rawDraft);
+        sessionStorage.removeItem('anymex_pending_draft');
+        for (const [name, val] of Object.entries(draft)) {
+          if (typeof val === 'string' && val) {
+            const el = form?.querySelector(`[name="${name}"]`) as HTMLInputElement | HTMLTextAreaElement | null;
+            if (el && !el.value) {
+              if (el.type === 'radio' || el.type === 'checkbox') {
+                const radio = form?.querySelector(`[name="${name}"][value="${val}"]`) as HTMLInputElement | null;
+                if (radio) radio.checked = true;
+              } else {
+                el.value = val;
+              }
+            }
+          }
+        }
+        updatePlatformVisibility();
+        updateAppVersionAdvisory();
+        updatePluginVersionAdvisory();
+      }
+    } catch {}
+
     // Channel change listener: empty version, reset placeholder, close combobox, update advisory
     const channelRadios = document.querySelectorAll<HTMLInputElement>('input[name="releaseChannel"]');
     channelRadios.forEach((r) => {
@@ -1668,6 +1698,17 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           const ct = res.headers.get('content-type');
           if (ct?.includes('application/json')) {
             const data = await res.json().catch(() => null);
+            if (data?.redirect) {
+              try {
+                const draftData: Record<string, string> = {};
+                for (const [k, v] of fd.entries()) {
+                  if (typeof v === 'string') draftData[k] = v;
+                }
+                sessionStorage.setItem('anymex_pending_draft', JSON.stringify(draftData));
+              } catch {}
+              window.location.href = data.redirect;
+              return;
+            }
             if (data?.error) { alert(data.error); return; }
           }
           // Non-JSON response (e.g. redirect to /cant-post) — follow it

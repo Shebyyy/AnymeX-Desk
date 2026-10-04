@@ -229,6 +229,17 @@ const signInHref = `/auth/login?next=${encodeURIComponent(here)}`;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  @media (max-width: 640px) {
+    .user-pill-name {
+      max-width: 70px;
+    }
+  }
+  @media (max-width: 440px) {
+    .user-pill-name,
+    .user-pill-chevron {
+      display: none;
+    }
+  }
 
   .user-pill-chevron {
     color: var(--text-tertiary, #888);

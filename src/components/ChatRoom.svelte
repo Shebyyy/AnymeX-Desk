@@ -2920,8 +2920,13 @@
           </div>
         {:else}
           <div class="signin-prompt">
-            <span>You must be signed in with Discord to participate in chat.</span>
-            <a href="/login" class="login-link">Sign In</a>
+            <span>You must be signed in to participate in chat.</span>
+            <a
+              href={`/auth/login?next=${encodeURIComponent(typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/support')}`}
+              class="login-link"
+            >
+              Sign In
+            </a>
           </div>
         {/if}
       </div>
@@ -6368,7 +6373,7 @@
   .author-name-btn.role-member,
   .user-suggestion-name.role-member,
   .profile-username.role-member {
-    color: #f4f4f5 !important; /* Discord White */
+    color: #3498db !important; /* Member Blue */
     font-weight: 600;
   }
 

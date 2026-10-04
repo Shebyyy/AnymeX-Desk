@@ -174,13 +174,13 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
             </div>
           </UserChip>
         ) : (
-          <a class="btn btn-primary signin-pill-btn" href={signInHref}>
+          <a class="btn btn-primary signin-pill-btn" href={signInHref} title="Sign in" aria-label="Sign in">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
               <polyline points="10 17 15 12 10 7" />
               <line x1="15" y1="12" x2="3" y2="12" />
             </svg>
-            <span>Sign in</span>
+            <span class="signin-label">Sign in</span>
           </a>
         )
       }
@@ -343,6 +343,7 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     justify-content: space-between;
     gap: var(--space-3, 12px);
     height: 52px;
+    max-width: 100%;
   }
 
   /* Brand Mark */
@@ -356,16 +357,28 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     text-decoration: none;
     color: var(--text-primary, #fff);
     flex-shrink: 0;
+    min-width: 0;
   }
   .mark-logo {
     width: 24px;
     height: 24px;
     border-radius: 50%;
     object-fit: contain;
+    flex-shrink: 0;
   }
   .mark-text span {
     color: var(--text-tertiary, #888);
     font-weight: 400;
+  }
+  @media (max-width: 440px) {
+    .mark-text span {
+      display: none;
+    }
+  }
+  @media (max-width: 340px) {
+    .mark-text {
+      display: none;
+    }
   }
 
   /* Desktop Tabs */
@@ -533,10 +546,23 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     align-items: center;
     gap: var(--space-2, 8px);
     margin-inline-start: auto;
+    min-width: 0;
+    flex-shrink: 1;
   }
   @media (min-width: 960px) {
     .header-actions {
       margin-inline-start: 0;
+    }
+  }
+  @media (max-width: 640px) {
+    .header-top-row {
+      gap: 6px;
+    }
+    .header-actions {
+      gap: 4px;
+    }
+    .pwa-install-btn {
+      display: none !important;
     }
   }
 
@@ -566,6 +592,19 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     align-items: center;
     gap: 6px;
     border-radius: var(--radius-full, 9999px);
+    flex-shrink: 0;
+  }
+  @media (max-width: 400px) {
+    .signin-pill-btn {
+      padding: 0;
+      inline-size: 34px;
+      block-size: 34px;
+      justify-content: center;
+      border-radius: var(--radius-full, 9999px);
+    }
+    .signin-pill-btn .signin-label {
+      display: none;
+    }
   }
 
   .user-chip-fallback {
@@ -598,6 +637,7 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     border-radius: var(--radius-full, 9999px);
     text-decoration: none;
     transition: all 0.15s ease;
+    flex-shrink: 0;
   }
   .header-support-btn:hover {
     color: #fff;
@@ -609,6 +649,18 @@ const maybeSignedIn = Astro.cookies.get('signed_in')?.value === '1';
     background: #5865F2;
     border-color: #5865F2;
     box-shadow: 0 0 14px rgba(88, 101, 242, 0.4);
+  }
+  @media (max-width: 520px) {
+    .header-support-btn {
+      padding: 0;
+      inline-size: 34px;
+      block-size: 34px;
+      justify-content: center;
+      border-radius: var(--radius-full, 9999px);
+    }
+    .header-support-btn .support-label {
+      display: none;
+    }
   }
   @media (min-width: 820px) {
     .header-support-btn {
