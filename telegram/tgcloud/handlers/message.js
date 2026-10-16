@@ -17,9 +17,11 @@ import { formatReportList, formatReportCard, escapeHtml } from '../lib/formatter
 import { DESK_BASE_URL, BOT_URL } from '../lib/constants.js';
 
 export default async function (message) {
-  const chatId = message.chat.id;
-  const userId = message.from.id;
-  const user = message.from;
+  try {
+    const chatId = message?.chat?.id;
+    const userId = message?.from?.id;
+    const user = message?.from;
+    if (!chatId || !userId) return;
   const rawText = (message.text || '').trim();
   // Strip bot mention if command was sent in a group (e.g. /bugs@AnymeXDeskBot -> /bugs)
   const text = rawText.replace(/^(\/[a-zA-Z0-9_]+)@\w+bot\b/i, '$1');
@@ -66,6 +68,7 @@ export default async function (message) {
     await api.setMyCommands({ commands, scope: { type: 'default' } }).catch(() => {});
     await api.setMyCommands({ commands, scope: { type: 'all_private_chats' } }).catch(() => {});
     await api.setMyCommands({ commands, scope: { type: 'all_group_chats' } }).catch(() => {});
+    await api.setChatMenuButton({ menu_button: { type: 'commands' } }).catch(() => {});
 
     // Handle deep-link redirects from group chat
     if (param === 'bug') {
@@ -290,28 +293,47 @@ export default async function (message) {
   // Handle Wizard Step: Title
   if (draft.step === 'title') {
     const title = text.slice(0, 200);
-
-    // Run similarity check to detect potential duplicates
-    const similar = await searchSimilar(title, draft.kind);
-    if (similar.length > 0) {
-      const topHit = similar[0];
+    if (!title) {
       await api.sendMessage({
         chat_id: chatId,
-        text: `⚠️ <b>Similar report already found on Desk!</b>\n\n` +
-          `<b>#${topHit.id}: ${escapeHtml(topHit.title)}</b>\n` +
-          `Status: <code>${topHit.status}</code>  •  ▲ ${topHit.votes} votes\n\n` +
-          `Instead of creating a duplicate, you can upvote the existing ticket below!`,
-        parse_mode: 'HTML',
-        reply_markup: reportCardKeyboard(topHit.id, topHit.votes, false),
+        text: '⚠️ Please send a short text title for this issue:',
       });
+      return;
     }
 
+    // Advance DB step immediately so user never gets stuck
     if (draft.kind === 'bug') {
       await db.update(reportDrafts)
         .set({ title, step: 'steps' })
         .where(eq(reportDrafts.userId, userId))
         .run();
+    } else if (draft.kind === 'suggestion') {
+      await db.update(reportDrafts)
+        .set({ title, step: 'body' })
+        .where(eq(reportDrafts.userId, userId))
+        .run();
+    }
 
+    // Optional similarity check advisory (non-blocking)
+    try {
+      const similar = await searchSimilar(title, draft.kind);
+      if (similar.length > 0) {
+        const topHit = similar[0];
+        await api.sendMessage({
+          chat_id: chatId,
+          text: `⚠️ <b>Similar report already found on Desk!</b>\n\n` +
+            `<b>#${topHit.id}: ${escapeHtml(topHit.title)}</b>\n` +
+            `Status: <code>${topHit.status}</code>  •  ▲ ${topHit.votes || 0} votes\n\n` +
+            `Instead of creating a duplicate, you can upvote the existing ticket below!`,
+          parse_mode: 'HTML',
+          reply_markup: reportCardKeyboard(topHit.id, topHit.votes || 0, false),
+        }).catch(() => {});
+      }
+    } catch (err) {
+      console.error('searchSimilar advisory error:', err);
+    }
+
+    if (draft.kind === 'bug') {
       await api.sendMessage({
         chat_id: chatId,
         text: `Title: <b>${escapeHtml(title)}</b>\n\n<b>🐛 Step 6/6: What are the steps to reproduce this bug?</b>\n(e.g.\n1. Open episode\n2. Seek forward\n3. App crashes)`,
@@ -321,11 +343,6 @@ export default async function (message) {
         },
       });
     } else if (draft.kind === 'suggestion') {
-      await db.update(reportDrafts)
-        .set({ title, step: 'body' })
-        .where(eq(reportDrafts.userId, userId))
-        .run();
-
       await api.sendMessage({
         chat_id: chatId,
         text: `Title: <b>${escapeHtml(title)}</b>\n\n<b>💡 Step 4/4: Describe your suggestion in detail:</b>\n(Why is it needed, how should it work, and what makes it useful?)`,
@@ -437,5 +454,17 @@ export default async function (message) {
         },
       });
     }
+  }
+} catch (err) {
+    console.error('handlers/message uncaught error:', err);
+    try {
+      if (message?.chat?.id) {
+        await api.sendMessage({
+          chat_id: message.chat.id,
+          text: `⚠️ <b>Something went wrong:</b> ${escapeHtml(err.message || 'Unknown error')}\n\nPlease try again or type /cancel to reset.`,
+          parse_mode: 'HTML',
+        });
+      }
+    } catch {}
   }
 }

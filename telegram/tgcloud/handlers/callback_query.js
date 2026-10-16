@@ -19,9 +19,10 @@ import { formatReportList } from '../lib/formatters.js';
 import { BOT_URL } from '../lib/constants.js';
 
 export default async function (callbackQuery) {
-  const data = callbackQuery.data || '';
-  const message = callbackQuery.message;
-  const user = callbackQuery.from;
+  try {
+    const data = callbackQuery.data || '';
+    const message = callbackQuery.message;
+    const user = callbackQuery.from;
   const chatId = message?.chat?.id;
   const messageId = message?.message_id;
   const isGroup = message?.chat?.type === 'group' || message?.chat?.type === 'supergroup';
@@ -373,4 +374,14 @@ export default async function (callbackQuery) {
   }
 
   await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+  } catch (err) {
+    console.error('handlers/callback_query error:', err);
+    try {
+      await api.answerCallbackQuery({
+        callback_query_id: callbackQuery.id,
+        text: `Error: ${err.message || 'Operation failed'}`,
+        show_alert: true,
+      });
+    } catch {}
+  }
 }

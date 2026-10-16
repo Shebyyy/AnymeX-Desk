@@ -10,18 +10,29 @@ function headers(custom = {}) {
   };
 }
 
+function toQueryString(params) {
+  const parts = [];
+  for (const [key, val] of Object.entries(params)) {
+    if (val !== undefined && val !== null && val !== '') {
+      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(val))}`);
+    }
+  }
+  return parts.length > 0 ? `?${parts.join('&')}` : '';
+}
+
 /**
  * Fetch open or filtered reports from Desk.
  */
 export async function getReports({ kind = '', platform = '', category = '', state = 'open', page = 1 } = {}) {
-  const params = new URLSearchParams();
-  if (kind) params.set('kind', kind);
-  if (platform) params.set('platform', platform);
-  if (category) params.set('category', category);
-  if (state) params.set('state', state);
-  params.set('page', String(page));
+  const qs = toQueryString({
+    kind,
+    platform,
+    category,
+    state,
+    page: String(page),
+  });
 
-  const url = `${DESK_BASE_URL}/api/v1/reports.json?${params.toString()}`;
+  const url = `${DESK_BASE_URL}/api/v1/reports.json${qs}`;
   try {
     const res = await fetch(url, { headers: headers() });
     if (!res.ok) return { data: [], meta: {} };
@@ -36,11 +47,13 @@ export async function getReports({ kind = '', platform = '', category = '', stat
  * Fast similarity search for duplicate warning and inline query.
  */
 export async function searchSimilar(query, kind = '') {
-  if (!query || query.trim().length < 2) return [];
-  const params = new URLSearchParams({ q: query.trim() });
-  if (kind) params.set('kind', kind);
+  if (!query || String(query).trim().length < 2) return [];
+  const qs = toQueryString({
+    q: String(query).trim(),
+    kind: kind || '',
+  });
 
-  const url = `${DESK_BASE_URL}/api/v1/similar?${params.toString()}`;
+  const url = `${DESK_BASE_URL}/api/v1/similar${qs}`;
   try {
     const res = await fetch(url, { headers: headers() });
     if (!res.ok) return [];
