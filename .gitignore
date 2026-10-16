@@ -10,3 +10,6 @@ dist/
 node_modules/.vite*
 shot_*.png
 bot/
+
+media-bot/
+
