@@ -1,0 +1,36 @@
+# Automatically deploys the Telegram Serverless bot to Telegram infrastructure
+# whenever code inside the telegram/ directory is pushed to main.
+name: Deploy Telegram Bot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'telegram/**'
+      - '.github/workflows/deploy-telegram.yml'
+
+concurrency:
+  group: deploy-telegram-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to Telegram Serverless
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Deploy to tgcloud
+        working-directory: ./telegram
+        env:
+          TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
+        run: |
+          npx @tgcloud/cli push
