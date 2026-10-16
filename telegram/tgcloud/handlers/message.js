@@ -64,6 +64,7 @@ export default async function (message) {
       { command: 'cancel', description: 'Cancel current report wizard' },
     ];
     await api.setMyCommands({ commands, scope: { type: 'default' } }).catch(() => {});
+    await api.setMyCommands({ commands, scope: { type: 'all_private_chats' } }).catch(() => {});
     await api.setMyCommands({ commands, scope: { type: 'all_group_chats' } }).catch(() => {});
 
     // Handle deep-link redirects from group chat
