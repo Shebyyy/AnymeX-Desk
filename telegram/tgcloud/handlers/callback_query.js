@@ -16,6 +16,7 @@ import {
   toggleVote,
 } from '../lib/desk_api.js';
 import { formatReportList } from '../lib/formatters.js';
+import { BOT_URL } from '../lib/constants.js';
 
 export default async function (callbackQuery) {
   const data = callbackQuery.data || '';
@@ -23,6 +24,17 @@ export default async function (callbackQuery) {
   const user = callbackQuery.from;
   const chatId = message?.chat?.id;
   const messageId = message?.message_id;
+  const isGroup = message?.chat?.type === 'group' || message?.chat?.type === 'supergroup';
+
+  // In groups, redirect wizard starts directly to private DM
+  if (isGroup && data.startsWith('start:')) {
+    const kind = data.split(':')[1];
+    await api.answerCallbackQuery({
+      callback_query_id: callbackQuery.id,
+      url: `${BOT_URL}?start=${kind}`,
+    });
+    return;
+  }
 
   // 1. Wizard: Start a report
   if (data.startsWith('start:')) {

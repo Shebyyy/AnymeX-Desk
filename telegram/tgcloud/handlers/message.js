@@ -14,7 +14,7 @@ import {
   submitReport,
 } from '../lib/desk_api.js';
 import { formatReportList, formatReportCard, escapeHtml } from '../lib/formatters.js';
-import { DESK_BASE_URL } from '../lib/constants.js';
+import { DESK_BASE_URL, BOT_URL } from '../lib/constants.js';
 
 export default async function (message) {
   const chatId = message.chat.id;
@@ -23,9 +23,33 @@ export default async function (message) {
   const rawText = (message.text || '').trim();
   // Strip bot mention if command was sent in a group (e.g. /bugs@AnymeXDeskBot -> /bugs)
   const text = rawText.replace(/^(\/[a-zA-Z0-9_]+)@\w+bot\b/i, '$1');
+  const isGroup = message.chat.type === 'group' || message.chat.type === 'supergroup';
+
+  // In groups, ignore any message that is not a slash command
+  if (isGroup && !text.startsWith('/')) {
+    return;
+  }
+
+  // In groups, redirect wizard starts directly to private DM
+  if (isGroup && (text.startsWith('/bug') || text.startsWith('/suggest') || text.startsWith('/ext') || text === '/start')) {
+    const kind = text.startsWith('/suggest') ? 'suggestion' : (text.startsWith('/ext') ? 'extension' : 'bug');
+    await api.sendMessage({
+      chat_id: chatId,
+      reply_to_message_id: message.message_id,
+      text: `💡 <b>To keep this group chat clean, please file reports in private chat:</b>`,
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '➕ Open Reporter in Private DM', url: `${BOT_URL}?start=${kind}` }],
+        ],
+      },
+    });
+    return;
+  }
 
   // 1. Slash Commands
   if (text.startsWith('/start') || text.startsWith('/help')) {
+    const param = text.split(' ')[1] || '';
     await db.delete(reportDrafts).where(eq(reportDrafts.userId, userId)).run();
 
     // Register the slash command popup menu in Telegram for both private chats and groups
@@ -41,6 +65,40 @@ export default async function (message) {
     ];
     await api.setMyCommands({ commands, scope: { type: 'default' } }).catch(() => {});
     await api.setMyCommands({ commands, scope: { type: 'all_group_chats' } }).catch(() => {});
+
+    // Handle deep-link redirects from group chat
+    if (param === 'bug') {
+      await db.insert(reportDrafts).values({ userId, kind: 'bug', step: 'platform' }).run();
+      await api.sendMessage({
+        chat_id: chatId,
+        text: '<b>🐛 Step 1/6: Select the platform where the bug occurs:</b>',
+        parse_mode: 'HTML',
+        reply_markup: platformKeyboard('plat'),
+      });
+      return;
+    }
+
+    if (param === 'suggestion') {
+      await db.insert(reportDrafts).values({ userId, kind: 'suggestion', step: 'category' }).run();
+      await api.sendMessage({
+        chat_id: chatId,
+        text: '<b>💡 Step 1/4: Select the category for your feature suggestion:</b>',
+        parse_mode: 'HTML',
+        reply_markup: categoryKeyboard('suggestion', 'cat'),
+      });
+      return;
+    }
+
+    if (param === 'extension' || param === 'ext') {
+      await db.insert(reportDrafts).values({ userId, kind: 'extension', step: 'source' }).run();
+      await api.sendMessage({
+        chat_id: chatId,
+        text: '<b>🧩 Step 1/5: Which extension source engine is having issues?</b>',
+        parse_mode: 'HTML',
+        reply_markup: categoryKeyboard('extension', 'cat'),
+      });
+      return;
+    }
 
     const welcome = `<b>👋 Welcome to AnymeX Desk Bot!</b>\n\n` +
       `This bot lets you search, track, and report bugs or feature suggestions for the <b>AnymeX</b> app directly inside Telegram.\n\n` +
@@ -197,13 +255,15 @@ export default async function (message) {
   // 2. Active Wizard Text Input
   const draft = await db.select().from(reportDrafts).where(eq(reportDrafts.userId, userId)).get();
   if (!draft) {
-    // Regular unprompted message
-    await api.sendMessage({
-      chat_id: chatId,
-      text: `<i>I didn't recognize that command. Type /help to see available actions.</i>`,
-      parse_mode: 'HTML',
-      reply_markup: mainMenuKeyboard(),
-    });
+    // Only respond if the user in DM explicitly typed an unknown slash command
+    if (!isGroup && text.startsWith('/')) {
+      await api.sendMessage({
+        chat_id: chatId,
+        text: `<i>Unknown command. Type /help to see available commands.</i>`,
+        parse_mode: 'HTML',
+      });
+    }
+    // For normal text or group chat, stay completely silent!
     return;
   }
 

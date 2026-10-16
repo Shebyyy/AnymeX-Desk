@@ -2,6 +2,8 @@
 
 export const DESK_BASE_URL = 'https://anymex-desk.asheby.workers.dev';
 export const DESK_SYNC_SECRET = 'anymex_sync_8f4a9b2c6e1d3075e82f419c8a74e5bd';
+export const BOT_USERNAME = 'AnymeXDeskBot';
+export const BOT_URL = `https://t.me/${BOT_USERNAME}`;
 
 export const PLATFORMS = ['android', 'windows', 'ios', 'macos', 'linux', 'all'];
 
