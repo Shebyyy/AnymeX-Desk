@@ -37,7 +37,9 @@ export default async function (message) {
     const photo = message.photo && message.photo.length > 0 ? message.photo[message.photo.length - 1] : null;
     const video = message.video || null;
     const document = message.document || null;
-    const hasMedia = !!(photo || video || document);
+    const animation = message.animation || null;
+    const audio = message.audio || null;
+    const hasMedia = !!(photo || video || document || animation || audio);
 
     // In groups, ignore any message that is not a slash command
     if (isGroup && !text.startsWith('/')) {
@@ -632,10 +634,19 @@ export default async function (message) {
 
       if (photo) {
         currentAttachments.push({ type: 'image', file_id: photo.file_id, file_name: 'screenshot.jpg' });
+      } else if (animation) {
+        currentAttachments.push({ type: 'video', file_id: animation.file_id, file_name: animation.file_name || 'animation.mp4' });
       } else if (video) {
         currentAttachments.push({ type: 'video', file_id: video.file_id, file_name: video.file_name || 'screen_record.mp4' });
       } else if (document) {
-        currentAttachments.push({ type: 'file', file_id: document.file_id, file_name: document.file_name || 'log.txt' });
+        const docName = document.file_name || 'document.bin';
+        const docMime = (document.mime_type || '').toLowerCase();
+        let docType = 'file';
+        if (docMime.startsWith('image/')) docType = 'image';
+        else if (docMime.startsWith('video/')) docType = 'video';
+        currentAttachments.push({ type: docType, file_id: document.file_id, file_name: docName });
+      } else if (audio) {
+        currentAttachments.push({ type: 'file', file_id: audio.file_id, file_name: audio.file_name || 'audio.mp3' });
       }
 
       await db.update(reportDrafts)
@@ -666,7 +677,7 @@ export default async function (message) {
     if (draft.step === 'attachments' && !hasMedia) {
       await safeSendMessage({
         chat_id: chatId,
-        text: `⚠️ <b>Attachment required:</b> On AnymeX Desk, at least one attachment (screenshot, recording, or log file) is required for ${draft.kind === 'bug' ? 'bugs' : 'extension issues'}.\n\nPlease send a photo, video, or file:`,
+        text: `⚠️ <b>Attachment required:</b> On AnymeX Desk, at least one attachment (screenshot, screen recording, log file, crash report, or document) is required for ${draft.kind === 'bug' ? 'bugs' : 'extension issues'}.\n\nPlease send any screenshot, video, log, or file:`,
         parse_mode: 'HTML',
         reply_markup: cancelKeyboard(),
       });

@@ -1,4 +1,4 @@
-import { fetch } from 'sdk';
+import { fetch, FormData, InputFile } from 'sdk';
 import { DESK_BASE_URL, DESK_SYNC_SECRET } from './constants.js';
 
 function headers(custom = {}) {
@@ -8,6 +8,51 @@ function headers(custom = {}) {
     'Authorization': `Bearer ${DESK_SYNC_SECRET}`,
     ...custom,
   };
+}
+
+/**
+ * Upload an attachment (image/video/log) to AnymeX Desk and sync to Discord forum.
+ */
+export async function uploadAttachment(reportId, fileBytes, fileName, fileType, reporterName) {
+  const url = `${DESK_BASE_URL}/api/telegram/upload`;
+  const form = new FormData();
+  form.append('reportId', String(reportId));
+  form.append('reporterName', reporterName || 'Telegram User');
+  form.append('fileType', fileType || 'image');
+
+  let mime = 'application/octet-stream';
+  const lowerName = (fileName || '').toLowerCase();
+  if (lowerName.endsWith('.png')) mime = 'image/png';
+  else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) mime = 'image/jpeg';
+  else if (lowerName.endsWith('.webp')) mime = 'image/webp';
+  else if (lowerName.endsWith('.gif')) mime = 'image/gif';
+  else if (fileType === 'video' || lowerName.endsWith('.mp4')) mime = 'video/mp4';
+  else if (lowerName.endsWith('.webm')) mime = 'video/webm';
+  else if (lowerName.endsWith('.txt') || lowerName.endsWith('.log')) mime = 'text/plain';
+  else if (lowerName.endsWith('.json')) mime = 'application/json';
+  else if (lowerName.endsWith('.pdf')) mime = 'application/pdf';
+  else if (lowerName.endsWith('.zip')) mime = 'application/zip';
+  else if (fileType === 'image') mime = 'image/jpeg';
+
+  form.append('file', new InputFile(fileBytes, fileName || 'attachment.bin', { type: mime }));
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${DESK_SYNC_SECRET}`,
+      },
+      body: form,
+    });
+    if (!res.ok) {
+      console.error('uploadAttachment HTTP error:', res.status, await res.text());
+      return { ok: false };
+    }
+    return await res.json();
+  } catch (err) {
+    console.error('uploadAttachment error:', err);
+    return { ok: false };
+  }
 }
 
 function toQueryString(params) {

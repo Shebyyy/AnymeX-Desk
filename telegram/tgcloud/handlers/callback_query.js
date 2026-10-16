@@ -18,6 +18,7 @@ import {
   updateTriageStatus,
   toggleVote,
   submitReport,
+  uploadAttachment,
 } from '../lib/desk_api.js';
 import { formatReportList, formatDraftPreview, escapeHtml } from '../lib/formatters.js';
 import { safeSendMessage, safeEditMessageText } from '../lib/telegram_helpers.js';
@@ -496,6 +497,30 @@ export default async function (callbackQuery) {
       const result = await submitReport(payload);
 
       if (result.ok) {
+        // Upload any attached media or documents to Desk
+        let uploadedCount = 0;
+        if (parsedAttachments && parsedAttachments.length > 0) {
+          for (const att of parsedAttachments) {
+            if (att.file_id) {
+              try {
+                const bytes = await api.getFileContent(att.file_id);
+                if (bytes) {
+                  const up = await uploadAttachment(
+                    result.reportId,
+                    bytes,
+                    att.file_name,
+                    att.type,
+                    user.username || user.first_name || 'Telegram User'
+                  );
+                  if (up && up.ok) uploadedCount++;
+                }
+              } catch (attErr) {
+                console.error(`Failed to upload attachment ${att.file_id}:`, attErr);
+              }
+            }
+          }
+        }
+
         // Auto-watch this report
         await db.insert(watchers).values({
           userId: user.id,
@@ -508,6 +533,7 @@ export default async function (callbackQuery) {
         const successMsg = `🎉 <b>${draft.kind === 'suggestion' ? 'Suggestion' : 'Report'} #${result.reportId} Filed Successfully!</b>\n\n` +
           `📌 <b>Title:</b> ${escapeHtml(payload.title)}\n` +
           `📱 <b>Platform:</b> ${payload.platform}  •  🏷 <b>Category:</b> ${CATEGORY_LABELS[payload.category] || payload.category}\n` +
+          (uploadedCount > 0 ? `📎 <b>Attachments:</b> ${uploadedCount} file(s) attached\n` : '') +
           `🌐 <b>Desk URL:</b> <a href="${DESK_BASE_URL}/report/${result.reportId}">View Report on Desk</a>\n\n` +
           `🔔 <i>You are now watching this ticket! We'll send you a Telegram DM when maintainers update the status or comment.</i>`;
 
