@@ -41,6 +41,7 @@ export async function uploadAttachment(reportId, fileBytes, fileName, fileType, 
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${DESK_SYNC_SECRET}`,
+        'Origin': DESK_BASE_URL,
       },
       body: form,
     });
