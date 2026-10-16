@@ -20,25 +20,27 @@ export default async function (message) {
   const chatId = message.chat.id;
   const userId = message.from.id;
   const user = message.from;
-  const text = (message.text || '').trim();
+  const rawText = (message.text || '').trim();
+  // Strip bot mention if command was sent in a group (e.g. /bugs@AnymeXDeskBot -> /bugs)
+  const text = rawText.replace(/^(\/[a-zA-Z0-9_]+)@\w+bot\b/i, '$1');
 
   // 1. Slash Commands
   if (text.startsWith('/start') || text.startsWith('/help')) {
     await db.delete(reportDrafts).where(eq(reportDrafts.userId, userId)).run();
 
-    // Register the slash command popup menu in Telegram client
-    api.setMyCommands({
-      commands: [
-        { command: 'start', description: 'Open main menu and instructions' },
-        { command: 'bugs', description: 'View top open bug reports' },
-        { command: 'suggestions', description: 'View feature requests' },
-        { command: 'report', description: 'View report details (/report <id>)' },
-        { command: 'bug', description: 'File a new bug report' },
-        { command: 'suggest', description: 'Propose a new feature' },
-        { command: 'ext', description: 'Report an extension issue' },
-        { command: 'cancel', description: 'Cancel current report wizard' },
-      ],
-    }).catch(() => {});
+    // Register the slash command popup menu in Telegram for both private chats and groups
+    const commands = [
+      { command: 'start', description: 'Open main menu and instructions' },
+      { command: 'bugs', description: 'View top open bug reports' },
+      { command: 'suggestions', description: 'View feature requests' },
+      { command: 'report', description: 'View report details (/report <id>)' },
+      { command: 'bug', description: 'File a new bug report' },
+      { command: 'suggest', description: 'Propose a new feature' },
+      { command: 'ext', description: 'Report an extension issue' },
+      { command: 'cancel', description: 'Cancel current report wizard' },
+    ];
+    await api.setMyCommands({ commands, scope: { type: 'default' } }).catch(() => {});
+    await api.setMyCommands({ commands, scope: { type: 'all_group_chats' } }).catch(() => {});
 
     const welcome = `<b>👋 Welcome to AnymeX Desk Bot!</b>\n\n` +
       `This bot lets you search, track, and report bugs or feature suggestions for the <b>AnymeX</b> app directly inside Telegram.\n\n` +
@@ -193,7 +195,7 @@ export default async function (message) {
   }
 
   // 2. Active Wizard Text Input
-  const [draft] = await db.select().from(reportDrafts).where(eq(reportDrafts.userId, userId)).run();
+  const draft = await db.select().from(reportDrafts).where(eq(reportDrafts.userId, userId)).get();
   if (!draft) {
     // Regular unprompted message
     await api.sendMessage({

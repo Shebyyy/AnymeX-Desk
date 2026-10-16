@@ -76,10 +76,10 @@ export default async function (callbackQuery) {
   // 2. Wizard: Platform selected
   if (data.startsWith('plat:')) {
     const platform = data.split(':')[1];
-    const [draft] = await db.select().from(reportDrafts).where(eq(reportDrafts.userId, user.id)).run();
+    const draft = await db.select().from(reportDrafts).where(eq(reportDrafts.userId, user.id)).get();
 
     if (!draft) {
-      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: 'Session expired. Please restart.' });
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: 'Session expired. Please restart with /bug or /suggest.' });
       return;
     }
 
@@ -137,7 +137,7 @@ export default async function (callbackQuery) {
   // 4. Wizard: Category / Source selected
   if (data.startsWith('cat:')) {
     const category = data.split(':')[1];
-    const [draft] = await db.select().from(reportDrafts).where(eq(reportDrafts.userId, user.id)).run();
+    const draft = await db.select().from(reportDrafts).where(eq(reportDrafts.userId, user.id)).get();
     if (!draft) return;
 
     if (draft.kind === 'bug') {
