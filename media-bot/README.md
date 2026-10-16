@@ -1,6 +1,6 @@
-# AnymeX All-in-One Media Bot
+# Omni (OmniBot)
 
-An all-in-one companion Telegram Bot for the **[AnymeX](https://github.com/RyanYuuki/AnymeX)** media ecosystem.
+The all-in-one Telegram companion for **Anime, Manga, and Light Novels** with instant media search, reverse image (sauce) scene identification, airing countdown schedules, and release alerts.
 
 ## 🚀 Key Features
 

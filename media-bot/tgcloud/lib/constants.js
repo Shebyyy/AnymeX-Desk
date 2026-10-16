@@ -1,4 +1,5 @@
-export const BOT_NAME = 'AnymeX Media Bot';
+export const BOT_NAME = 'Omni';
+export const BOT_HANDLE = 'OmniBot';
 
 export const COMMANDS = [
   { command: 'start', description: 'Open main menu and features' },

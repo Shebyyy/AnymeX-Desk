@@ -103,10 +103,10 @@ export default async function (message) {
       } catch {}
 
       const welcome =
-        `👋 <b>Welcome to ${BOT_NAME}!</b>\n\n` +
-        `Your all-in-one companion for <b>Anime, Manga, and Light Novels</b> with direct streaming & reading deep links to the <b>AnymeX app</b>.\n\n` +
-        `<b>⚡ Features:</b>\n` +
-        `• <b>Instant Search:</b> Use /anime, /manga, /novel, or inline query in any chat!\n` +
+        `👋 <b>Welcome to ${BOT_NAME} (${BOT_HANDLE})!</b>\n\n` +
+        `Your all-in-one companion for <b>Anime, Manga, and Light Novels</b> with streaming, reading, reverse image searching, and release alerts.\n\n` +
+        `<b>⚡ What Omni Can Do:</b>\n` +
+        `• <b>Instant Search:</b> Use /anime, /manga, /novel, or inline search in any chat!\n` +
         `• <b>Sauce Finder:</b> Send any anime screenshot to identify the exact scene, episode, and timestamp.\n` +
         `• <b>Release Alerts:</b> Get notified the moment new episodes or chapters drop.\n` +
         `• <b>AniList Sync:</b> Import your watching list with <code>/sync &lt;username&gt;</code>\n\n` +
