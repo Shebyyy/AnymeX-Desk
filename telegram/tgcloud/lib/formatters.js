@@ -49,19 +49,82 @@ export function formatReportCard(report) {
   return text;
 }
 
-export function formatReportList(reports, title = 'Top Reports') {
+export function formatDraftPreview(draft) {
+  const kindLabel = KIND_LABELS[draft.kind] || draft.kind;
+  const kindEmoji = draft.kind === 'bug' ? '🐛' : (draft.kind === 'suggestion' ? '💡' : '🧩');
+  const platName = PLATFORM_LABELS[draft.platform] || draft.platform || 'All Platforms';
+
+  let catName = draft.category || 'General';
+  if (draft.kind === 'bug') catName = BUG_CATEGORY_LABELS[draft.category] || draft.category;
+  else if (draft.kind === 'suggestion') catName = SUGGESTION_CATEGORY_LABELS[draft.category] || draft.category;
+  else if (draft.kind === 'extension') catName = EXTENSION_SOURCE_LABELS[draft.category] || draft.category;
+
+  let text = `📋 <b>Review Your Report Summary:</b>\n\n`;
+  text += `🏷 <b>Type:</b> ${kindEmoji} ${kindLabel}\n`;
+  text += `📂 <b>Category:</b> ${catName}\n`;
+  text += `📱 <b>Platform:</b> ${platName}`;
+  if (draft.releaseChannel) {
+    text += ` (${draft.releaseChannel === 'beta' ? '🧪 Beta' : '🟢 Stable'})\n`;
+  } else {
+    text += `\n`;
+  }
+
+  if (draft.appVersion) {
+    text += `📦 <b>Version:</b> <code>${escapeHtml(draft.appVersion)}</code>\n`;
+  }
+
+  text += `📌 <b>Title:</b> <b>${escapeHtml(draft.title || 'Untitled')}</b>\n\n`;
+
+  if (draft.stepsToReproduce) {
+    text += `📝 <b>Steps to Reproduce:</b>\n<i>${escapeHtml(draft.stepsToReproduce.slice(0, 600))}</i>\n\n`;
+  }
+
+  if (draft.body) {
+    text += `📄 <b>Details / Proposal:</b>\n<i>${escapeHtml(draft.body.slice(0, 600))}</i>\n\n`;
+  }
+
+  let attachCount = 0;
+  try {
+    if (draft.attachments) {
+      const parsed = JSON.parse(draft.attachments);
+      attachCount = Array.isArray(parsed) ? parsed.length : 0;
+    }
+  } catch {}
+
+  if (attachCount > 0) {
+    text += `📎 <b>Attachments:</b> ${attachCount} file(s) attached\n\n`;
+  }
+
+  text += `━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `<i>Ready to submit? Tap <b>✅ Confirm & Submit</b> below.\n`;
+  text += `Or send any extra message/screenshot to add to the report.</i>`;
+
+  return text;
+}
+
+export function formatReportList(reports, title = 'Top Reports', page = 1, pageSize = 6) {
   if (!reports || reports.length === 0) {
     return `<b>${title}</b>\n\n<i>No reports found matching your criteria.</i>`;
   }
 
-  let text = `<b>${title}</b>\n\n`;
-  for (let i = 0; i < reports.length; i++) {
-    const r = reports[i];
-    const emoji = STATUS_EMOJIS[r.status] || '⚪';
-    const plat = PLATFORM_LABELS[r.platform] || r.platform;
-    text += `<b>${i + 1}.</b> <a href="${DESK_BASE_URL}/report/${r.id}">#${r.id} ${escapeHtml(r.title)}</a>\n`;
-    text += `   ${emoji} ${r.status}  •  ${plat}  •  ▲ ${r.votes || 0} votes\n\n`;
+  const start = (page - 1) * pageSize;
+  const items = reports.slice(start, start + pageSize);
+  const total = reports.length;
+
+  if (items.length === 0) {
+    return `<b>${title}</b>\n\n<i>No more reports on this page.</i>`;
   }
 
-  return text;
+  let text = `<b>${title}</b> (${start + 1}-${Math.min(start + items.length, total)} of ${total})\n\n`;
+  for (let i = 0; i < items.length; i++) {
+    const r = items[i];
+    const emoji = STATUS_EMOJIS[r.status] || '⚪';
+    const plat = PLATFORM_LABELS[r.platform] || r.platform;
+    const cat = CATEGORY_LABELS[r.category] || r.category;
+    const cleanTitle = escapeHtml(r.title ? r.title.slice(0, 75) : 'Untitled');
+    text += `<b>${start + i + 1}.</b> <a href="${DESK_BASE_URL}/report/${r.id}">#${r.id} ${cleanTitle}</a>\n`;
+    text += `   ${emoji} <code>${r.status}</code>  •  ${plat}  •  ${cat}  •  ▲ ${r.votes || 0}\n\n`;
+  }
+
+  return text.slice(0, 3900);
 }

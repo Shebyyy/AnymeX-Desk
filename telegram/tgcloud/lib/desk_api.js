@@ -44,6 +44,21 @@ export async function getReports({ kind = '', platform = '', category = '', stat
 }
 
 /**
+ * Fetch live release versions (stable, beta, plugin) from AnymeX Desk API.
+ */
+export async function getReleases() {
+  const url = `${DESK_BASE_URL}/api/v1/releases`;
+  try {
+    const res = await fetch(url, { headers: headers() });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.error('getReleases error:', err);
+    return null;
+  }
+}
+
+/**
  * Fast similarity search for duplicate warning and inline query.
  */
 export async function searchSimilar(query, kind = '') {
@@ -91,10 +106,14 @@ export async function submitReport(reportData) {
       headers: headers(),
       body: JSON.stringify(reportData),
     });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      return { ok: false, error: errJson.error || `Server responded with HTTP ${res.status}` };
+    }
     return await res.json();
   } catch (err) {
     console.error('submitReport error:', err);
-    return { ok: false, error: 'Network error submitting report' };
+    return { ok: false, error: `Network error: ${err.message || 'Could not connect to Desk API'}` };
   }
 }
 

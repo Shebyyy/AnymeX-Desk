@@ -80,6 +80,12 @@ export const EXTENSION_SOURCES = [
   'kotatsu',
 ];
 
+export const NON_IOS_EXTENSION_SOURCES = [
+  'mihon_aniyomi',
+  'cloudstream',
+  'kotatsu',
+];
+
 export const EXTENSION_SOURCE_LABELS = {
   mihon_aniyomi: '📖 Mihon / Aniyomi',
   mangayomi: '📚 Mangayomi',

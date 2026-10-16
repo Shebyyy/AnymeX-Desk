@@ -7,9 +7,32 @@ import {
   EXTENSION_SOURCES,
   EXTENSION_SOURCE_LABELS,
   DESK_BASE_URL,
+  BOT_URL,
 } from './constants.js';
 
-export function mainMenuKeyboard() {
+export function mainMenuKeyboard(isGroup = false) {
+  if (isGroup) {
+    return {
+      inline_keyboard: [
+        [
+          { text: '🐛 File Bug in DM', url: `${BOT_URL}?start=bug` },
+          { text: '💡 Suggest in DM', url: `${BOT_URL}?start=suggestion` },
+        ],
+        [
+          { text: '🧩 Extension Issue in DM', url: `${BOT_URL}?start=extension` },
+        ],
+        [
+          { text: '🐛 Top Bugs', callback_data: 'list:bugs:1' },
+          { text: '💡 Top Suggestions', callback_data: 'list:suggestions:1' },
+        ],
+        [
+          { text: '🔍 Search Tickets', switch_inline_query_current_chat: '' },
+          { text: '🌐 Open Desk Web', url: DESK_BASE_URL },
+        ],
+      ],
+    };
+  }
+
   return {
     inline_keyboard: [
       [
@@ -18,7 +41,10 @@ export function mainMenuKeyboard() {
       ],
       [
         { text: '🧩 Extension Issue', callback_data: 'start:extension' },
-        { text: '📋 Top Open Bugs', callback_data: 'list:bugs:1' },
+      ],
+      [
+        { text: '🐛 Top Open Bugs', callback_data: 'list:bugs:1' },
+        { text: '💡 Top Suggestions', callback_data: 'list:suggestions:1' },
       ],
       [
         { text: '🔍 Search Tickets', switch_inline_query_current_chat: '' },
@@ -28,26 +54,77 @@ export function mainMenuKeyboard() {
   };
 }
 
-export function platformKeyboard(prefix = 'plat') {
-  return {
-    inline_keyboard: [
-      [
-        { text: PLATFORM_LABELS.android, callback_data: `${prefix}:android` },
-        { text: PLATFORM_LABELS.windows, callback_data: `${prefix}:windows` },
-      ],
-      [
-        { text: PLATFORM_LABELS.ios, callback_data: `${prefix}:ios` },
-        { text: PLATFORM_LABELS.macos, callback_data: `${prefix}:macos` },
-      ],
-      [
-        { text: PLATFORM_LABELS.linux, callback_data: `${prefix}:linux` },
-        { text: PLATFORM_LABELS.all, callback_data: `${prefix}:all` },
-      ],
-      [
-        { text: '❌ Cancel', callback_data: 'cancel_wizard' },
-      ],
+export function versionKeyboard(channel = 'stable', releases = null, prefix = 'ver') {
+  const rows = [];
+  const list = channel === 'beta' ? (releases?.beta || []) : (releases?.stable || []);
+
+  const verItems = list.slice(0, 6).map((item, idx) => ({
+    text: idx === 0 ? `🟢 ${item.tag || item.version} (Latest)` : (item.tag || item.version),
+    callback_data: `${prefix}:${item.version || item.tag}`,
+  }));
+
+  for (let i = 0; i < verItems.length; i += 2) {
+    const row = [verItems[i]];
+    if (verItems[i + 1]) row.push(verItems[i + 1]);
+    rows.push(row);
+  }
+
+  // Always provide Custom option so user can type any version
+  rows.push([{ text: '✏️ Other / Custom Version', callback_data: `${prefix}:custom` }]);
+  rows.push([{ text: '❌ Cancel', callback_data: 'cancel_wizard' }]);
+
+  return { inline_keyboard: rows };
+}
+
+export function pluginVersionKeyboard(releases = null, prefix = 'pver') {
+  const rows = [];
+  const list = releases?.plugin || [];
+
+  const verItems = list.slice(0, 4).map((item, idx) => ({
+    text: idx === 0 ? `🟢 ${item.tag || item.version} (Latest)` : (item.tag || item.version),
+    callback_data: `${prefix}:${item.version || item.tag}`,
+  }));
+
+  for (let i = 0; i < verItems.length; i += 2) {
+    const row = [verItems[i]];
+    if (verItems[i + 1]) row.push(verItems[i + 1]);
+    rows.push(row);
+  }
+
+  rows.push([{ text: '✏️ Other / Custom Version', callback_data: `${prefix}:custom` }]);
+  rows.push([{ text: '❌ Cancel', callback_data: 'cancel_wizard' }]);
+
+  return { inline_keyboard: rows };
+}
+
+export function platformKeyboard(category = '', prefix = 'plat') {
+  const isNonIos = category && ['mihon_aniyomi', 'cloudstream', 'kotatsu'].includes(category);
+  const rows = [
+    [
+      { text: PLATFORM_LABELS.android, callback_data: `${prefix}:android` },
+      { text: PLATFORM_LABELS.windows, callback_data: `${prefix}:windows` },
     ],
-  };
+  ];
+
+  if (!isNonIos) {
+    rows.push([
+      { text: PLATFORM_LABELS.ios, callback_data: `${prefix}:ios` },
+      { text: PLATFORM_LABELS.macos, callback_data: `${prefix}:macos` },
+    ]);
+  } else {
+    rows.push([
+      { text: PLATFORM_LABELS.macos, callback_data: `${prefix}:macos` },
+    ]);
+  }
+
+  rows.push([
+    { text: PLATFORM_LABELS.linux, callback_data: `${prefix}:linux` },
+    { text: PLATFORM_LABELS.all, callback_data: `${prefix}:all` },
+  ]);
+
+  rows.push([{ text: '❌ Cancel', callback_data: 'cancel_wizard' }]);
+
+  return { inline_keyboard: rows };
 }
 
 export function releaseChannelKeyboard(prefix = 'chan') {
@@ -56,6 +133,22 @@ export function releaseChannelKeyboard(prefix = 'chan') {
       [
         { text: '🟢 Stable Release', callback_data: `${prefix}:stable` },
         { text: '🧪 Beta / Pre-release', callback_data: `${prefix}:beta` },
+      ],
+      [
+        { text: '❌ Cancel', callback_data: 'cancel_wizard' },
+      ],
+    ],
+  };
+}
+
+export function nativeAppGateKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: '✅ Works in native app (Only fails in AnymeX)', callback_data: 'gate:native_ok' },
+      ],
+      [
+        { text: '❌ Also fails in native app', callback_data: 'gate:native_fail' },
       ],
       [
         { text: '❌ Cancel', callback_data: 'cancel_wizard' },
@@ -89,29 +182,10 @@ export function categoryKeyboard(kind, prefix = 'cat') {
   return { inline_keyboard: rows };
 }
 
-export function nativeAppGateKeyboard() {
+export function cancelKeyboard() {
   return {
     inline_keyboard: [
-      [
-        { text: '✅ Works in native app (Only fails in AnymeX)', callback_data: 'gate:native_ok' },
-      ],
-      [
-        { text: '❌ Also fails in native app', callback_data: 'gate:native_fail' },
-      ],
-      [
-        { text: '❌ Cancel', callback_data: 'cancel_wizard' },
-      ],
-    ],
-  };
-}
-
-export function skipOrCancelKeyboard(skipAction = 'skip') {
-  return {
-    inline_keyboard: [
-      [
-        { text: '⏩ Skip', callback_data: skipAction },
-        { text: '❌ Cancel', callback_data: 'cancel_wizard' },
-      ],
+      [{ text: '❌ Cancel', callback_data: 'cancel_wizard' }],
     ],
   };
 }

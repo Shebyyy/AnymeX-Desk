@@ -19,6 +19,7 @@ export const reportDrafts = table('report_drafts', {
   testedNativeApp: boolean('tested_native_app').default(false),
   extensionNames: text('extension_names'),    // JSON stringified array of { name, version, issue }
   extensionRepo: text('extension_repo'),
+  attachments: text('attachments'),          // JSON stringified array of { type, file_id, file_name }
   updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(unixepoch())`),
 });
 
