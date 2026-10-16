@@ -26,6 +26,20 @@ export default async function (message) {
   if (text.startsWith('/start') || text.startsWith('/help')) {
     await db.delete(reportDrafts).where(eq(reportDrafts.userId, userId)).run();
 
+    // Register the slash command popup menu in Telegram client
+    api.setMyCommands({
+      commands: [
+        { command: 'start', description: 'Open main menu and instructions' },
+        { command: 'bugs', description: 'View top open bug reports' },
+        { command: 'suggestions', description: 'View feature requests' },
+        { command: 'report', description: 'View report details (/report <id>)' },
+        { command: 'bug', description: 'File a new bug report' },
+        { command: 'suggest', description: 'Propose a new feature' },
+        { command: 'ext', description: 'Report an extension issue' },
+        { command: 'cancel', description: 'Cancel current report wizard' },
+      ],
+    }).catch(() => {});
+
     const welcome = `<b>👋 Welcome to AnymeX Desk Bot!</b>\n\n` +
       `This bot lets you search, track, and report bugs or feature suggestions for the <b>AnymeX</b> app directly inside Telegram.\n\n` +
       `<b>Quick Commands:</b>\n` +
