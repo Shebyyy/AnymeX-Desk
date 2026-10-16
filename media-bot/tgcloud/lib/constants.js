@@ -1,5 +1,6 @@
 export const BOT_NAME = 'Omni';
-export const BOT_HANDLE = 'OmniBot';
+export const BOT_HANDLE = 'Ask_OmniBot';
+export const BOT_URL = `https://t.me/${BOT_HANDLE}`;
 
 export const COMMANDS = [
   { command: 'start', description: 'Open main menu and features' },
