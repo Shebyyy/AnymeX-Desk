@@ -5,6 +5,7 @@ import { buildSessionUser, canWriteNow, currentUser, exchangeCode, mergeUserAcco
 import { db } from '../../lib/db/client';
 import { users } from '../../lib/db/schema';
 import { safeReturnTo } from '../../lib/redirect';
+import { setSignedInHint } from '../../lib/session';
 import { ensureVote } from '../../lib/vote';
 import { syncForumVote } from '../../lib/discord-forums';
 
@@ -68,13 +69,7 @@ export const GET: APIRoute = async (ctx) => {
           await ctx.session?.regenerate();
           await ctx.session?.set('user', sessionUser);
 
-          ctx.cookies.set('signed_in', '1', {
-            path: '/',
-            httpOnly: false,
-            secure: ctx.url.protocol === 'https:',
-            sameSite: 'lax',
-            maxAge: 60 * 60 * 24 * 30,
-          });
+          setSignedInHint(ctx);
 
           return ctx.redirect('/me?discord=linked', 302);
         }
@@ -101,13 +96,7 @@ export const GET: APIRoute = async (ctx) => {
       if (me.username) loggedInUser.username = me.username;
       await ctx.session?.set('user', loggedInUser);
 
-      ctx.cookies.set('signed_in', '1', {
-        path: '/',
-        httpOnly: false,
-        secure: ctx.url.protocol === 'https:',
-        sameSite: 'lax',
-        maxAge: 60 * 60 * 24 * 30,
-      });
+      setSignedInHint(ctx);
 
       return ctx.redirect('/me?discord=linked', 302);
     }
@@ -136,13 +125,7 @@ export const GET: APIRoute = async (ctx) => {
        secret, and nothing decides anything from it. A forged one only makes the
        header render an island that then finds no session and shows the
        signed-out state. The session cookie remains the only authority. */
-    ctx.cookies.set('signed_in', '1', {
-      path: '/',
-      httpOnly: false,
-      secure: ctx.url.protocol === 'https:',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 30,
-    });
+    setSignedInHint(ctx);
 
     // Finish whatever the user was trying to do before they were interrupted.
     // canWriteNow rather than user.canWrite: the same authority decides here

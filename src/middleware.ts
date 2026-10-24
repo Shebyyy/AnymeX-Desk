@@ -1,4 +1,5 @@
 import { defineMiddleware } from 'astro:middleware';
+import { touchSession } from './lib/session';
 
 /**
  * Security headers on server-rendered responses.
@@ -13,7 +14,11 @@ const HEADERS: Record<string, string> = {
   'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
 };
 
-export const onRequest = defineMiddleware(async (_ctx, next) => {
+export const onRequest = defineMiddleware(async (ctx, next) => {
+  // Sliding renewal: keep actively-used sessions alive instead of force-logging
+  // everyone out a week after sign-in. Best-effort; see lib/session.ts.
+  await touchSession(ctx);
+
   const res = await next();
   try {
     for (const [name, value] of Object.entries(HEADERS)) res.headers.set(name, value);

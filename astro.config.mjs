@@ -13,7 +13,13 @@ const built = !!process.env.ASTRO_BUILD;
 // Single source of truth for session lifetime. Used for both the
 // server-side KV ttl and the browser cookie's maxAge below — see the
 // comment on `session` for why both are required.
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // one week
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 365; // one year
+// Browsers refuse cookies with a maxAge past 400 days (RFC 6265bis cap,
+// enforced by Chrome and Firefox), so a literally never-expiring session
+// cookie does not exist. The session middleware re-issues the cookie whenever
+// it renews the session, so with daily renewal the cookie is only ever lost
+// after ~400 days away.
+const COOKIE_MAX_AGE_SECONDS = Math.min(SESSION_TTL_SECONDS, 60 * 60 * 24 * 400);
 
 export default defineConfig({
   output: 'server',
@@ -74,11 +80,15 @@ export default defineConfig({
    */
   session: {
     /**
-     * One week TTL. The ban flag and account-age threshold are re-read on
-     * every write, so this mostly bounds how long a session cookie stays valid.
+     * Sessions effectively never expire on their own — Discord-style: only an
+     * explicit logout ends one. The one-year KV ttl is the absolute bound; the
+     * middleware (src/middleware.ts) re-stamps an active session at least once
+     * a day, sliding both the KV expiry and the cookie forward on every visit.
+     * A signed-in user therefore stays signed in for as long as they keep
+     * coming back within a year of their last visit.
      *
-     * Astro stamps the expiry when a key is written, so this is a hard cap
-     * measured from sign-in rather than a sliding window.
+     * The ban flag and account-age threshold are re-read from D1 on every
+     * write, so a long-lived session never outlives a revocation.
      */
     ttl: SESSION_TTL_SECONDS,
     cookie: {
@@ -87,11 +97,11 @@ export default defineConfig({
        * a browser session cookie: gone the moment the browser actually
        * closes, even though the server-side session (KV, bounded by `ttl`
        * above) is still valid. That mismatch is what caused close-and-reopen
-       * to look like a logout. Keep this equal to `ttl` — a longer maxAge
-       * would let the cookie outlive the KV entry, a shorter one would log
-       * people out client-side before the server session actually expires.
+       * to look like a logout. Capped at the browser-enforced 400-day cookie
+       * maximum; the middleware re-issues it on every renewal, so it only
+       * runs out after roughly 400 days of not visiting at all.
        */
-      maxAge: SESSION_TTL_SECONDS,
+      maxAge: COOKIE_MAX_AGE_SECONDS,
       /**
        * The `__Host-` prefix is a browser-enforced rule, not a hint: a cookie
        * whose name starts with it is only accepted when it is Secure, has

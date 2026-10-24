@@ -7,6 +7,7 @@ import { buildTelegramSessionUser, canWriteNow, currentUser, mergeUserAccounts }
 import { readConfig, readSetting } from '../../../lib/settings';
 import { verifyTelegramAuth } from '../../../lib/telegram-auth';
 import { safeReturnTo } from '../../../lib/redirect';
+import { setSignedInHint } from '../../../lib/session';
 import { ensureVote } from '../../../lib/vote';
 import { syncForumVote } from '../../../lib/discord-forums';
 
@@ -81,13 +82,7 @@ export const GET: APIRoute = async (ctx) => {
           loggedInUser.telegramUsername = rawParams.username || null;
           await ctx.session?.set('user', loggedInUser);
 
-          ctx.cookies.set('signed_in', '1', {
-            path: '/',
-            httpOnly: false,
-            secure: ctx.url.protocol === 'https:',
-            sameSite: 'lax',
-            maxAge: 60 * 60 * 24 * 30,
-          });
+          setSignedInHint(ctx);
 
           return ctx.redirect('/me?telegram=linked', 302);
         }
@@ -122,13 +117,7 @@ export const GET: APIRoute = async (ctx) => {
       loggedInUser.telegramUsername = rawParams.username || null;
       await ctx.session?.set('user', loggedInUser);
 
-      ctx.cookies.set('signed_in', '1', {
-        path: '/',
-        httpOnly: false,
-        secure: ctx.url.protocol === 'https:',
-        sameSite: 'lax',
-        maxAge: 60 * 60 * 24 * 30,
-      });
+      setSignedInHint(ctx);
 
       return ctx.redirect('/me?telegram=linked', 302);
     }
@@ -147,13 +136,7 @@ export const GET: APIRoute = async (ctx) => {
     await ctx.session?.regenerate();
     await ctx.session?.set('user', sessionUser);
 
-    ctx.cookies.set('signed_in', '1', {
-      path: '/',
-      httpOnly: false,
-      secure: ctx.url.protocol === 'https:',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 30,
-    });
+    setSignedInHint(ctx);
 
     // Resolve any pending vote
     const pendingVote = await ctx.session?.get('pending_vote');
