@@ -308,22 +308,109 @@
     const now = Date.now();
     if (now - lastTypingPing > 2200) {
       lastTypingPing = now;
-      fetch('/api/chat/typing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channelId: activeChannelId }),
-      }).catch(() => {});
+      wsSend({ t: 'typing' });
     }
   }
 
-  async function pollTyping() {
+  // ── Realtime over one WebSocket (Durable Object hub) ────────────────────
+  // One Worker request to connect; after that, server pushes events. No polling
+  // while connected. If the socket can't connect, a slow visible-tab fallback
+  // poll keeps the chat usable.
+  let ws: WebSocket | null = null;
+  let wsOpen = false;
+  let wsDestroyed = false;
+  let reconnectDelay = 1000;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+  let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  let typingSweepTimer: ReturnType<typeof setInterval> | null = null;
+  const typingExpiry = new Map<string, { username: string; exp: number }>();
+
+  function wsSend(obj: unknown) {
+    if (ws && wsOpen) {
+      try { ws.send(JSON.stringify(obj)); } catch {}
+    }
+  }
+
+  function sendJoin() {
+    typingExpiry.clear();
+    typingUsers = [];
+    wsSend({ t: 'join', channel: activeChannelId });
+  }
+
+  function scheduleRefetch() {
+    if (refetchTimer) return;
+    refetchTimer = setTimeout(() => {
+      refetchTimer = null;
+      loadMessages(false);
+    }, 250);
+  }
+
+  function renderTyping() {
+    const now = Date.now();
+    const list: TypingUser[] = [];
+    for (const [userId, v] of typingExpiry) {
+      if (v.exp > now) list.push({ userId, username: v.username });
+      else typingExpiry.delete(userId);
+    }
+    if (list.length !== typingUsers.length) typingUsers = list;
+  }
+
+  function connectWs() {
+    if (typeof window === 'undefined' || wsDestroyed || ws) return;
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    let sock: WebSocket;
     try {
-      const res = await fetch(`/api/chat/typing?channel=${encodeURIComponent(activeChannelId)}`);
-      const data = await res.json();
-      if (data.ok && Array.isArray(data.typingUsers)) {
-        typingUsers = data.typingUsers.filter((u: TypingUser) => u.userId !== currentUser?.id);
+      sock = new WebSocket(`${proto}://${location.host}/api/chat/ws`);
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+    ws = sock;
+    sock.onopen = () => {
+      wsOpen = true;
+      reconnectDelay = 1000;
+      sendJoin();
+      // Resync anything missed while disconnected.
+      loadMessages(false);
+      loadChannels();
+    };
+    sock.onmessage = (e) => {
+      if (e.data === 'pong') return;
+      let m: any;
+      try { m = JSON.parse(e.data); } catch { return; }
+      if (m.t === 'changed') {
+        if (!m.channel || m.channel === activeChannelId) scheduleRefetch();
+      } else if (m.t === 'channels') {
+        loadChannels();
+      } else if (m.t === 'typing') {
+        if (m.channel === activeChannelId && m.userId !== currentUser?.id) {
+          typingExpiry.set(m.userId, { username: m.username, exp: Date.now() + 4500 });
+          renderTyping();
+        }
       }
-    } catch {}
+    };
+    sock.onclose = () => {
+      wsOpen = false;
+      ws = null;
+      scheduleReconnect();
+    };
+    sock.onerror = () => { try { sock.close(); } catch {} };
+  }
+
+  // Tell the hub which channel this socket is viewing whenever it changes.
+  $effect(() => {
+    activeChannelId;
+    sendJoin();
+  });
+
+  function scheduleReconnect() {
+    if (wsDestroyed || reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (!document.hidden) connectWs();
+    }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 120000);
   }
 
   let typingLabel = $derived.by(() => {
@@ -1241,9 +1328,6 @@
           scrollToBottom();
         }
 
-        if (Array.isArray(data.typingUsers)) {
-          typingUsers = data.typingUsers.filter((u: TypingUser) => u.userId !== currentUser?.id);
-        }
       }
     } catch (err) {
       console.error('Failed to load messages:', err);
@@ -2037,23 +2121,51 @@
       pushActive = !!sub;
     }
 
+    connectWs();
+
+    // Browsers freeze sockets in background tabs; keep the connection alive
+    // while visible (auto-responded by the runtime, doesn't wake the object).
+    keepaliveTimer = setInterval(() => {
+      if (!document.hidden && ws && wsOpen) { try { ws.send('ping'); } catch {} }
+    }, 45000);
+
+    typingSweepTimer = setInterval(renderTyping, 1000);
+
+    // Fallback only: if the socket is down, poll slowly in a visible tab.
     pollTimer = setInterval(() => {
-      loadMessages(false);
-    }, 4000);
+      if (!wsOpen && !document.hidden) {
+        loadMessages(false);
+      }
+    }, 20000);
 
-    channelPollTimer = setInterval(() => {
-      loadChannels();
-    }, 10000);
+    channelPollTimer = null;
+    typingPollTimer = null;
 
-    typingPollTimer = setInterval(() => {
-      pollTyping();
-    }, 2500);
+    document.addEventListener('visibilitychange', onVisible);
   });
+
+  function onVisible() {
+    if (document.hidden) return;
+    if (!ws) {
+      reconnectDelay = 1000;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      connectWs();
+    } else {
+      loadMessages(false);
+    }
+  }
 
   onDestroy(() => {
     if (typeof window !== 'undefined') {
       window.removeEventListener('popstate', handlePopState);
     }
+    wsDestroyed = true;
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (refetchTimer) clearTimeout(refetchTimer);
+    if (keepaliveTimer) clearInterval(keepaliveTimer);
+    if (typingSweepTimer) clearInterval(typingSweepTimer);
+    try { ws?.close(); } catch {}
     if (pollTimer) clearInterval(pollTimer);
     if (channelPollTimer) clearInterval(channelPollTimer);
     if (typingPollTimer) clearInterval(typingPollTimer);

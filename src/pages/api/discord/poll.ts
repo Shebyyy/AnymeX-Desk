@@ -16,6 +16,7 @@
  *   - Loop prevention    → messages posted by our own bot are skipped
  */
 
+import { notifyReport } from '../../../lib/chat-hub';
 import { env } from 'cloudflare:workers';
 import { and, asc, eq, isNotNull, sql } from 'drizzle-orm';
 import { db } from '../../../lib/db/client';
@@ -259,6 +260,7 @@ async function pollThread(
 
     const newComment = inserted[0];
     if (!newComment) continue;
+    await notifyReport(report.id);
 
     console.log(
       `[Poll] Inserted comment #${newComment.id} from Discord msg ${msg.id} in thread ${threadId}`,
@@ -448,6 +450,7 @@ export async function onScheduled(event: ScheduledEvent, cfEnv: Env): Promise<vo
 
         const newComment = inserted[0];
         if (!newComment) continue;
+        await notifyReport(report.id);
 
         console.log(`[Poll] ✓ New comment #${newComment.id} from Discord (thread ${threadId})`);
 

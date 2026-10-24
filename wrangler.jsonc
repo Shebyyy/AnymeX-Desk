@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "anymex-desk",
+  "main": "./src/worker.ts",
   "compatibility_date": "2026-08-20",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
@@ -14,6 +15,9 @@
   ],
 
   "kv_namespaces": [{ "binding": "SESSION", "id": "c242141443344c4a840770b2ff0e05f6" }],
+
+  "durable_objects": { "bindings": [{ "name": "CHAT_HUB", "class_name": "ChatHub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatHub"] }],
 
   "triggers": {
     "crons": []

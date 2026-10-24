@@ -6,6 +6,8 @@ import { levelOf, atLeast } from '../../../lib/staff';
 import { inIds } from '../../../lib/db/sql';
 import { eq, desc, and, sql } from 'drizzle-orm';
 
+import { notifyChat } from '../../../lib/chat-hub';
+
 export const prerender = false;
 
 export const POST: APIRoute = async (ctx) => {
@@ -100,6 +102,8 @@ export const POST: APIRoute = async (ctx) => {
     } catch (logErr) {
       console.warn('[chat:purge] Non-fatal audit log insert error:', logErr);
     }
+
+    await notifyChat(channelId);
 
     return new Response(
       JSON.stringify({

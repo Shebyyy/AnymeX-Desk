@@ -4,6 +4,8 @@ import { chatMessageReactions, chatMessages } from '../../../lib/db/schema';
 import { currentUser } from '../../../lib/auth';
 import { and, eq } from 'drizzle-orm';
 
+import { notifyChat } from '../../../lib/chat-hub';
+
 export const prerender = false;
 
 const ALLOWED_EMOJI = ['👍', '❤️', '🔥', '😂', '🎉', '👀', '🚀', '💯'];
@@ -53,6 +55,7 @@ export const POST: APIRoute = async (ctx) => {
           ),
         );
 
+      await notifyChat(null);
       return new Response(JSON.stringify({ ok: true, action: 'removed', emoji }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -67,6 +70,7 @@ export const POST: APIRoute = async (ctx) => {
           emoji,
         });
 
+      await notifyChat(null);
       return new Response(JSON.stringify({ ok: true, action: 'added', emoji }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },

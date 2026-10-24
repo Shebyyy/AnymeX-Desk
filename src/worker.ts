@@ -1,26 +1,15 @@
 /**
- * Cloudflare Workers entry point.
- *
- * Astro's cloudflare adapter supports a custom worker entrypoint via the
- * `workerEntrypoint` option. This file re-exports Astro's default fetch
- * handler and adds a `scheduled` export so Cloudflare Workers routes cron
- * trigger events to our Discord → Site polling handler.
- *
- * Reference: https://docs.astro.build/en/guides/integrations-guide/cloudflare/#cloudflare-workers-entrypoint
+ * Worker entry (wrangler `main`). Delegates HTTP to Astro's handler and
+ * exports the Durable Object class + cron handler so Cloudflare can find them.
  */
-
-import { WorkerEntrypoint } from 'cloudflare:workers';
+import astro from '@astrojs/cloudflare/entrypoints/server';
 import { onScheduled } from './pages/api/discord/poll';
 
-// The Astro cloudflare adapter generates _worker.js and expects this module
-// to extend WorkerEntrypoint so it can merge fetch + scheduled.
-export default class extends WorkerEntrypoint<Env> {
-  async fetch(request: Request): Promise<Response> {
-    // Delegate all HTTP requests to Astro's generated handler
-    return (this.env as any).__ASTRO_FETCH(request, this.env, this.ctx);
-  }
+export { ChatHub } from './durable/chat-hub';
 
-  async scheduled(event: ScheduledEvent): Promise<void> {
-    this.ctx.waitUntil(onScheduled(event, this.env));
-  }
-}
+export default {
+  fetch: astro.fetch,
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(onScheduled(event, env));
+  },
+} satisfies ExportedHandler<Env>;

@@ -179,8 +179,8 @@ const ogImage = reportIdMatch
           }
           // Initial ping
           pingPresence();
-          // Heartbeat every 60 seconds
-          setInterval(pingPresence, 60000);
+          // Heartbeat every 150 seconds (online window is 5 min, see lib/presence.ts)
+          setInterval(pingPresence, 150000);
           // Ping when user returns to the tab
           window.addEventListener('focus', pingPresence);
           document.addEventListener('visibilitychange', function() {

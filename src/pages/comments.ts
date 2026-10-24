@@ -1,3 +1,4 @@
+import { notifyReport } from '../lib/chat-hub';
 import { env } from 'cloudflare:workers';
 import type { APIRoute } from 'astro';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
@@ -381,6 +382,8 @@ export const POST: APIRoute = async (ctx) => {
     replyToUsername = parentUser?.username ?? null;
   }
 
+  await notifyReport(reportId);
+
   return json({
     id: comment.id,
     body: comment.body,
@@ -483,6 +486,8 @@ export const PUT: APIRoute = async (ctx) => {
   if (cf) for (const task of dmTasks) cf.waitUntil(task);
   else await Promise.all(dmTasks);
 
+  await notifyReport(comment.reportId);
+
   return json({
     id: updated.id,
     body: updated.body,
@@ -550,6 +555,8 @@ export const DELETE: APIRoute = async (ctx) => {
   const cf = ctx.locals.cfContext;
   if (cf) for (const t of tasks) cf.waitUntil(t);
   else await Promise.all(tasks);
+
+  await notifyReport(comment.reportId);
 
   return new Response(null, { status: 204 });
 };

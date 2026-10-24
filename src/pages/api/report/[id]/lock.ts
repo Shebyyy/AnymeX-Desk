@@ -1,3 +1,4 @@
+import { notifyReport } from '../../../../lib/chat-hub';
 import type { APIRoute } from 'astro';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../../../../lib/db/client';
@@ -103,6 +104,8 @@ export const POST: APIRoute = async (ctx) => {
   const cf = (ctx.locals as any)?.cfContext;
   if (cf?.waitUntil) for (const t of tasks) cf.waitUntil(t);
   else await Promise.all(tasks);
+
+  await notifyReport(updated.id);
 
   return json({
     id: updated.id,

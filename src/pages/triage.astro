@@ -2,6 +2,7 @@
 import Base from '../layouts/Base.astro';
 import { eq, sql, inArray } from 'drizzle-orm';
 import { db } from '../lib/db/client';
+import { notifyReport } from '../lib/chat-hub';
 import { reports, STATUSES, STATUS_LABELS } from '../lib/db/schema';
 import { requireStaff, isResponse, logAction } from '../lib/staff';
 import { notifyWatchers } from '../lib/notify';
@@ -43,6 +44,7 @@ if (Astro.request.method === 'POST') {
         .update(reports)
         .set({ status, locked: isClosing, statusChangedAt: sql`(unixepoch())`, updatedAt: sql`(unixepoch())` })
         .where(inArray(reports.id, rawIds));
+      for (const rid of rawIds) await notifyReport(Number(rid));
       await logAction(user, 'triage.bulk_status', `${rawIds.length} reports`, `status=${status}`);
       done = `Updated ${rawIds.length} reports to ${STATUS_LABELS[status] ?? status}.`;
     }
@@ -69,6 +71,7 @@ if (Astro.request.method === 'POST') {
         .returning();
 
       if (updated) {
+        await notifyReport(reportId);
         const statusText = statusLabel(status, updated.kind);
         const detail = statusNote ? `${statusText}: ${statusNote}` : statusText;
         const cf = Astro.locals.cfContext;

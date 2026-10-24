@@ -8,6 +8,7 @@ import { sendPushToUser, sendPushToAll, sendPushToStaff } from '../../../lib/web
 import { inIds } from '../../../lib/db/sql';
 import { eq, desc, and, lt, sql } from 'drizzle-orm';
 import { DEFAULT_CHANNELS } from './channels';
+import { notifyChat } from '../../../lib/chat-hub';
 
 export const prerender = false;
 
@@ -208,23 +209,8 @@ export const GET: APIRoute = async (ctx) => {
       };
     });
 
-    // Hydrate typing users from KV
+    // Typing indicators now travel over the WebSocket hub (no KV read here).
     const typingUsers: { userId: string; username: string }[] = [];
-    try {
-      const kv = (env as any).SESSION as KVNamespace | undefined;
-      if (kv) {
-        const raw = await kv.get(`chat_typing:${channelId}`);
-        if (raw) {
-          const map = JSON.parse(raw) as Record<string, { username: string; expiresAt: number }>;
-          const now = Date.now();
-          for (const [uid, item] of Object.entries(map)) {
-            if (item && item.expiresAt > now && uid !== user?.id) {
-              typingUsers.push({ userId: uid, username: item.username });
-            }
-          }
-        }
-      }
-    } catch {}
 
     return new Response(JSON.stringify({ ok: true, channel, messages, typingUsers }), {
       status: 200,
@@ -452,6 +438,8 @@ export const POST: APIRoute = async (ctx) => {
       }
     }
 
+    await notifyChat(channelId);
+
     return new Response(JSON.stringify({ ok: true, message: inserted }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -519,6 +507,8 @@ export const PATCH: APIRoute = async (ctx) => {
       .where(eq(chatMessages.id, messageId))
       .returning();
 
+    await notifyChat(msg.channelId);
+
     return new Response(JSON.stringify({ ok: true, message: updated }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -576,6 +566,8 @@ export const DELETE: APIRoute = async (ctx) => {
     await db()
       .delete(chatMessages)
       .where(eq(chatMessages.id, messageId));
+
+    await notifyChat(msg.channelId);
 
     return new Response(JSON.stringify({ ok: true, id: messageId }), {
       status: 200,

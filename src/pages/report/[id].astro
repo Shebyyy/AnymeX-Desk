@@ -1,4 +1,5 @@
 ---
+import { notifyReport } from '../../lib/chat-hub';
 import Base from '../../layouts/Base.astro';
 import VoteButton from '../../components/VoteButton.astro';
 import MediaLightbox from '../../components/MediaLightbox.astro';
@@ -165,6 +166,7 @@ if (Astro.request.method === 'POST') {
       .where(eq(reports.id, id))
       .returning();
     if (updated) {
+      await notifyReport(id);
       const reportUrl = `${Astro.url.origin}/report/${id}`;
       const statusText = statusLabel(status, updated.kind);
       const detail = statusNote ? `${statusText}: ${statusNote}` : statusText;
@@ -2072,11 +2074,82 @@ Astro.response.headers.set(
     } catch {}
   }
 
-  // Poll every 5 seconds
+  // Realtime: one WebSocket to the ChatHub Durable Object. The server pushes
+  // { t: 'report', reportId } when this report's comments/status/lock change,
+  // so there is no polling while connected. A slow visible-tab safety poll
+  // covers changes made by paths that don't push (and a dead socket).
   if (reportIdMeta > 0) {
-    setInterval(pollLiveUpdates, 5000);
+    let rtWs: WebSocket | null = null;
+    let rtOpen = false;
+    let rtDelay = 1000;
+    let rtReconnect: ReturnType<typeof setTimeout> | null = null;
+    let rtDebounce: ReturnType<typeof setTimeout> | null = null;
+
+    const rtConnect = () => {
+      if (rtWs) return;
+      let sock: WebSocket;
+      try {
+        sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/chat/ws`);
+      } catch {
+        return;
+      }
+      rtWs = sock;
+      sock.onopen = () => {
+        rtOpen = true;
+        rtDelay = 1000;
+        try { sock.send(JSON.stringify({ t: 'join', reportId: reportIdMeta })); } catch {}
+        pollLiveUpdates(); // resync anything missed while disconnected
+      };
+      sock.onmessage = (e) => {
+        if (e.data === 'pong') return;
+        try {
+          const m = JSON.parse(e.data);
+          if (m.t === 'report' && m.reportId === reportIdMeta && !rtDebounce) {
+            rtDebounce = setTimeout(() => { rtDebounce = null; pollLiveUpdates(); }, 250);
+          }
+        } catch {}
+      };
+      sock.onclose = () => {
+        rtOpen = false;
+        rtWs = null;
+        if (rtReconnect) return;
+        rtReconnect = setTimeout(() => {
+          rtReconnect = null;
+          if (document.visibilityState === 'visible') rtConnect();
+        }, rtDelay);
+        rtDelay = Math.min(rtDelay * 2, 120000);
+      };
+      sock.onerror = () => { try { sock.close(); } catch {} };
+    };
+    rtConnect();
+
+    // Keep the socket alive (auto-answered by the runtime without waking the object).
+    setInterval(() => {
+      if (document.visibilityState === 'visible' && rtWs && rtOpen) {
+        try { rtWs.send('ping'); } catch {}
+      }
+    }, 45000);
+
+    // Safety net: 15s when the socket is down, 2 min when it's up.
+    let lastSafety = Date.now();
+    setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      const every = rtOpen ? 120000 : 15000;
+      if (Date.now() - lastSafety >= every - 500) {
+        lastSafety = Date.now();
+        pollLiveUpdates();
+      }
+    }, 5000);
+
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') pollLiveUpdates();
+      if (document.visibilityState !== 'visible') return;
+      if (!rtWs) {
+        rtDelay = 1000;
+        if (rtReconnect) { clearTimeout(rtReconnect); rtReconnect = null; }
+        rtConnect();
+      } else {
+        pollLiveUpdates();
+      }
     });
   }
 

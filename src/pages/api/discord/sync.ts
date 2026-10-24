@@ -1,3 +1,4 @@
+import { notifyReport } from '../../../lib/chat-hub';
 import { env } from 'cloudflare:workers';
 import type { APIRoute } from 'astro';
 import { eq, sql } from 'drizzle-orm';
@@ -168,6 +169,7 @@ export const POST: APIRoute = async (ctx) => {
     ]);
 
     const newComment = insertedRows[0];
+    await notifyReport(report.id);
 
     // Store Discord attachments — cache to KV so links do not break after CDN URL expiry
     const incomingAttachments: Array<{ url: string; filename: string; content_type?: string; size?: number }> =
@@ -245,6 +247,7 @@ export const POST: APIRoute = async (ctx) => {
       .set({ body: content || '', updatedAt: sql`(unixepoch())` })
       .where(eq(comments.discordMessageId, messageId));
 
+    if (report?.id) await notifyReport(report.id);
     return json({ ok: true, status: 'updated' });
   }
 
@@ -267,6 +270,7 @@ export const POST: APIRoute = async (ctx) => {
       ]);
     }
 
+    if (report?.id) await notifyReport(report.id);
     return json({ ok: true, status: 'deleted' });
   }
 
