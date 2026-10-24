@@ -54,7 +54,7 @@ const columns: { stage: RoadmapStage; title: string; desc: string }[] = [
   { stage: 'shipped', title: 'Shipped', desc: 'Released in recent updates' },
 ];
 
-Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=120, stale-while-revalidate=300');
+Astro.response.headers.set('Cache-Control', 'public, max-age=60, s-maxage=120, stale-while-revalidate=300');
 ---
 
 <Base title="Public Roadmap" description="See what features and bug fixes are planned, in progress, and shipped for AnymeX.">

@@ -337,6 +337,7 @@ export const POST: APIRoute = async (ctx) => {
             updatedAt: sql`(unixepoch())`,
           })
           .where(eq(reports.id, report.id));
+        await notifyReport(report.id);
       }
     }
 
@@ -358,6 +359,7 @@ export const POST: APIRoute = async (ctx) => {
           updatedAt: sql`(unixepoch())`,
         })
         .where(eq(reports.id, report.id));
+      await notifyReport(report.id);
 
       const log = logAction(
         { id: author?.id || 'discord', username: author?.username || 'Discord Mod' } as any,

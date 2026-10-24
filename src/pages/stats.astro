@@ -83,7 +83,7 @@ const recentFixes = await db().all(sql`
   LIMIT 5
 `) as { id: number; title: string; kind: string; votes: number; statusChangedAt: number }[];
 
-Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=300, stale-while-revalidate=600');
+Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=300, stale-while-revalidate=600');
 ---
 
 <Base title="Stats" description="Live statistics for the AnymeX bug and suggestion tracker.">

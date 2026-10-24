@@ -1,3 +1,4 @@
+import { notifyReport } from '../../../lib/chat-hub';
 import type { APIRoute } from 'astro';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../../../lib/db/client';
@@ -57,6 +58,7 @@ export const POST: APIRoute = async (ctx) => {
       updatedAt: sql`(unixepoch())`,
     })
     .where(eq(reports.id, Number(reportId)));
+  await notifyReport(Number(reportId));
 
   logAction(
     {

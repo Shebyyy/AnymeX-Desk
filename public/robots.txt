@@ -1,0 +1,14 @@
+# Served as a static asset (no Worker invocation). Keeps well-behaved crawlers
+# off dynamic/API routes that would otherwise spend Worker requests.
+User-agent: *
+Disallow: /api/
+Disallow: /auth/
+Disallow: /admin
+Disallow: /triage
+Disallow: /me
+Disallow: /search
+Disallow: /users/
+Disallow: /comments
+Disallow: /vote
+Disallow: /react
+Disallow: /login

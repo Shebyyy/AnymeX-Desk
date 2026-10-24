@@ -1,3 +1,4 @@
+import { notifyReport } from './chat-hub';
 import { and, asc, eq, isNull, isNotNull, sql } from 'drizzle-orm';
 import { db } from './db/client';
 import {
@@ -1561,6 +1562,7 @@ export async function syncReportStatusFromDiscord(
         })
         .where(eq(reports.id, report.id));
       report.locked = discordThreadLocked;
+      await notifyReport(report.id);
       console.log(`[ForumSync] Auto-synced lock from Discord for report #${report.id}: ${discordThreadLocked}`);
     }
 
@@ -1592,6 +1594,7 @@ export async function syncReportStatusFromDiscord(
         })
         .where(eq(reports.id, report.id));
 
+      await notifyReport(report.id);
       console.log(`[ForumSync] Auto-synced status from Discord for report #${report.id}: ${report.status} -> ${targetStatus}`);
       return targetStatus;
     }

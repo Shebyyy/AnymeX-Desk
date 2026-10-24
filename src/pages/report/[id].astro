@@ -2130,11 +2130,11 @@ Astro.response.headers.set(
       }
     }, 45000);
 
-    // Safety net: 15s when the socket is down, 2 min when it's up.
+    // Safety net: 15s when the socket is down, 5 min when it's up.
     let lastSafety = Date.now();
     setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      const every = rtOpen ? 120000 : 15000;
+      const every = rtOpen ? 300000 : 15000;
       if (Date.now() - lastSafety >= every - 500) {
         lastSafety = Date.now();
         pollLiveUpdates();
