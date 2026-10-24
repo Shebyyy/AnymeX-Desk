@@ -1435,6 +1435,7 @@ Astro.response.headers.set(
 </Base>
 
 <script>
+  import { rt } from '../../scripts/realtime';
   // ── File attachment for comment (multiple) ───────────────────────────
   const commentFile = document.getElementById('comment-file') as HTMLInputElement | null;
   const attachBtn = document.getElementById('attach-btn') as HTMLButtonElement | null;
@@ -2074,75 +2075,30 @@ Astro.response.headers.set(
     } catch {}
   }
 
-  // Realtime: one WebSocket to the ChatHub Durable Object. The server pushes
-  // { t: 'report', reportId } when this report's comments/status/lock change,
-  // so there is no polling while connected. A slow visible-tab safety poll
-  // covers changes made by paths that don't push (and a dead socket).
+  // Realtime: the shared per-tab socket (src/scripts/realtime.ts) to the
+  // ChatHub Durable Object. The server pushes { t: 'report', reportId } when
+  // this report's comments/status/lock change, so there is no polling while
+  // connected. A slow visible-tab safety poll covers changes made by paths
+  // that don't push (and a dead socket).
   if (reportIdMeta > 0) {
-    let rtWs: WebSocket | null = null;
-    let rtOpen = false;
-    let rtDelay = 1000;
-    let rtReconnect: ReturnType<typeof setTimeout> | null = null;
     let rtDebounce: ReturnType<typeof setTimeout> | null = null;
 
-    const rtConnect = () => {
-      if (rtWs) return;
-      let sock: WebSocket;
-      try {
-        sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/chat/ws`);
-      } catch {
-        return;
+    rt.onOpen(() => {
+      rt.send({ t: 'join', reportId: reportIdMeta });
+      pollLiveUpdates(); // resync anything missed while disconnected
+    });
+    rt.on((m) => {
+      if (m.t === 'report' && m.reportId === reportIdMeta && !rtDebounce) {
+        rtDebounce = setTimeout(() => { rtDebounce = null; pollLiveUpdates(); }, 250);
       }
-      rtWs = sock;
-      sock.onopen = () => {
-        rtOpen = true;
-        rtDelay = 1000;
-        (window as any).anymexRT = {
-          isOpen: () => rtOpen,
-          send: (o: unknown) => { try { sock.send(JSON.stringify(o)); } catch {} },
-        };
-        try { sock.send(JSON.stringify({ t: 'join', reportId: reportIdMeta })); } catch {}
-        pollLiveUpdates(); // resync anything missed while disconnected
-      };
-      sock.onmessage = (e) => {
-        if (e.data === 'pong') return;
-        try {
-          const m = JSON.parse(e.data);
-          if (m.t === 'presence-miss') {
-            fetch('/api/presence', { method: 'POST', headers: { Accept: 'application/json' }, keepalive: true }).catch(() => {});
-          }
-          if (m.t === 'report' && m.reportId === reportIdMeta && !rtDebounce) {
-            rtDebounce = setTimeout(() => { rtDebounce = null; pollLiveUpdates(); }, 250);
-          }
-        } catch {}
-      };
-      sock.onclose = () => {
-        rtOpen = false;
-        rtWs = null;
-        delete (window as any).anymexRT;
-        if (rtReconnect) return;
-        rtReconnect = setTimeout(() => {
-          rtReconnect = null;
-          if (document.visibilityState === 'visible') rtConnect();
-        }, rtDelay);
-        rtDelay = Math.min(rtDelay * 2, 120000);
-      };
-      sock.onerror = () => { try { sock.close(); } catch {} };
-    };
-    rtConnect();
-
-    // Keep the socket alive (auto-answered by the runtime without waking the object).
-    setInterval(() => {
-      if (document.visibilityState === 'visible' && rtWs && rtOpen) {
-        try { rtWs.send('ping'); } catch {}
-      }
-    }, 45000);
+    });
+    rt.connect();
 
     // Safety net: 15s when the socket is down, 5 min when it's up.
     let lastSafety = Date.now();
     setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      const every = rtOpen ? 300000 : 15000;
+      const every = rt.isOpen() ? 300000 : 15000;
       if (Date.now() - lastSafety >= every - 500) {
         lastSafety = Date.now();
         pollLiveUpdates();
@@ -2150,14 +2106,7 @@ Astro.response.headers.set(
     }, 5000);
 
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState !== 'visible') return;
-      if (!rtWs) {
-        rtDelay = 1000;
-        if (rtReconnect) { clearTimeout(rtReconnect); rtReconnect = null; }
-        rtConnect();
-      } else {
-        pollLiveUpdates();
-      }
+      if (document.visibilityState === 'visible' && rt.isOpen()) pollLiveUpdates();
     });
   }
 

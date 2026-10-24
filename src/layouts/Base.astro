@@ -168,37 +168,6 @@ const ogImage = reportIdMatch
     {(baseUser || maybeSignedIn) && (
       <script is:inline>
         (function() {
-          function pingPresence() {
-            if (document.visibilityState === 'visible') {
-              // Chat/report pages expose an open realtime socket: heartbeat over it
-              // (no Worker request). Anything else falls back to HTTP below.
-              var rt = window.anymexRT;
-              if (rt && rt.isOpen()) {
-                rt.send({ t: 'presence' });
-                return;
-              }
-              fetch('/api/presence', {
-                method: 'POST',
-                headers: { 'Accept': 'application/json' },
-                keepalive: true,
-              }).catch(function() {});
-            }
-          }
-          // Initial ping
-          pingPresence();
-          // Heartbeat every 150 seconds (online window is 5 min, see lib/presence.ts)
-          setInterval(pingPresence, 150000);
-          // Ping when user returns to the tab
-          window.addEventListener('focus', pingPresence);
-          document.addEventListener('visibilitychange', function() {
-            if (document.visibilityState === 'visible') pingPresence();
-          });
-        })();
-      </script>
-    )}
-    {(baseUser || maybeSignedIn) && (
-      <script is:inline>
-        (function() {
           // Auto-subscribe to push notifications on first visit (or if permission already granted)
           // Runs on every page. If already subscribed, does nothing. 
           if (typeof window === 'undefined') return;
@@ -265,6 +234,7 @@ const ogImage = reportIdMatch
       </script>
     )}
     <script src="../scripts/sw-register.ts"></script>
+    <script src="../scripts/presence.ts"></script>
 
   </body>
 </html>

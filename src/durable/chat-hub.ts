@@ -93,6 +93,7 @@ export class ChatHub extends DurableObject<Env> {
     if (!a) return;
 
     if (msg.t === 'join') {
+      if (msg.channel === null) a.channel = null;
       if (typeof msg.channel === 'string') {
         const ch = msg.channel.slice(0, 64);
         // Never subscribe a non-staff socket to a staff-only channel.

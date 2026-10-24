@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { rt } from '../scripts/realtime';
   import { isPushSupported, getPushSubscription, subscribeToPush, unsubscribeFromPush } from '../scripts/push-client';
   import { parseDiscordMarkdown } from '../lib/discord-markdown';
 
@@ -312,30 +313,24 @@
     }
   }
 
-  // ── Realtime over one WebSocket (Durable Object hub) ────────────────────
-  // One Worker request to connect; after that, server pushes events. No polling
-  // while connected. If the socket can't connect, a slow visible-tab fallback
-  // poll keeps the chat usable.
-  let ws: WebSocket | null = null;
-  let wsOpen = false;
-  let wsDestroyed = false;
-  let reconnectDelay = 1000;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // ── Realtime over the shared socket (Durable Object hub) ────────────────
+  // The socket itself lives in src/scripts/realtime.ts (one per tab, shared
+  // with the presence heartbeat). Server pushes events, so no polling while
+  // connected. If the socket can't connect, a slow visible-tab fallback poll
+  // keeps the chat usable.
   let refetchTimer: ReturnType<typeof setTimeout> | null = null;
-  let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   let typingSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let rtUnsubs: Array<() => void> = [];
   const typingExpiry = new Map<string, { username: string; exp: number }>();
 
   function wsSend(obj: unknown) {
-    if (ws && wsOpen) {
-      try { ws.send(JSON.stringify(obj)); } catch {}
-    }
+    rt.send(obj);
   }
 
   function sendJoin() {
     typingExpiry.clear();
     typingUsers = [];
-    wsSend({ t: 'join', channel: activeChannelId });
+    rt.send({ t: 'join', channel: activeChannelId });
   }
 
   function scheduleRefetch() {
@@ -357,48 +352,27 @@
   }
 
   function connectWs() {
-    if (typeof window === 'undefined' || wsDestroyed || ws) return;
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    let sock: WebSocket;
-    try {
-      sock = new WebSocket(`${proto}://${location.host}/api/chat/ws`);
-    } catch {
-      scheduleReconnect();
-      return;
-    }
-    ws = sock;
-    sock.onopen = () => {
-      wsOpen = true;
-      reconnectDelay = 1000;
-      (window as any).anymexRT = { isOpen: () => wsOpen, send: wsSend };
-      sendJoin();
-      // Resync anything missed while disconnected.
-      loadMessages(false);
-      loadChannels();
-    };
-    sock.onmessage = (e) => {
-      if (e.data === 'pong') return;
-      let m: any;
-      try { m = JSON.parse(e.data); } catch { return; }
-      if (m.t === 'presence-miss') {
-        fetch('/api/presence', { method: 'POST', headers: { Accept: 'application/json' }, keepalive: true }).catch(() => {});
-      } else if (m.t === 'changed') {
-        if (!m.channel || m.channel === activeChannelId) scheduleRefetch();
-      } else if (m.t === 'channels') {
+    rtUnsubs.push(
+      rt.onOpen(() => {
+        sendJoin();
+        // Resync anything missed while disconnected.
+        loadMessages(false);
         loadChannels();
-      } else if (m.t === 'typing') {
-        if (m.channel === activeChannelId && m.userId !== currentUser?.id) {
-          typingExpiry.set(m.userId, { username: m.username, exp: Date.now() + 4500 });
-          renderTyping();
+      }),
+      rt.on((m) => {
+        if (m.t === 'changed') {
+          if (!m.channel || m.channel === activeChannelId) scheduleRefetch();
+        } else if (m.t === 'channels') {
+          loadChannels();
+        } else if (m.t === 'typing') {
+          if (m.channel === activeChannelId && m.userId !== currentUser?.id) {
+            typingExpiry.set(m.userId, { username: m.username, exp: Date.now() + 4500 });
+            renderTyping();
+          }
         }
-      }
-    };
-    sock.onclose = () => {
-      wsOpen = false;
-      ws = null;
-      scheduleReconnect();
-    };
-    sock.onerror = () => { try { sock.close(); } catch {} };
+      }),
+    );
+    rt.connect();
   }
 
   // Tell the hub which channel this socket is viewing whenever it changes.
@@ -406,15 +380,6 @@
     activeChannelId;
     sendJoin();
   });
-
-  function scheduleReconnect() {
-    if (wsDestroyed || reconnectTimer) return;
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      if (!document.hidden) connectWs();
-    }, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, 120000);
-  }
 
   let typingLabel = $derived.by(() => {
     const list = typingUsers;
@@ -2126,17 +2091,11 @@
 
     connectWs();
 
-    // Browsers freeze sockets in background tabs; keep the connection alive
-    // while visible (auto-responded by the runtime, doesn't wake the object).
-    keepaliveTimer = setInterval(() => {
-      if (!document.hidden && ws && wsOpen) { try { ws.send('ping'); } catch {} }
-    }, 45000);
-
     typingSweepTimer = setInterval(renderTyping, 1000);
 
     // Fallback only: if the socket is down, poll slowly in a visible tab.
     pollTimer = setInterval(() => {
-      if (!wsOpen && !document.hidden) {
+      if (!rt.isOpen() && !document.hidden) {
         loadMessages(false);
       }
     }, 20000);
@@ -2148,28 +2107,20 @@
   });
 
   function onVisible() {
-    if (document.hidden) return;
-    if (!ws) {
-      reconnectDelay = 1000;
-      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-      connectWs();
-    } else {
-      loadMessages(false);
-    }
+    // The shared socket reconnects itself; resync messages if it's up.
+    if (!document.hidden && rt.isOpen()) loadMessages(false);
   }
 
   onDestroy(() => {
     if (typeof window !== 'undefined') {
       window.removeEventListener('popstate', handlePopState);
     }
-    wsDestroyed = true;
-    if (typeof window !== 'undefined') delete (window as any).anymexRT;
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
-    if (reconnectTimer) clearTimeout(reconnectTimer);
+    for (const u of rtUnsubs) u();
+    rtUnsubs = [];
+    rt.send({ t: 'join', channel: null });
     if (refetchTimer) clearTimeout(refetchTimer);
-    if (keepaliveTimer) clearInterval(keepaliveTimer);
     if (typingSweepTimer) clearInterval(typingSweepTimer);
-    try { ws?.close(); } catch {}
     if (pollTimer) clearInterval(pollTimer);
     if (channelPollTimer) clearInterval(channelPollTimer);
     if (typingPollTimer) clearInterval(typingPollTimer);
