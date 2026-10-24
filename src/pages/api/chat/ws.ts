@@ -24,6 +24,7 @@ export const GET: APIRoute = async (ctx) => {
   // Overwrite so clients can't spoof identity.
   headers.set('x-chat-user-id', user?.id ?? '');
   headers.set('x-chat-username', user?.username ?? '');
+  headers.set('x-chat-tg', user?.telegramId ?? '');
   headers.set('x-chat-staff', isStaff ? '1' : '0');
 
   const stub = ns.get(ns.idFromName('global'));

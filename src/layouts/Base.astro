@@ -170,6 +170,13 @@ const ogImage = reportIdMatch
         (function() {
           function pingPresence() {
             if (document.visibilityState === 'visible') {
+              // Chat/report pages expose an open realtime socket: heartbeat over it
+              // (no Worker request). Anything else falls back to HTTP below.
+              var rt = window.anymexRT;
+              if (rt && rt.isOpen()) {
+                rt.send({ t: 'presence' });
+                return;
+              }
               fetch('/api/presence', {
                 method: 'POST',
                 headers: { 'Accept': 'application/json' },

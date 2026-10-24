@@ -2097,6 +2097,10 @@ Astro.response.headers.set(
       sock.onopen = () => {
         rtOpen = true;
         rtDelay = 1000;
+        (window as any).anymexRT = {
+          isOpen: () => rtOpen,
+          send: (o: unknown) => { try { sock.send(JSON.stringify(o)); } catch {} },
+        };
         try { sock.send(JSON.stringify({ t: 'join', reportId: reportIdMeta })); } catch {}
         pollLiveUpdates(); // resync anything missed while disconnected
       };
@@ -2104,6 +2108,9 @@ Astro.response.headers.set(
         if (e.data === 'pong') return;
         try {
           const m = JSON.parse(e.data);
+          if (m.t === 'presence-miss') {
+            fetch('/api/presence', { method: 'POST', headers: { Accept: 'application/json' }, keepalive: true }).catch(() => {});
+          }
           if (m.t === 'report' && m.reportId === reportIdMeta && !rtDebounce) {
             rtDebounce = setTimeout(() => { rtDebounce = null; pollLiveUpdates(); }, 250);
           }
@@ -2112,6 +2119,7 @@ Astro.response.headers.set(
       sock.onclose = () => {
         rtOpen = false;
         rtWs = null;
+        delete (window as any).anymexRT;
         if (rtReconnect) return;
         rtReconnect = setTimeout(() => {
           rtReconnect = null;

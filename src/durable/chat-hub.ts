@@ -21,15 +21,20 @@ import { DurableObject } from 'cloudflare:workers';
  * Clients -> server:
  *   { t: 'join', channel?, reportId? }  what this socket is looking at
  *   { t: 'typing' }                      I'm typing in my joined channel
+ *   { t: 'presence' }                    heartbeat; updates users.last_seen (replies
+ *                                        { t: 'presence-miss' } if no row matched so
+ *                                        the client can fall back to HTTP)
  */
 
 interface Attachment {
   userId: string;
   username: string;
+  telegramId: string;
   isStaff: boolean;
   channel: string | null;
   reportId: number | null;
   lastTyping: number;
+  lastPresence: number;
 }
 
 export class ChatHub extends DurableObject<Env> {
@@ -45,10 +50,12 @@ export class ChatHub extends DurableObject<Env> {
     const att: Attachment = {
       userId: h.get('x-chat-user-id') ?? '',
       username: h.get('x-chat-username') ?? '',
+      telegramId: h.get('x-chat-tg') ?? '',
       isStaff: h.get('x-chat-staff') === '1',
       channel: null,
       reportId: null,
       lastTyping: 0,
+      lastPresence: 0,
     };
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
@@ -99,6 +106,25 @@ export class ChatHub extends DurableObject<Env> {
         a.reportId = msg.reportId;
       }
       ws.serializeAttachment(a);
+      return;
+    }
+
+    if (msg.t === 'presence') {
+      if (!a.userId) return;
+      const now = Date.now();
+      if (now - a.lastPresence < 60_000) return; // at most one D1 write/min per socket
+      a.lastPresence = now;
+      ws.serializeAttachment(a);
+      try {
+        const res = await this.env.DB.prepare(
+          "UPDATE users SET last_seen = unixepoch() WHERE discord_id = ?1 OR (?2 != '' AND telegram_id = ?2)",
+        )
+          .bind(a.userId, a.telegramId)
+          .run();
+        if (!res.meta?.changes) ws.send(JSON.stringify({ t: 'presence-miss' }));
+      } catch {
+        try { ws.send(JSON.stringify({ t: 'presence-miss' })); } catch {}
+      }
       return;
     }
 

@@ -370,6 +370,7 @@
     sock.onopen = () => {
       wsOpen = true;
       reconnectDelay = 1000;
+      (window as any).anymexRT = { isOpen: () => wsOpen, send: wsSend };
       sendJoin();
       // Resync anything missed while disconnected.
       loadMessages(false);
@@ -379,7 +380,9 @@
       if (e.data === 'pong') return;
       let m: any;
       try { m = JSON.parse(e.data); } catch { return; }
-      if (m.t === 'changed') {
+      if (m.t === 'presence-miss') {
+        fetch('/api/presence', { method: 'POST', headers: { Accept: 'application/json' }, keepalive: true }).catch(() => {});
+      } else if (m.t === 'changed') {
         if (!m.channel || m.channel === activeChannelId) scheduleRefetch();
       } else if (m.t === 'channels') {
         loadChannels();
@@ -2160,6 +2163,7 @@
       window.removeEventListener('popstate', handlePopState);
     }
     wsDestroyed = true;
+    if (typeof window !== 'undefined') delete (window as any).anymexRT;
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (refetchTimer) clearTimeout(refetchTimer);
