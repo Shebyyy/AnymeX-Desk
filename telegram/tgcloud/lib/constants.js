@@ -78,13 +78,13 @@ export const EXTENSION_SOURCES = [
   'lnreader',
   'cloudstream',
   'kotatsu',
+  'tsundoku',
+  'ireader',
+  'legado',
 ];
 
-export const NON_IOS_EXTENSION_SOURCES = [
-  'mihon_aniyomi',
-  'cloudstream',
-  'kotatsu',
-];
+// All sources run on iOS now (JVM backends use the embedded OpenJDK Zero VM)
+export const NON_IOS_EXTENSION_SOURCES = [];
 
 export const EXTENSION_SOURCE_LABELS = {
   mihon_aniyomi: '📖 Mihon / Aniyomi',
@@ -93,6 +93,9 @@ export const EXTENSION_SOURCE_LABELS = {
   lnreader: '📝 LNReader',
   cloudstream: '☁️ Cloudstream',
   kotatsu: '📑 Kotatsu',
+  tsundoku: '📘 Tsundoku',
+  ireader: '📗 iReader',
+  legado: '📕 Legado',
 };
 
 export const CATEGORY_LABELS = {

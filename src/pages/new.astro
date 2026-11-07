@@ -214,7 +214,7 @@ if (Astro.request.method === 'POST') {
     error = 'App version is required.';
   } else if (kind === 'bug' && !stepsToReproduce) {
     error = 'Steps to reproduce are required for bug reports.';
-  } else if (kind === 'extension' && platform !== 'ios' && !pluginVersion) {
+  } else if (kind === 'extension' && !pluginVersion) {
     error = 'Extension Runtime Bridge (Plugin) version is required.';
   } else if (kind === 'extension' && !extensionRepo) {
     error = 'Extension repository URL is required.';
@@ -644,7 +644,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
           <div
             id="plugin-version-group"
             class="field"
-            style={activeKind === 'extension' && shown.platform !== 'ios' ? '' : 'display: none;'}
+            style={activeKind === 'extension' ? '' : 'display: none;'}
           >
             <label class="label" for="pluginVersion">Extension Runtime Bridge (Plugin) version <span class="required-star">*</span></label>
             <div class="custom-combobox" id="plugin-combobox">
@@ -685,14 +685,6 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
               Check <strong>Settings → Extensions → Settings icon (gear) on top right</strong> for plugin version.
             </p>
             <div id="plugin-advisory" class="advisory-box" style="display: none;"></div>
-          </div>
-          <div
-            id="ios-plugin-note"
-            class="ios-plugin-note"
-            style={activeKind === 'extension' && shown.platform === 'ios' ? '' : 'display: none;'}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align: -2px; margin-right: 4px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-            iOS does not use the extension runtime bridge plugin.
           </div>
         </>
       )}
@@ -934,7 +926,6 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
     const pluginDropdown = document.getElementById('plugin-version-dropdown') as HTMLDivElement | null;
     const pluginAdvisory = document.getElementById('plugin-advisory') as HTMLDivElement | null;
     const pluginGroup = document.getElementById('plugin-version-group');
-    const iosPluginNote = document.getElementById('ios-plugin-note');
 
     function getSelectedChannel(): 'stable' | 'beta' {
       const checked = document.querySelector('input[name="releaseChannel"]:checked') as HTMLInputElement | null;
@@ -1216,7 +1207,7 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       return 'bug';
     }
 
-    const NON_IOS_SOURCES = ['mihon_aniyomi', 'cloudstream', 'kotatsu'];
+    const NON_IOS_SOURCES: string[] = []; // all sources run on iOS now
 
     function updatePlatformVisibility() {
       const currentKind = getSelectedKind();
@@ -1259,21 +1250,12 @@ const CATEGORY_STEP_LABELS: Record<'bug' | 'suggestion' | 'extension', string> =
       const currentPlat = platSelect ? platSelect.value : ((document.querySelector('input[name="platform"]:checked') as HTMLInputElement | null)?.value ?? '');
 
       const isExtensionRelevant = currentKind === 'extension';
-      const isIos = currentPlat === 'ios';
 
       if (pluginGroup) {
-        pluginGroup.style.display = isExtensionRelevant && !isIos ? '' : 'none';
+        pluginGroup.style.display = isExtensionRelevant ? '' : 'none';
       }
       if (pluginVerInput) {
-        pluginVerInput.required = isExtensionRelevant && !isIos;
-      }
-      if (iosPluginNote) {
-        iosPluginNote.style.display = isExtensionRelevant && isIos ? '' : 'none';
-      }
-      if (isIos && pluginVerInput) {
-        pluginVerInput.value = '';
-        pluginCombobox?.close();
-        updatePluginVersionAdvisory();
+        pluginVerInput.required = isExtensionRelevant;
       }
     }
 

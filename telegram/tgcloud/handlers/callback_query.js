@@ -327,36 +327,20 @@ export default async function (callbackQuery) {
           reply_markup: cancelKeyboard(),
         });
       } else if (draft.kind === 'extension') {
-        if (draft.platform === 'ios') {
-          // iOS does not use extension runtime bridge plugin
-          await db.update(reportDrafts)
-            .set({ step: 'ext_name' })
-            .where(eq(reportDrafts.userId, user.id))
-            .run();
+        // Ask for Extension Runtime Bridge plugin version
+        const releases = await getReleases();
+        await db.update(reportDrafts)
+          .set({ step: 'plugin_version' })
+          .where(eq(reportDrafts.userId, user.id))
+          .run();
 
-          await safeEditMessageText({
-            chat_id: chatId,
-            message_id: messageId,
-            text: `Version: <code>${selectedVer}</code>\n\n<i>(iOS does not use the extension runtime bridge plugin)</i>\n\n<b>🧩 Step 8/11: Affected Extension Name & Version (Required)</b>\nSend the exact extension name and version (e.g. <code>Gogoanime v1.4.12</code>):`,
-            parse_mode: 'HTML',
-            reply_markup: cancelKeyboard(),
-          });
-        } else {
-          // Ask for Extension Runtime Bridge plugin version
-          const releases = await getReleases();
-          await db.update(reportDrafts)
-            .set({ step: 'plugin_version' })
-            .where(eq(reportDrafts.userId, user.id))
-            .run();
-
-          await safeEditMessageText({
-            chat_id: chatId,
-            message_id: messageId,
-            text: `Version: <code>${selectedVer}</code>\n\n<b>🧩 Step 7/11: Extension Runtime Bridge (Plugin) Version (Required)</b>\nCheck <b>Settings → Extensions → Settings icon (gear) on top right</b>:`,
-            parse_mode: 'HTML',
-            reply_markup: pluginVersionKeyboard(releases, 'pver'),
-          });
-        }
+        await safeEditMessageText({
+          chat_id: chatId,
+          message_id: messageId,
+          text: `Version: <code>${selectedVer}</code>\n\n<b>🧩 Step 7/11: Extension Runtime Bridge (Plugin) Version (Required)</b>\nCheck <b>Settings → Extensions → Settings icon (gear) on top right</b>:`,
+          parse_mode: 'HTML',
+          reply_markup: pluginVersionKeyboard(releases, 'pver'),
+        });
       }
       return;
     }
@@ -449,7 +433,7 @@ export default async function (callbackQuery) {
           await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: 'App version is required.', show_alert: true });
           return;
         }
-        if (draft.platform !== 'ios' && !draft.pluginVersion) {
+        if (!draft.pluginVersion) {
           await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: 'Extension Runtime Bridge plugin version is required.', show_alert: true });
           return;
         }

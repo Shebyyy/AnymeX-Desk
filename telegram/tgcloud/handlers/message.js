@@ -327,24 +327,14 @@ export default async function (message) {
           reply_markup: cancelKeyboard(),
         });
       } else if (draft.kind === 'extension') {
-        if (draft.platform === 'ios') {
-          await db.update(reportDrafts).set({ step: 'ext_name' }).where(eq(reportDrafts.userId, userId)).run();
-          await safeSendMessage({
-            chat_id: chatId,
-            text: `Version set to: <code>${escapeHtml(ver)}</code>\n\n<i>(iOS does not use the extension runtime bridge plugin)</i>\n\n<b>🧩 Step 8/11: Affected Extension Name & Version (Required)</b>\nSend the exact extension name and version (e.g. <code>Gogoanime v1.4.12</code>):`,
-            parse_mode: 'HTML',
-            reply_markup: cancelKeyboard(),
-          });
-        } else {
-          const releases = await getReleases();
-          await db.update(reportDrafts).set({ step: 'plugin_version' }).where(eq(reportDrafts.userId, userId)).run();
-          await safeSendMessage({
-            chat_id: chatId,
-            text: `Version set to: <code>${escapeHtml(ver)}</code>\n\n<b>🧩 Step 7/11: Extension Runtime Bridge (Plugin) Version (Required)</b>\nCheck <b>Settings → Extensions → Settings icon (gear) on top right</b>:`,
-            parse_mode: 'HTML',
-            reply_markup: pluginVersionKeyboard(releases, 'pver'),
-          });
-        }
+        const releases = await getReleases();
+        await db.update(reportDrafts).set({ step: 'plugin_version' }).where(eq(reportDrafts.userId, userId)).run();
+        await safeSendMessage({
+          chat_id: chatId,
+          text: `Version set to: <code>${escapeHtml(ver)}</code>\n\n<b>🧩 Step 7/11: Extension Runtime Bridge (Plugin) Version (Required)</b>\nCheck <b>Settings → Extensions → Settings icon (gear) on top right</b>:`,
+          parse_mode: 'HTML',
+          reply_markup: pluginVersionKeyboard(releases, 'pver'),
+        });
       }
       return;
     }

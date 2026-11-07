@@ -63,14 +63,17 @@ export const EXTENSION_SOURCES = [
   'lnreader',
   'cloudstream',
   'kotatsu',
+  'tsundoku',
+  'ireader',
+  'legado',
 ] as const;
 
-/** Extension sources that do not exist or run on iOS (Android/JVM exclusive). */
-export const NON_IOS_EXTENSION_SOURCES = [
-  'mihon_aniyomi',
-  'cloudstream',
-  'kotatsu',
-] as const;
+/**
+ * Extension sources that do not run on iOS. Now empty: JVM backends (Aniyomi,
+ * CloudStream, Kotatsu, Tsundoku, iReader) run on iOS through the runtime
+ * bridge's embedded OpenJDK Zero VM. Kept so callers need no changes.
+ */
+export const NON_IOS_EXTENSION_SOURCES = [] as const;
 
 // ─── Platforms ──────────────────────────────────────────────────────────────
 
@@ -128,6 +131,9 @@ export const CATEGORY_LABELS: Record<string, string> = {
   lnreader: 'LNReader',
   cloudstream: 'Cloudstream',
   kotatsu: 'Kotatsu',
+  tsundoku: 'Tsundoku',
+  ireader: 'iReader',
+  legado: 'Legado',
 };
 
 export const PLATFORM_LABELS: Record<string, string> = {
