@@ -166,6 +166,15 @@
 
   // Quick reaction popup from hover toolbar
   let hoverReactionMsgId = $state<number | null>(null);
+  // Open the picker below its button when there is no room above (message at the top of the list)
+  let hoverPickerBelow = $state<boolean>(false);
+  const PICKER_SPACE_NEEDED = 64; // picker height + gap + a little margin
+
+  function shouldOpenPickerBelow(trigger: HTMLElement): boolean {
+    const scroller = trigger.closest('.messages-stream') as HTMLElement | null;
+    const topEdge = scroller ? scroller.getBoundingClientRect().top : 0;
+    return trigger.getBoundingClientRect().top - topEdge < PICKER_SPACE_NEEDED;
+  }
 
   // Editing state using main bottom input box (Discord / Telegram style)
   let editingMessage = $state<ChatMessage | null>(null);
@@ -2565,7 +2574,9 @@
                       class="hover-icon-btn"
                       onclick={(e) => {
                         e.stopPropagation();
-                        hoverReactionMsgId = hoverReactionMsgId === msg.id ? null : msg.id;
+                        const opening = hoverReactionMsgId !== msg.id;
+                        if (opening) hoverPickerBelow = shouldOpenPickerBelow(e.currentTarget as HTMLElement);
+                        hoverReactionMsgId = opening ? msg.id : null;
                       }}
                       title="Add Reaction"
                       aria-label="Add Reaction"
@@ -2578,7 +2589,7 @@
                       </svg>
                     </button>
                     {#if hoverReactionMsgId === msg.id}
-                      <div class="hover-emoji-picker" onclick={(e) => e.stopPropagation()}>
+                      <div class="hover-emoji-picker" class:below={hoverPickerBelow} onclick={(e) => e.stopPropagation()}>
                         {#each QUICK_EMOJIS as emoji}
                           <button class="picker-emoji-btn" onclick={() => toggleReaction(msg.id, emoji)}>
                             {emoji}
@@ -4885,6 +4896,12 @@
     padding: 4px 6px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
     z-index: 50;
+  }
+
+  /* Top-of-list messages: open downward so the picker is not clipped by the scroll area */
+  .hover-emoji-picker.below {
+    bottom: auto;
+    top: calc(100% + 4px);
   }
 
   .picker-emoji-btn {

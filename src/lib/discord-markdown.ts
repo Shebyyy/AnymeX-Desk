@@ -267,12 +267,16 @@ export function parseDiscordMarkdown(
     });
 
     // Report tags: #123
-    t = t.replace(/#(\d+)\b/g, (_, id) => {
+    // The optional leading "&" skips HTML entities that escapeHtml() produced
+    // above (an apostrophe becomes "&#039;", whose "#039" is not a report tag).
+    t = t.replace(/(&?)#(\d+)\b/g, (match, amp: string, id: string) => {
+      if (amp) return match;
       return `<a href="/report/${id}" class="report-link-chip" target="_blank">#${id}</a>`;
     });
 
     // Channel tags: #channel-name
-    t = t.replace(/#([a-zA-Z0-9_\-]+)\b/g, (fullMatch, chName) => {
+    t = t.replace(/(&?)#([a-zA-Z0-9_\-]+)\b/g, (fullMatch, amp: string, chName: string) => {
+      if (amp) return fullMatch; // part of an HTML entity, not a channel tag
       const target = channels.find(
         (c) => c.name.toLowerCase() === chName.toLowerCase() || c.id.toLowerCase() === chName.toLowerCase()
       );

@@ -114,4 +114,25 @@ describe('Discord Markdown Parser', () => {
     expect(res.html).toContain('<strong><em>bold italic</em></strong>');
     expect(res.html).toContain('<u><strong><em>all three</em></strong></u>');
   });
+
+  describe('apostrophes and HTML entities', () => {
+    it("keeps apostrophes as plain text (no fake report link from &#039;)", () => {
+      const res = parseDiscordMarkdown("dark's message");
+      expect(res.html).not.toContain('report-link-chip');
+      expect(res.html).not.toContain('/report/039');
+      expect(res.html).toBe('dark&#039;s message');
+    });
+
+    it('still links real report tags next to apostrophes', () => {
+      const res = parseDiscordMarkdown("it's #123 and it's done");
+      expect(res.html).toContain('<a href="/report/123"');
+      expect(res.html).not.toContain('/report/039');
+    });
+
+    it('still links real channel tags next to apostrophes', () => {
+      const res = parseDiscordMarkdown("see #general it's here", { channels: [{ id: '1', name: 'general' }] });
+      expect(res.html).toContain('data-channel-jump="1"');
+      expect(res.html).not.toContain('/report/039');
+    });
+  });
 });
