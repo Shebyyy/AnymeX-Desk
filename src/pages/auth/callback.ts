@@ -6,6 +6,7 @@ import { db } from '../../lib/db/client';
 import { users } from '../../lib/db/schema';
 import { safeReturnTo } from '../../lib/redirect';
 import { setSignedInHint } from '../../lib/session';
+import { clearFlowCookie, readFlowCookie } from '../../lib/flow-cookies';
 import { ensureVote } from '../../lib/vote';
 import { syncForumVote } from '../../lib/discord-forums';
 
@@ -14,12 +15,12 @@ export const prerender = false;
 export const GET: APIRoute = async (ctx) => {
   const code = ctx.url.searchParams.get('code');
   const state = ctx.url.searchParams.get('state');
-  const expected = await ctx.session?.get('oauth_state');
+  const expected = readFlowCookie(ctx, 'oauth_state');
   // Re-checked on the way out as well: the session is ours, but a value that
   // matches an in-flight state is one *we* put there, so an attacker who
   // forged an authorization response can't complete the handshake unless
   // they can guess a 128-bit secret.
-  const next = safeReturnTo(await ctx.session?.get('oauth_next'), ctx.url.origin);
+  const next = safeReturnTo(readFlowCookie(ctx, 'oauth_next'), ctx.url.origin);
 
   // CSRF: the state must round-trip through our own session.
   if (!code || !state || state !== expected) {
@@ -131,7 +132,7 @@ export const GET: APIRoute = async (ctx) => {
     // canWriteNow rather than user.canWrite: the same authority decides here
     // as on /vote, so a banned account cannot slip a vote through the one
     // write path that runs before any page gate does.
-    const pendingVote = await ctx.session?.get('pending_vote');
+    const pendingVote = readFlowCookie(ctx, 'pending_vote');
     if (pendingVote && (await canWriteNow(user))) {
       await ensureVote(Number(pendingVote), user.id);
       const kv = env.SESSION as KVNamespace | undefined;
@@ -146,15 +147,15 @@ export const GET: APIRoute = async (ctx) => {
     return ctx.redirect('/?auth=failed', 302);
   } finally {
     // The access token is never stored: everything we need is resolved now.
-    ctx.session?.delete('oauth_state');
-    ctx.session?.delete('oauth_next');
+    clearFlowCookie(ctx, 'oauth_state');
+    clearFlowCookie(ctx, 'oauth_next');
     // `pending_vote` is cleared here and not in the try, because the whole
     // point is to clear it on the path that threw. ensureVote throws on a
     // report id that does not exist, and an anonymous visitor could plant one
     // by posting to /vote — after which the poison stayed in the session and
     // every *later* sign-in, however valid, landed on ?auth=failed. One
     // attempt is all a pending vote ever gets.
-    ctx.session?.delete('pending_vote');
+    clearFlowCookie(ctx, 'pending_vote');
   }
 
   return ctx.redirect(next, 302);

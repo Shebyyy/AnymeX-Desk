@@ -8,6 +8,7 @@ import { readConfig, readSetting } from '../../../lib/settings';
 import { verifyTelegramAuth } from '../../../lib/telegram-auth';
 import { safeReturnTo } from '../../../lib/redirect';
 import { setSignedInHint } from '../../../lib/session';
+import { clearFlowCookie, readFlowCookie } from '../../../lib/flow-cookies';
 import { ensureVote } from '../../../lib/vote';
 import { syncForumVote } from '../../../lib/discord-forums';
 
@@ -20,9 +21,9 @@ export const GET: APIRoute = async (ctx) => {
     rawParams[k] = v;
   }
 
-  const rawNext = rawParams.next || (await ctx.session?.get('oauth_next'));
+  const rawNext = rawParams.next || readFlowCookie(ctx, 'oauth_next');
   const next = safeReturnTo(rawNext, ctx.url.origin);
-  ctx.session?.delete('oauth_next');
+  clearFlowCookie(ctx, 'oauth_next');
 
   const loggedInUser = await currentUser(ctx);
   const errorRedirect = (err: string) => {
@@ -139,7 +140,7 @@ export const GET: APIRoute = async (ctx) => {
     setSignedInHint(ctx);
 
     // Resolve any pending vote
-    const pendingVote = await ctx.session?.get('pending_vote');
+    const pendingVote = readFlowCookie(ctx, 'pending_vote');
     if (pendingVote && (await canWriteNow(sessionUser))) {
       await ensureVote(Number(pendingVote), sessionUser.id);
       const kv = env.SESSION as KVNamespace | undefined;
@@ -151,7 +152,7 @@ export const GET: APIRoute = async (ctx) => {
     console.error('[auth:telegram] Login callback error:', err);
     return errorRedirect('failed');
   } finally {
-    ctx.session?.delete('pending_vote');
+    clearFlowCookie(ctx, 'pending_vote');
   }
 
   return ctx.redirect(next || '/', 302);

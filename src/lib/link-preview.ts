@@ -1,12 +1,11 @@
-import { env } from 'cloudflare:workers';
-
 /**
  * Rich preview cards for plain links pasted into comments — the same idea
  * as Discord's own link embeds: read the target page's Open Graph tags
  * (og:title, og:description, og:image) and show a small card instead of a
- * bare URL. Results are cached in KV so the same link isn't re-fetched on
- * every page view; failures are cached too, for a shorter time, so a dead
- * or slow link doesn't get hit again on every load.
+ * bare URL. Results are cached in the Workers Cache API (free, unlike KV puts,
+ * which are capped at 1,000/day on the free plan) so the same link isn't
+ * re-fetched on every page view; failures are cached in isolate memory for a
+ * shorter time, so a dead or slow link doesn't get hit again on every load.
  */
 
 export interface LinkPreview {
@@ -21,7 +20,7 @@ const MEMORY_TTL_MS = 60 * 60 * 2 * 1000; // 2 hours in isolate memory
 const FETCH_TIMEOUT_MS = 3000;
 const MAX_BYTES = 60_000; // head metadata is always near the top of the document
 
-// In-memory cache to prevent repetitive KV reads and writes within the same worker isolate
+// In-memory cache in front of the Cache API, per worker isolate
 const memoryCache = new Map<string, { preview: LinkPreview | null; expiry: number }>();
 
 // Blocks the obvious SSRF targets: localhost, loopback, link-local, and the
@@ -65,14 +64,15 @@ export async function fetchLinkPreview(url: string): Promise<LinkPreview | null>
     return memCached.preview;
   }
 
-  const kv = env.SESSION as KVNamespace | undefined;
-  const cacheKey = `ogcache:${await sha256Hex(url)}`;
+  const cacheKey = new Request(`https://link-preview.cache.invalid/${await sha256Hex(url)}`);
+  const cache = (globalThis as { caches?: { default?: Cache } }).caches?.default;
 
-  // Tier 2: Check KV cache
-  if (kv) {
+  // Tier 2: Cache API (per data centre, no quota)
+  if (cache) {
     try {
-      const cached = await kv.get<LinkPreview>(cacheKey, 'json');
-      if (cached) {
+      const hit = await cache.match(cacheKey);
+      if (hit) {
+        const cached = (await hit.json()) as LinkPreview;
         memoryCache.set(url, { preview: cached, expiry: now + MEMORY_TTL_MS });
         return cached;
       }
@@ -129,16 +129,24 @@ export async function fetchLinkPreview(url: string): Promise<LinkPreview | null>
 
     if (!preview.title && !preview.image && !preview.description) throw new Error('no metadata');
 
-    // Cache successful preview in memory and KV (30-day TTL)
+    // Cache successful preview in memory and the Cache API (30-day TTL)
     memoryCache.set(url, { preview, expiry: now + MEMORY_TTL_MS });
-    if (kv) {
+    if (cache) {
       try {
-        await kv.put(cacheKey, JSON.stringify(preview), { expirationTtl: CACHE_OK_TTL });
+        await cache.put(
+          cacheKey,
+          new Response(JSON.stringify(preview), {
+            headers: {
+              'content-type': 'application/json',
+              'cache-control': `public, max-age=${CACHE_OK_TTL}`,
+            },
+          }),
+        );
       } catch {}
     }
     return preview;
   } catch {
-    // DO NOT write failures to KV (saves KV daily write limit) — only cache in memory
+    // Failures are only cached in memory
     memoryCache.set(url, { preview: null, expiry: now + 1000 * 60 * 30 }); // 30 mins in memory
     return null;
   }

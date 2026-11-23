@@ -4,6 +4,7 @@ import { canWriteNow, currentUser } from '../lib/auth';
 import { toggleVote } from '../lib/vote';
 import { announceDemand } from '../lib/webhook';
 import { safeReturnTo } from '../lib/redirect';
+import { setFlowCookie } from '../lib/flow-cookies';
 import { isReportId, isVotableReport } from '../lib/writes';
 import { logAction } from '../lib/staff';
 import { syncForumVote } from '../lib/discord-forums';
@@ -20,7 +21,7 @@ export const POST: APIRoute = async (ctx) => {
 
   const user = await currentUser(ctx);
   if (!user) {
-    ctx.session?.set('pending_vote', reportId);
+    setFlowCookie(ctx, 'pending_vote', String(reportId), 30 * 60);
     return ctx.redirect(`/auth/login?next=${encodeURIComponent(back)}`, 302);
   }
   if (!(await canWriteNow(user))) return ctx.redirect('/cant-post', 302);

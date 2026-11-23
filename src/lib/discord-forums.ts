@@ -1671,17 +1671,19 @@ export async function syncForumVote(
     }
 
     // 2. Thread title rename with 10-minute cooldown protection
-    const lockKey = `dc_title_lock:${report.discordThreadId}`;
     const now = Date.now();
     const memExpiry = threadTitleLocks.get(report.discordThreadId) ?? 0;
     let isLocked = memExpiry > now;
 
-    if (!isLocked && kv) {
+    // Cache API instead of KV: a lock write per rename was a Workers KV put,
+    // and the free tier allows only 1,000 puts a day for the whole account.
+    const lockCache = (globalThis as { caches?: { default?: Cache } }).caches?.default;
+    const lockRequest = new Request(`https://title-lock.cache.invalid/${report.discordThreadId}`);
+    if (!isLocked && lockCache) {
       try {
-        const kvLock = await kv.get(lockKey);
-        if (kvLock) isLocked = true;
+        if (await lockCache.match(lockRequest)) isLocked = true;
       } catch {
-        // ignore KV read error
+        // ignore cache read error
       }
     }
 
@@ -1698,11 +1700,14 @@ export async function syncForumVote(
 
       if (renameRes.ok) {
         threadTitleLocks.set(report.discordThreadId, now + 10 * 60 * 1000);
-        if (kv) {
+        if (lockCache) {
           try {
-            await kv.put(lockKey, '1', { expirationTtl: 600 });
+            await lockCache.put(
+              lockRequest,
+              new Response('1', { headers: { 'cache-control': 'public, max-age=600' } }),
+            );
           } catch {
-            // ignore KV write error
+            // ignore cache write error
           }
         }
       }

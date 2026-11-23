@@ -37,8 +37,32 @@ export function setSignedInHint(ctx: APIContext): void {
   });
 }
 
-/** How stale a session may get before a request re-stamps it. */
-const RENEW_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/**
+ * How stale a session may get before a request re-stamps it. The KV ttl is a
+ * year and the cookie is capped at 400 days, so renewing weekly keeps an active
+ * user signed in indefinitely while costing 1/7th of the KV puts a daily
+ * renewal did (every renewal is a Workers KV put; the free tier is 1,000/day
+ * for the whole account).
+ */
+const RENEW_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Users renewed recently by *this* isolate. A signed-in page load fires several
+ * requests at once (page, chat polling, presence, islands), and every one of
+ * them runs the middleware. Without this, all of them see a stale marker at the
+ * same moment and each writes its own put.
+ */
+const recentlyRenewed = new Map<string, number>();
+
+/** Only real page navigations renew: not polling, islands, assets or the API. */
+function isPageNavigation(ctx: APIContext): boolean {
+  if (ctx.request.method !== 'GET') return false;
+  const path = ctx.url.pathname;
+  if (path.startsWith('/api/') || path.startsWith('/_') || path.startsWith('/uploads/')) {
+    return false;
+  }
+  return (ctx.request.headers.get('accept') ?? '').includes('text/html');
+}
 
 /**
  * Sliding session renewal.
@@ -48,22 +72,33 @@ const RENEW_INTERVAL_MS = 24 * 60 * 60 * 1000;
  * making the TTL a hard cap from sign-in day, so every active user got
  * force-logged-out a week later no matter how much they used the site.
  *
- * Calling this from middleware on every request: once a day, re-writes a
- * marker into the session. That write re-stamps the KV TTL and re-issues the
- * session cookie with a fresh maxAge, so sessions effectively never expire —
- * Discord-style, only an explicit logout (or roughly a year away) ends one.
- * Reads stay cheap: the session is loaded once per request anyway (the header
- * island and every gated page read it), so this adds no extra round-trip for
- * signed-in visitors and nothing at all for anonymous ones.
+ * Calling this from middleware: on a page navigation, once a week per user,
+ * re-writes a marker into the session. That write re-stamps the KV TTL and
+ * re-issues the session cookie with a fresh maxAge, so sessions effectively
+ * never expire — Discord-style, only an explicit logout (or roughly a year
+ * away) ends one. Anonymous visitors cost nothing: no user, no write.
  */
 export async function touchSession(ctx: APIContext): Promise<void> {
   try {
+    if (!isPageNavigation(ctx)) return;
     const session = ctx.session;
     const user = await session?.get('user');
     if (!user) return;
+
+    const now = Date.now();
+    const userId = String((user as { id?: unknown }).id ?? '');
+    const seen = userId ? recentlyRenewed.get(userId) : undefined;
+    if (seen && now - seen < RENEW_INTERVAL_MS) return;
+
     const last = Number((await session?.get('last_renewed_at')) ?? 0);
-    if (last && Date.now() - last < RENEW_INTERVAL_MS) return;
-    await session?.set('last_renewed_at', Date.now());
+    if (last && now - last < RENEW_INTERVAL_MS) {
+      if (userId) recentlyRenewed.set(userId, last);
+      return;
+    }
+
+    // Claim the slot before the awaited write so concurrent requests skip it.
+    if (userId) recentlyRenewed.set(userId, now);
+    await session?.set('last_renewed_at', now);
     setSignedInHint(ctx);
   } catch {
     // Renewal is best-effort; never break a page over it.

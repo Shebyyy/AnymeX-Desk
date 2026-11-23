@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import { readConfig, readSetting } from '../../lib/settings';
 import { currentUser } from '../../lib/auth';
 import { safeReturnTo } from '../../lib/redirect';
+import { setFlowCookie } from '../../lib/flow-cookies';
 
 export const prerender = false;
 
@@ -11,9 +12,10 @@ const cfg = await readConfig();
 const botUsername = cfg.telegram_bot_username || (await readSetting('telegram_bot_username'));
 const next = safeReturnTo(Astro.url.searchParams.get('next'), Astro.url.origin);
 
-// Save 'next' in session for the callback
+// Remember 'next' for the callback. A cookie, not the session: every anonymous
+// session write is a Workers KV put (see lib/flow-cookies.ts).
 if (next) {
-  await Astro.session?.set('oauth_next', next);
+  setFlowCookie(Astro, 'oauth_next', next);
 }
 
 const error = Astro.url.searchParams.get('error');

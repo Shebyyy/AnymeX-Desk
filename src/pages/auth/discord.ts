@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import type { APIRoute } from 'astro';
 import { authorizeUrl } from '../../lib/auth';
 import { safeReturnTo } from '../../lib/redirect';
+import { setFlowCookie } from '../../lib/flow-cookies';
 
 export const prerender = false;
 
@@ -33,8 +34,10 @@ export const GET: APIRoute = async (ctx) => {
 
   const next = safeReturnTo(ctx.url.searchParams.get('next'), ctx.url.origin);
   const state = crypto.randomUUID();
-  ctx.session?.set('oauth_state', state);
-  ctx.session?.set('oauth_next', next);
+  // Cookies, not the session: see lib/flow-cookies.ts (every anonymous session
+  // write is a Workers KV put).
+  setFlowCookie(ctx, 'oauth_state', state);
+  setFlowCookie(ctx, 'oauth_next', next);
 
   const redirectUri = new URL('/auth/callback', ctx.url.origin).toString();
   return ctx.redirect(authorizeUrl(state, redirectUri), 302);
