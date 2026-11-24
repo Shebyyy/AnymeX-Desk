@@ -91,6 +91,15 @@ export default defineConfig({
      * write, so a long-lived session never outlives a revocation.
      */
     ttl: SESSION_TTL_SECONDS,
+    /**
+     * The adapter's own KV driver, wrapped so a rejected write (KV free-tier
+     * put quota, or any transient KV error) is logged instead of turning the
+     * response into an HTTP 500. See src/lib/resilient-session-driver.ts.
+     */
+    driver: {
+      entrypoint: new URL('./src/lib/resilient-session-driver.ts', import.meta.url),
+      config: { binding: 'SESSION' },
+    },
     cookie: {
       /**
        * Without this, Astro's cookie config has no `maxAge`, which makes it
